@@ -1,6 +1,6 @@
 (async () => {
 
-const TOKEN = "__SHOPIFY_TOKEN__";
+const TOKEN = window.__SHOPIFY_TOKEN__;
 
 const ENDPOINT =
 "https://columbia-sportswear-india.myshopify.com/api/2025-07/graphql.json";
@@ -207,6 +207,7 @@ console.log("Done!");
 console.log(window.output);
 console.log("Total SKUs:", window.output.length);
 window.updateProgress({ stage: "Completed", current: totalPages, total: totalPages });
+window.__SCRAPER_DONE__ = true;
 
 // Download JSON
 
@@ -249,6 +250,8 @@ document.body.removeChild(a);
 URL.revokeObjectURL(url);
 
 console.log("Download Complete!");
-setTimeout(() => { try { window.close(); } catch (_) {} }, 1500);
+if (typeof window.__IS_PLAYWRIGHT__ === "undefined") {
+    setTimeout(() => { try { window.close(); } catch (_) {} }, 1500);
+}
 
 })();
