@@ -13,4 +13,4 @@ RUN playwright install --with-deps chromium
 
 COPY . .
 
-CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "10000"]
+CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "10000", "--timeout-graceful-shutdown", "120"]

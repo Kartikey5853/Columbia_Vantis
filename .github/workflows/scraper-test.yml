@@ -21,14 +21,14 @@ on:
       scrape_timeout_seconds:
         description: 'Timeout in seconds for each scraper endpoint request'
         required: false
-        default: '900'
+        default: '2400'
 
 env:
   DEFAULT_RENDER_URL: "https://columbia-4-0.onrender.com"
   MIN_PRODUCTS: ${{ inputs.min_products || '1' }}
   RENDER_DEPLOY_WAIT_SECONDS: ${{ inputs.deploy_wait_seconds || '600' }}
   HEALTH_CHECK_INTERVAL_SECONDS: ${{ inputs.health_check_interval_seconds || '15' }}
-  SCRAPE_TIMEOUT_SECONDS: ${{ inputs.scrape_timeout_seconds || '900' }}
+  SCRAPE_TIMEOUT_SECONDS: ${{ inputs.scrape_timeout_seconds || '2400' }}
 
 jobs:
   # =========================================================================
@@ -42,7 +42,7 @@ jobs:
   test-scrapers:
     name: Sequential Scraper Testing (Columbia -> Tata CLiQ)
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 50
 
     steps:
       - name: Checkout repository
