@@ -1,0 +1,112 @@
+﻿name: Scraper Continuous Testing Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      min_products:
+        description: 'Minimum expected products/SKUs'
+        required: false
+        default: '1'
+      deploy_wait_seconds:
+        description: 'Maximum seconds to wait for Render deployment to become healthy'
+        required: false
+        default: '600'
+      health_check_interval_seconds:
+        description: 'Seconds between health check polls'
+        required: false
+        default: '15'
+      scrape_timeout_seconds:
+        description: 'Timeout in seconds for /scrape endpoint request'
+        required: false
+        default: '900'
+
+env:
+  DEFAULT_RENDER_URL: "https://columbia-4-0.onrender.com"
+  MIN_PRODUCTS: ${{ inputs.min_products || '1' }}
+  RENDER_DEPLOY_WAIT_SECONDS: ${{ inputs.deploy_wait_seconds || '600' }}
+  HEALTH_CHECK_INTERVAL_SECONDS: ${{ inputs.health_check_interval_seconds || '15' }}
+  SCRAPE_TIMEOUT_SECONDS: ${{ inputs.scrape_timeout_seconds || '900' }}
+
+jobs:
+  # =========================================================================
+  # 1. Columbia Sportswear India Scraper Test
+  # =========================================================================
+  test-columbia:
+    name: Test Columbia Scraper (Render)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test runner dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install psutil
+
+      - name: Test deployed Columbia scraper on Render
+        env:
+          RENDER_SERVICE_URL: ${{ secrets.RENDER_SERVICE_URL || env.DEFAULT_RENDER_URL }}
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+        run: |
+          python .github/scripts/test_scraper.py \
+            --service-url "${RENDER_SERVICE_URL}" \
+            --source-name "columbia" \
+            --min-products "${MIN_PRODUCTS}" \
+            --deploy-wait-seconds "${RENDER_DEPLOY_WAIT_SECONDS}" \
+            --health-check-interval "${HEALTH_CHECK_INTERVAL_SECONDS}" \
+            --scrape-timeout-seconds "${SCRAPE_TIMEOUT_SECONDS}" \
+            --output-file "test-results/columbia-test-result.json"
+
+      - name: Upload Columbia test results artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: columbia-test-result
+          path: test-results/columbia-test-result.json
+          retention-days: 30
+
+  # =========================================================================
+  # Sequential Multi-Scraper Pipeline (Future Expansion)
+  # When adding next scrapers, append them below with sequential dependencies:
+  #
+  # Columbia (PASS) -> Myntra (PASS) -> AJIO (PASS) -> Amazon (PASS) -> Tata (PASS)
+  # =========================================================================
+
+  # test-myntra:
+  #   name: Test Myntra Scraper (Render)
+  #   needs: test-columbia
+  #   runs-on: ubuntu-latest
+  #   timeout-minutes: 25
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-python@v5
+  #       with:
+  #         python-version: "3.12"
+  #     - run: pip install psutil
+  #     - name: Test deployed Myntra scraper
+  #       run: |
+  #         python .github/scripts/test_scraper.py \
+  #           --service-url "${MYNTRA_RENDER_URL}" \
+  #           --source-name "myntra" \
+  #           --output-file "test-results/myntra-test-result.json"
+  #     - uses: actions/upload-artifact@v4
+  #       if: always()
+  #       with:
+  #         name: myntra-test-result
+  #         path: test-results/myntra-test-result.json
+
+  # test-ajio:
+  #   name: Test AJIO Scraper (Render)
+  #   needs: test-myntra
+  #   ...
