@@ -21,7 +21,7 @@
     const CONCURRENCY =
         typeof window.__CONCURRENCY__ !== "undefined"
             ? window.__CONCURRENCY__
-            : 8;
+            : 2;
     const progressStartedAt = Date.now();
     window.updateProgress = function (progress) {
         const current = Number(progress.current || 0), total = Number(progress.total || 0);

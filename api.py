@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from runner import scrape_columbia, scrape_tata
+from runner import scrape_columbia, scrape_tata, close_shared_browser
 
 
 app = FastAPI(
@@ -7,6 +7,11 @@ app = FastAPI(
     description="API for scraping Columbia Sportswear India and Tata CLiQ product data.",
     version="1.1.0"
 )
+
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    await close_shared_browser()
 
 
 @app.get("/")

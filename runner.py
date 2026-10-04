@@ -51,142 +51,292 @@ def log_console(msg):
             pass
 
 
-async def _open_browser_page(p, url: str, timeout: int = 60_000):
-    """Shared helper to launch Chromium and open an initial page."""
-    browser = await p.chromium.launch(
+# =========================================================================
+# Shared Single Browser & Ultra-Low-RAM Infrastructure
+# =========================================================================
+
+# Strict RAM reduction flags for Chromium in containerized environments
+LOW_MEMORY_CHROMIUM_ARGS = [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--disable-software-rasterizer",
+    "--mute-audio",
+    "--disable-background-networking",
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-breakpad",
+    "--disable-component-extensions-with-background-pages",
+    "--disable-extensions",
+    "--disable-features=TranslateUI,BlinkGenPropertyTrees",
+    "--disable-ipc-flooding-protection",
+    "--disable-renderer-backgrounding",
+    "--js-flags=--max-old-space-size=256",
+]
+
+_SHARED_PLAYWRIGHT = None
+_SHARED_BROWSER = None
+_ACTIVE_PAGE = None
+_SCRAPER_LOCK = asyncio.Lock()
+
+
+async def get_shared_browser():
+    """Returns the persistent single Chromium instance, launching it if not yet started."""
+    global _SHARED_PLAYWRIGHT, _SHARED_BROWSER
+    if _SHARED_BROWSER and _SHARED_BROWSER.is_connected():
+        return _SHARED_BROWSER
+
+    if _SHARED_PLAYWRIGHT is None:
+        _SHARED_PLAYWRIGHT = await async_playwright().start()
+
+    print("[BROWSER] Launching shared single Chromium instance (RAM-optimized)...", flush=True)
+    _SHARED_BROWSER = await _SHARED_PLAYWRIGHT.chromium.launch(
         headless=True,
-        args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+        args=LOW_MEMORY_CHROMIUM_ARGS
     )
+    return _SHARED_BROWSER
+
+
+async def close_shared_browser():
+    """Explicitly closes any open tab and shuts down the shared browser."""
+    global _SHARED_PLAYWRIGHT, _SHARED_BROWSER, _ACTIVE_PAGE
+    if _ACTIVE_PAGE:
+        try:
+            if not _ACTIVE_PAGE.is_closed():
+                await _ACTIVE_PAGE.close()
+        except Exception:
+            pass
+        _ACTIVE_PAGE = None
+
+    if _SHARED_BROWSER:
+        try:
+            await _SHARED_BROWSER.close()
+        except Exception:
+            pass
+        _SHARED_BROWSER = None
+
+    if _SHARED_PLAYWRIGHT:
+        try:
+            await _SHARED_PLAYWRIGHT.stop()
+        except Exception:
+            pass
+        _SHARED_PLAYWRIGHT = None
+
+
+async def _create_lean_tab(browser, url: str, timeout: int = 60_000):
+    """
+    Open a single lean Chrome tab with aggressive resource blocking
+    (images, fonts, stylesheets, media, tracking scripts are aborted)
+    to minimize memory usage on constrained servers.
+    """
+    global _ACTIVE_PAGE
+    # Ensure any lingering previous page is closed first
+    if _ACTIVE_PAGE:
+        try:
+            if not _ACTIVE_PAGE.is_closed():
+                await _ACTIVE_PAGE.close()
+        except Exception:
+            pass
+        _ACTIVE_PAGE = None
+
     page = await browser.new_page()
+    _ACTIVE_PAGE = page
+
     page.on("console", log_console)
     page.on("pageerror", lambda exc: print(f"[PAGE ERROR] {exc}", flush=True))
 
-    await page.goto(url, wait_until="domcontentloaded", timeout=timeout)
-    return browser, page
+    # Abort heavy assets that are completely unnecessary for API data scraping
+    async def block_unnecessary_resources(route):
+        req = route.request
+        res_type = req.resource_type
+        url_lower = req.url.lower()
 
+        # 1. Block heavy binary & styling assets (images, fonts, media, css)
+        if res_type in ("image", "media", "font", "stylesheet"):
+            await route.abort()
+            return
+
+        # 2. Block heavy advertising, analytics, and telemetry trackers
+        tracker_keywords = (
+            "google-analytics", "googletagmanager", "facebook", "doubleclick",
+            "clarity.ms", "criteo", "hotjar", "omtrdc", "demdex", "tiqcdn",
+            "branch.io", "scorecardresearch", "adroll", "datadog", "newrelic",
+            "sentry", "shopifyanalytics"
+        )
+        if any(kw in url_lower for kw in tracker_keywords):
+            await route.abort()
+            return
+
+        await route.continue_()
+
+    await page.route("**/*", block_unnecessary_resources)
+
+    print(f"[BROWSER] Navigating single tab to {url} (images/styles blocked)...", flush=True)
+    await page.goto(url, wait_until="domcontentloaded", timeout=timeout)
+    return page
+
+
+# =========================================================================
+# Columbia Sportswear Scraper
+# =========================================================================
 
 async def scrape_columbia() -> dict:
-    """Scrapes Columbia Sportswear India product data."""
+    """Scrapes Columbia Sportswear India product data using the shared browser."""
     if not TOKEN:
         raise RuntimeError("SHOPIFY_TOKEN is missing from .env or environment")
 
     scraper_path = Path("columbia_scraper.js")
     scraper_code = scraper_path.read_text(encoding="utf-8")
 
-    async with async_playwright() as p:
-        print("Launching browser for Columbia scraper...", flush=True)
-        browser, page = await _open_browser_page(p, "https://www.columbiasportswear.co.in/")
+    async with _SCRAPER_LOCK:
+        browser = await get_shared_browser()
+        page = None
+        try:
+            print("Opening lean tab for Columbia scraper...", flush=True)
+            page = await _create_lean_tab(browser, "https://www.columbiasportswear.co.in/")
 
-        print("Injecting and starting Columbia scraper...", flush=True)
-        await page.evaluate(
-            """([code, token]) => {
-                window.__SHOPIFY_TOKEN__ = token;
-                window.__IS_PLAYWRIGHT__ = true;
-                window.eval(code);
-            }""",
-            [scraper_code, TOKEN]
-        )
+            print("Injecting and starting Columbia scraper...", flush=True)
+            await page.evaluate(
+                """([code, token]) => {
+                    window.__SHOPIFY_TOKEN__ = token;
+                    window.__IS_PLAYWRIGHT__ = true;
+                    window.eval(code);
+                }""",
+                [scraper_code, TOKEN]
+            )
 
-        print("Scraper is running. Waiting for completion...", flush=True)
-        await page.wait_for_function(
-            "() => window.__SCRAPER_DONE__ === true",
-            timeout=180_000
-        )
+            print("Scraper is running. Waiting for completion...", flush=True)
+            await page.wait_for_function(
+                "() => window.__SCRAPER_DONE__ === true",
+                timeout=180_000
+            )
 
-        products = await page.evaluate("() => window.output || []")
-
-        print("\n" + "=" * 60, flush=True)
-        print(f"COLUMBIA SCRAPING FINISHED: {len(products)} total SKUs collected", flush=True)
-        print("=" * 60, flush=True)
-
-        output_payload = {
-            "schema_version": 1,
-            "source": "columbia",
-            "scrape_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-            "scraped_at": datetime.now(timezone.utc).isoformat(),
-            "total_skus": len(products),
-            "products": products
-        }
-
-        output_file = Path("columbia_products.json")
-        output_file.write_text(
-            json.dumps(output_payload, indent=2),
-            encoding="utf-8"
-        )
-        print(f"Saved {len(products)} products to {output_file.resolve()}", flush=True)
-
-        await browser.close()
-        return output_payload
-
-
-async def scrape_tata() -> dict:
-    """Scrapes Tata CLiQ for Columbia products."""
-    scraper_path = Path("tata_scraper.js")
-    scraper_code = scraper_path.read_text(encoding="utf-8")
-
-    # Timeout for full Tata scrape (configurable via env, default 2400s / 40 mins)
-    timeout_ms = int(os.getenv("TATA_SCRAPE_TIMEOUT_SECONDS", "2400")) * 1000
-
-    async with async_playwright() as p:
-        print("Launching browser for Tata CLiQ scraper...", flush=True)
-        browser, page = await _open_browser_page(p, "https://www.tatacliq.com/")
-
-        print("Injecting and starting Tata CLiQ scraper...", flush=True)
-        await page.evaluate(
-            """([code]) => {
-                window.__IS_PLAYWRIGHT__ = true;
-                window.eval(code);
-            }""",
-            [scraper_code]
-        )
-
-        print("Tata scraper is running. Waiting for completion...", flush=True)
-        await page.wait_for_function(
-            "() => window.__SCRAPER_DONE__ === true",
-            timeout=timeout_ms
-        )
-
-        result = await page.evaluate("() => window.scraperResult || null")
-
-        if not result or not isinstance(result, dict):
-            # Fallback if window.scraperResult was not populated
             products = await page.evaluate("() => window.output || []")
-            result = {
+
+            print("\n" + "=" * 60, flush=True)
+            print(f"COLUMBIA SCRAPING FINISHED: {len(products)} total SKUs collected", flush=True)
+            print("=" * 60, flush=True)
+
+            output_payload = {
                 "schema_version": 1,
-                "source": "tatacliq",
+                "source": "columbia",
                 "scrape_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
                 "scraped_at": datetime.now(timezone.utc).isoformat(),
-                "total_products": len(products),
-                "total_variants": 0,
-                "average_variants_per_product": 0.0,
+                "total_skus": len(products),
                 "products": products
             }
 
-        total_p = result.get("total_products", len(result.get("products", [])))
-        total_v = result.get("total_variants", 0)
+            output_file = Path("columbia_products.json")
+            output_file.write_text(
+                json.dumps(output_payload, indent=2),
+                encoding="utf-8"
+            )
+            print(f"Saved {len(products)} products to {output_file.resolve()}", flush=True)
+            return output_payload
 
-        print("\n" + "=" * 60, flush=True)
-        print(f"TATA CLIQ SCRAPING FINISHED: {total_p} products, {total_v} variants", flush=True)
-        print("=" * 60, flush=True)
+        finally:
+            if page:
+                print("[BROWSER] Closing Columbia tab to reclaim RAM...", flush=True)
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+                global _ACTIVE_PAGE
+                _ACTIVE_PAGE = None
+                print("[BROWSER] Columbia tab destroyed. Browser ready for next scraper.", flush=True)
 
-        output_file = Path("tatacliq_columbia_products.json")
-        output_file.write_text(
-            json.dumps(result, indent=2),
-            encoding="utf-8"
-        )
-        print(f"Saved {total_p} products to {output_file.resolve()}", flush=True)
 
-        await browser.close()
-        return result
+# =========================================================================
+# Tata CLiQ Scraper
+# =========================================================================
+
+async def scrape_tata() -> dict:
+    """Scrapes Tata CLiQ for Columbia products on the same shared browser (concurrency=2)."""
+    scraper_path = Path("tata_scraper.js")
+    scraper_code = scraper_path.read_text(encoding="utf-8")
+
+    # Timeout for full Tata scrape (default 2400s / 40 mins)
+    timeout_ms = int(os.getenv("TATA_SCRAPE_TIMEOUT_SECONDS", "2400")) * 1000
+
+    async with _SCRAPER_LOCK:
+        browser = await get_shared_browser()
+        page = None
+        try:
+            print("Opening lean tab for Tata CLiQ scraper (on shared browser)...", flush=True)
+            page = await _create_lean_tab(browser, "https://www.tatacliq.com/")
+
+            print("Injecting and starting Tata CLiQ scraper (CONCURRENCY=2)...", flush=True)
+            await page.evaluate(
+                """([code]) => {
+                    window.__IS_PLAYWRIGHT__ = true;
+                    window.__CONCURRENCY__ = 2;
+                    window.eval(code);
+                }""",
+                [scraper_code]
+            )
+
+            print("Tata scraper is running. Waiting for completion...", flush=True)
+            await page.wait_for_function(
+                "() => window.__SCRAPER_DONE__ === true",
+                timeout=timeout_ms
+            )
+
+            result = await page.evaluate("() => window.scraperResult || null")
+
+            if not result or not isinstance(result, dict):
+                products = await page.evaluate("() => window.output || []")
+                result = {
+                    "schema_version": 1,
+                    "source": "tatacliq",
+                    "scrape_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                    "scraped_at": datetime.now(timezone.utc).isoformat(),
+                    "total_products": len(products),
+                    "total_variants": 0,
+                    "average_variants_per_product": 0.0,
+                    "products": products
+                }
+
+            total_p = result.get("total_products", len(result.get("products", [])))
+            total_v = result.get("total_variants", 0)
+
+            print("\n" + "=" * 60, flush=True)
+            print(f"TATA CLIQ SCRAPING FINISHED: {total_p} products, {total_v} variants", flush=True)
+            print("=" * 60, flush=True)
+
+            output_file = Path("tatacliq_columbia_products.json")
+            output_file.write_text(
+                json.dumps(result, indent=2),
+                encoding="utf-8"
+            )
+            print(f"Saved {total_p} products to {output_file.resolve()}", flush=True)
+            return result
+
+        finally:
+            if page:
+                print("[BROWSER] Closing Tata CLiQ tab to reclaim RAM...", flush=True)
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+                _ACTIVE_PAGE = None
+                print("[BROWSER] Tata CLiQ tab destroyed. Memory reclaimed.", flush=True)
 
 
 # Backwards compatibility
 main = scrape_columbia
 
 
+async def _run_cli(target: str):
+    try:
+        if target.lower() in ("tata", "tatacliq"):
+            await scrape_tata()
+        else:
+            await scrape_columbia()
+    finally:
+        await close_shared_browser()
+
+
 if __name__ == "__main__":
-    target = sys.argv[1] if len(sys.argv) > 1 else "columbia"
-    if target.lower() in ("tata", "tatacliq"):
-        asyncio.run(scrape_tata())
-    else:
-        asyncio.run(scrape_columbia())
+    target_arg = sys.argv[1] if len(sys.argv) > 1 else "columbia"
+    asyncio.run(_run_cli(target_arg))
