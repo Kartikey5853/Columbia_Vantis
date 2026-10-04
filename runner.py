@@ -104,10 +104,19 @@ async def main():
         }
 
         output_file = Path("columbia_products.json")
-        output_file.write_text(json.dumps(output_payload, indent=2), encoding="utf-8")
-        print(f"\nSaved {len(products)} products to {output_file.resolve()}", flush=True)
+        output_file.write_text(
+            json.dumps(output_payload, indent=2),
+            encoding="utf-8"
+        )
+
+        print(
+            f"\nSaved {len(products)} products to {output_file.resolve()}",
+            flush=True
+        )
 
         await browser.close()
+
+        return output_payload
 
 
 if __name__ == "__main__":
