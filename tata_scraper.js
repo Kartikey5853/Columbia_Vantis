@@ -128,69 +128,85 @@
     // --------------------------------------------------
     // Fetch Variant Information
     // --------------------------------------------------
+    // Variant Cache & Fetching
+    // --------------------------------------------------
+
+    const variantCache = new Map();
 
     async function fetchVariants(productId) {
+        if (!productId) return [];
+        const normalizedId = String(productId).trim();
 
-        try {
+        if (variantCache.has(normalizedId)) {
+            return variantCache.get(normalizedId);
+        }
 
-            const res = await fetch(
-                DETAIL_URL(productId),
-                {
+        const url = DETAIL_URL(normalizedId);
+
+        // Fetch with a 7-second abort timeout so hanging server sockets never freeze workers
+        for (let attempt = 1; attempt <= 2; attempt++) {
+            let controller = null;
+            let timeoutId = null;
+
+            try {
+                controller = new AbortController();
+                timeoutId = setTimeout(() => controller.abort(), 7000);
+
+                const res = await fetch(url, {
                     headers: {
                         Accept: "application/json"
-                    }
+                    },
+                    signal: controller.signal
+                });
+
+                clearTimeout(timeoutId);
+
+                if (!res.ok) {
+                    throw new Error(`HTTP ${res.status}`);
                 }
-            );
 
-            if (!res.ok)
-                throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                const rawVariants = data.variantOptions || [];
 
-            const data = await res.json();
+                const mapped = rawVariants.map(v => ({
+                    size:
+                        v.sizelink?.size ||
+                        v.sizelink?.brandSize ||
+                        "",
+                    sku:
+                        v.sizelink?.productCode ||
+                        "",
+                    available:
+                        !!v.sizelink?.isAvailable,
+                    stock:
+                        Number(
+                            v.sizelink?.stockCount ?? 0
+                        ) || 0,
+                    url:
+                        v.sizelink?.url
+                            ? "https://www.tatacliq.com" +
+                              v.sizelink.url
+                            : ""
+                }));
 
-            const rawVariants =
-                data.variantOptions || [];
+                variantCache.set(normalizedId, mapped);
+                return mapped;
 
-            return rawVariants.map(v => ({
+            } catch (err) {
+                if (timeoutId) clearTimeout(timeoutId);
 
-                size:
-                    v.sizelink?.size ||
-                    v.sizelink?.brandSize ||
-                    "",
-
-                sku:
-                    v.sizelink?.productCode ||
-                    "",
-
-                available:
-                    !!v.sizelink?.isAvailable,
-
-                stock:
-                    Number(
-                        v.sizelink?.stockCount ?? 0
-                    ) || 0,
-
-                url:
-                    v.sizelink?.url
-                        ? "https://www.tatacliq.com" +
-                          v.sizelink.url
-                        : ""
-
-            }));
-
+                if (attempt === 1) {
+                    await sleep(300);
+                } else {
+                    console.warn(
+                        `Variant fetch failed for ${normalizedId}: ${err.message}`
+                    );
+                }
+            }
         }
 
-        catch (err) {
-
-            console.warn(
-                "Variant fetch failed:",
-                productId,
-                err.message
-            );
-
-            return [];
-
-        }
-
+        variantCache.set(normalizedId, []);
+        return [];
     }
 
 
@@ -199,44 +215,39 @@
     // --------------------------------------------------
 
     const cleanProducts = [];
-
+    const seenProductIds = new Set();
 
     function processProducts(products) {
-
+        if (!Array.isArray(products)) return;
         const scrapedAt =
             new Date().toISOString();
 
         const priceValue = value =>
-
             Number(
-
                 value?.value ??
-
                 value?.rawValue ??
-
                 String(
                     value?.formattedValue || ""
                 ).replace(/[^0-9.]/g, "")
-
             ) || 0;
 
-
         for (const p of products) {
+            const pid = String(p.productId || "").trim();
+            if (!pid) continue;
+
+            // Deduplicate products across page boundaries
+            if (seenProductIds.has(pid)) {
+                continue;
+            }
+            seenProductIds.add(pid);
 
             cleanProducts.push({
-
                 source: "tatacliq",
-
-                product_id:
-                    String(p.productId || ""),
-
+                product_id: pid,
                 sku: "",
-
                 ean: "",
-
                 available:
                     !!p.inStockFlag,
-
                 title:
                     p.productname || "",
 

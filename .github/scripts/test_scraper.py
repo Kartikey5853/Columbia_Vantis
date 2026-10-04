@@ -728,7 +728,7 @@ def main():
     parser.add_argument("--min-products", type=int, default=int(os.getenv("MIN_PRODUCTS", "1")))
     parser.add_argument("--deploy-wait-seconds", type=int, default=int(os.getenv("RENDER_DEPLOY_WAIT_SECONDS", "600")))
     parser.add_argument("--health-check-interval", type=int, default=int(os.getenv("HEALTH_CHECK_INTERVAL_SECONDS", "300")))
-    parser.add_argument("--scrape-timeout-seconds", type=int, default=int(os.getenv("SCRAPE_TIMEOUT_SECONDS", "2400")))
+    parser.add_argument("--scrape-timeout-seconds", type=int, default=int(os.getenv("SCRAPE_TIMEOUT_SECONDS", "3900")))
     parser.add_argument("--output-file", default=None)
     parser.add_argument("--skip-wait", action="store_true", help="Skip deployment wait if already checked")
     parser.add_argument("--wait-only", action="store_true", help="Only wait for Render deployment to become healthy")

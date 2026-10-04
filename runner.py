@@ -290,8 +290,8 @@ async def scrape_tata(progress_callback=None) -> dict:
     scraper_path = Path("tata_scraper.js")
     scraper_code = scraper_path.read_text(encoding="utf-8")
 
-    # Timeout for full Tata scrape (default 2400s / 40 mins)
-    timeout_ms = int(os.getenv("TATA_SCRAPE_TIMEOUT_SECONDS", "2400")) * 1000
+    # Timeout for full Tata scrape (default 3600s / 60 mins)
+    timeout_ms = int(os.getenv("TATA_SCRAPE_TIMEOUT_SECONDS", "3600")) * 1000
 
     async with _SCRAPER_LOCK:
         browser = await get_shared_browser()
