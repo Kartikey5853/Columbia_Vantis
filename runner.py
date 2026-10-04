@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from dotenv import load_dotenv
@@ -55,7 +56,6 @@ def log_console(msg):
 # Shared Single Browser & Ultra-Low-RAM Infrastructure
 # =========================================================================
 
-# Strict RAM reduction flags for Chromium in containerized environments
 LOW_MEMORY_CHROMIUM_ARGS = [
     "--no-sandbox",
     "--disable-setuid-sandbox",
@@ -177,11 +177,41 @@ async def _create_lean_tab(browser, url: str, timeout: int = 60_000):
     return page
 
 
+async def _wait_and_poll_progress(
+    page,
+    done_flag: str,
+    progress_flag: str,
+    timeout_ms: int,
+    poll_interval: float = 2.0,
+    callback = None
+) -> bool:
+    """Wait for completion while periodically streaming progress to callback."""
+    start_t = time.perf_counter()
+    timeout_sec = timeout_ms / 1000.0
+
+    while time.perf_counter() - start_t < timeout_sec:
+        is_done = await page.evaluate(f"() => window.{done_flag} === true")
+        if is_done:
+            return True
+
+        if callback:
+            prog = await page.evaluate(f"() => window.{progress_flag} || null")
+            if prog:
+                try:
+                    await callback(prog)
+                except Exception:
+                    pass
+
+        await asyncio.sleep(poll_interval)
+
+    raise TimeoutError(f"Scraper execution timed out after {timeout_sec} seconds")
+
+
 # =========================================================================
 # Columbia Sportswear Scraper
 # =========================================================================
 
-async def scrape_columbia() -> dict:
+async def scrape_columbia(progress_callback=None) -> dict:
     """Scrapes Columbia Sportswear India product data using the shared browser."""
     if not TOKEN:
         raise RuntimeError("SHOPIFY_TOKEN is missing from .env or environment")
@@ -206,10 +236,14 @@ async def scrape_columbia() -> dict:
                 [scraper_code, TOKEN]
             )
 
-            print("Scraper is running. Waiting for completion...", flush=True)
-            await page.wait_for_function(
-                "() => window.__SCRAPER_DONE__ === true",
-                timeout=180_000
+            print("Columbia scraper is running. Waiting for completion...", flush=True)
+            await _wait_and_poll_progress(
+                page,
+                done_flag="__SCRAPER_DONE__",
+                progress_flag="__SCRAPER_PROGRESS__",
+                timeout_ms=180_000,
+                poll_interval=1.5,
+                callback=progress_callback
             )
 
             products = await page.evaluate("() => window.output || []")
@@ -251,7 +285,7 @@ async def scrape_columbia() -> dict:
 # Tata CLiQ Scraper
 # =========================================================================
 
-async def scrape_tata() -> dict:
+async def scrape_tata(progress_callback=None) -> dict:
     """Scrapes Tata CLiQ for Columbia products on the same shared browser (concurrency=2)."""
     scraper_path = Path("tata_scraper.js")
     scraper_code = scraper_path.read_text(encoding="utf-8")
@@ -277,9 +311,13 @@ async def scrape_tata() -> dict:
             )
 
             print("Tata scraper is running. Waiting for completion...", flush=True)
-            await page.wait_for_function(
-                "() => window.__SCRAPER_DONE__ === true",
-                timeout=timeout_ms
+            await _wait_and_poll_progress(
+                page,
+                done_flag="__SCRAPER_DONE__",
+                progress_flag="__SCRAPER_PROGRESS__",
+                timeout_ms=timeout_ms,
+                poll_interval=2.0,
+                callback=progress_callback
             )
 
             result = await page.evaluate("() => window.scraperResult || null")
@@ -323,6 +361,166 @@ async def scrape_tata() -> dict:
                 print("[BROWSER] Tata CLiQ tab destroyed. Memory reclaimed.", flush=True)
 
 
+# =========================================================================
+# Sequential Pipeline Coordinator (Columbia -> Tata CLiQ)
+# =========================================================================
+
+async def run_sequential_pipeline(job_id: str):
+    """
+    Coordinates sequential execution of Columbia -> Tata CLiQ with live job status updates.
+    Guarantees strict tab lifecycle and memory reclamation.
+    """
+    from jobs import update_job
+
+    await update_job(
+        job_id,
+        status="running",
+        current_scraper="columbia",
+        scrapers={"columbia": {"status": "running"}},
+    )
+
+    # Progress callback for Columbia
+    async def columbia_progress_cb(prog: dict):
+        curr = prog.get("current", 0)
+        tot = prog.get("total", 1)
+        pct = round((curr / tot) * 100, 1) if tot > 0 else 0.0
+        overall_pct = round(pct * 0.15, 1)  # Columbia represents first 15% of pipeline
+        await update_job(
+            job_id,
+            progress_percentage=overall_pct,
+            scrapers={
+                "columbia": {
+                    "stage": prog.get("stage", "Running"),
+                    "current": curr,
+                    "total": tot
+                }
+            }
+        )
+
+    # Progress callback for Tata CLiQ
+    async def tata_progress_cb(prog: dict):
+        stage = prog.get("stage", "")
+        curr = prog.get("current", 0)
+        tot = prog.get("total", 1)
+        pct = (curr / tot) if tot > 0 else 0.0
+
+        if "Listing" in stage or "Collecting Products" in stage:
+            overall_pct = round(15.0 + (pct * 15.0), 1)  # 15% - 30%
+        else:
+            overall_pct = round(30.0 + (pct * 70.0), 1)  # 30% - 100%
+
+        await update_job(
+            job_id,
+            progress_percentage=min(99.0, overall_pct),
+            scrapers={
+                "tatacliq": {
+                    "stage": stage,
+                    "current": curr,
+                    "total": tot,
+                }
+            }
+        )
+
+    t_pipeline_start = time.perf_counter()
+    col_products = 0
+
+    # Step 1: Columbia Scraper
+    try:
+        t0 = time.perf_counter()
+        columbia_res = await scrape_columbia(progress_callback=columbia_progress_cb)
+        col_dur = round(time.perf_counter() - t0, 1)
+        col_products = len(columbia_res.get("products", []))
+
+        await update_job(
+            job_id,
+            product_count=col_products,
+            progress_percentage=15.0,
+            scrapers={
+                "columbia": {
+                    "status": "completed",
+                    "product_count": col_products,
+                    "duration_seconds": col_dur,
+                    "error": None
+                }
+            }
+        )
+    except Exception as e:
+        col_dur = round(time.perf_counter() - t_pipeline_start, 1)
+        err_msg = f"Columbia scraper failed: {e}"
+        print(f"[JOB {job_id}] ❌ {err_msg}", flush=True)
+        await update_job(
+            job_id,
+            status="failed",
+            current_scraper="columbia",
+            error=err_msg,
+            scrapers={
+                "columbia": {
+                    "status": "failed",
+                    "duration_seconds": col_dur,
+                    "error": str(e)
+                },
+                "tatacliq": {
+                    "status": "skipped",
+                    "error": "Skipped due to Columbia failure (fail-fast)"
+                }
+            }
+        )
+        return
+
+    # Step 2: Tata CLiQ Scraper (Only executed if Columbia passed)
+    await update_job(
+        job_id,
+        current_scraper="tatacliq",
+        scrapers={"tatacliq": {"status": "running"}},
+    )
+
+    try:
+        t0 = time.perf_counter()
+        tata_res = await scrape_tata(progress_callback=tata_progress_cb)
+        tata_dur = round(time.perf_counter() - t0, 1)
+        tata_products = tata_res.get("total_products", len(tata_res.get("products", [])))
+        tata_variants = tata_res.get("total_variants", 0)
+
+        total_prods = col_products + tata_products
+        await update_job(
+            job_id,
+            status="completed",
+            current_scraper=None,
+            progress_percentage=100.0,
+            product_count=total_prods,
+            variant_count=tata_variants,
+            error=None,
+            scrapers={
+                "tatacliq": {
+                    "status": "completed",
+                    "product_count": tata_products,
+                    "variant_count": tata_variants,
+                    "duration_seconds": tata_dur,
+                    "error": None
+                }
+            }
+        )
+        print(f"[JOB {job_id}] ✅ ALL SCRAPERS COMPLETED SUCCESSFULLY ({total_prods} products, {tata_variants} variants)", flush=True)
+
+    except Exception as e:
+        tata_dur = round(time.perf_counter() - t0, 1)
+        err_msg = f"Tata CLiQ scraper failed: {e}"
+        print(f"[JOB {job_id}] ❌ {err_msg}", flush=True)
+        await update_job(
+            job_id,
+            status="failed",
+            current_scraper="tatacliq",
+            error=err_msg,
+            scrapers={
+                "tatacliq": {
+                    "status": "failed",
+                    "duration_seconds": tata_dur,
+                    "error": str(e)
+                }
+            }
+        )
+
+
 # Backwards compatibility
 main = scrape_columbia
 
@@ -331,6 +529,10 @@ async def _run_cli(target: str):
     try:
         if target.lower() in ("tata", "tatacliq"):
             await scrape_tata()
+        elif target.lower() in ("pipeline", "all"):
+            from jobs import create_job
+            job = await create_job()
+            await run_sequential_pipeline(job["job_id"])
         else:
             await scrape_columbia()
     finally:

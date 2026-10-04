@@ -19,7 +19,7 @@ on:
         required: false
         default: '15'
       scrape_timeout_seconds:
-        description: 'Timeout in seconds for each scraper endpoint request'
+        description: 'Timeout in seconds for scraper job completion'
         required: false
         default: '2400'
 
@@ -32,15 +32,14 @@ env:
 
 jobs:
   # =========================================================================
-  # Sequential Multi-Scraper Pipeline:
+  # Asynchronous Multi-Scraper Pipeline:
   # 1. Health check & Render readiness
-  # 2. Test Columbia scraper (/scrape)
-  # 3. Test Tata CLiQ scraper (/scrape/tata) [ONLY if Columbia passes]
-  # 4. Generate combined CI summary table & step summary
-  # 5. Upload test artifacts
+  # 2. Trigger POST /scrape (202 Accepted) & poll GET /scrape/status/{job_id}
+  # 3. Generate combined CI summary table & step summary
+  # 4. Upload test artifacts (JSON results & job trace)
   # =========================================================================
   test-scrapers:
-    name: Sequential Scraper Testing (Columbia -> Tata CLiQ)
+    name: Async Scraper Testing (Columbia -> Tata CLiQ)
     runs-on: ubuntu-latest
     timeout-minutes: 50
 
@@ -71,44 +70,27 @@ jobs:
             --deploy-wait-seconds "${RENDER_DEPLOY_WAIT_SECONDS}" \
             --health-check-interval "${HEALTH_CHECK_INTERVAL_SECONDS}"
 
-      - name: 2. Test Columbia scraper (/scrape)
+      - name: 2. Trigger async scraper job & poll status until completion
         env:
           RENDER_SERVICE_URL: ${{ secrets.RENDER_SERVICE_URL || env.DEFAULT_RENDER_URL }}
-          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
-          RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
         run: |
           python .github/scripts/test_scraper.py \
+            --poll-job \
             --service-url "${RENDER_SERVICE_URL}" \
-            --source-name "columbia" \
-            --endpoint "/scrape" \
             --min-products "${MIN_PRODUCTS}" \
             --scrape-timeout-seconds "${SCRAPE_TIMEOUT_SECONDS}" \
-            --output-file "test-results/columbia-test-result.json" \
+            --health-check-interval "${HEALTH_CHECK_INTERVAL_SECONDS}" \
+            --results-dir "test-results" \
             --skip-wait
 
-      - name: 3. Test Tata CLiQ scraper (/scrape/tata)
-        env:
-          RENDER_SERVICE_URL: ${{ secrets.RENDER_SERVICE_URL || env.DEFAULT_RENDER_URL }}
-          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
-          RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
-        run: |
-          python .github/scripts/test_scraper.py \
-            --service-url "${RENDER_SERVICE_URL}" \
-            --source-name "tatacliq" \
-            --endpoint "/scrape/tata" \
-            --min-products "${MIN_PRODUCTS}" \
-            --scrape-timeout-seconds "${SCRAPE_TIMEOUT_SECONDS}" \
-            --output-file "test-results/tata-test-result.json" \
-            --skip-wait
-
-      - name: 4. Generate CI summary and step summary
+      - name: 3. Generate CI summary and step summary
         if: always()
         run: |
           python .github/scripts/test_scraper.py \
             --generate-summary \
             --results-dir "test-results"
 
-      - name: 5. Upload test result artifacts
+      - name: 4. Upload test result artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:

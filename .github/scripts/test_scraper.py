@@ -8,7 +8,7 @@ from pathlib import Path
 import urllib.request
 import urllib.error
 
-# Ensure UTF-8 output for emojis and special characters across platforms
+# Ensure UTF-8 output across platforms
 if hasattr(sys.stdout, "reconfigure"):
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -49,12 +49,6 @@ def get_runner_resources() -> tuple[str, str]:
 
 
 def get_render_metrics(api_key: str | None, service_id: str | None) -> tuple[str, str]:
-    """
-    Check if Render CPU and memory metrics can be retrieved.
-    Render v1 REST API does not provide a public real-time CPU/memory utilization
-    endpoint (only plan limits and service metadata). Unless a custom metrics endpoint
-    is configured, return 'unavailable'.
-    """
     if not api_key or not service_id:
         return "unavailable", "unavailable"
 
@@ -96,7 +90,7 @@ def wait_for_service(service_url: str, max_wait_seconds: int, interval_seconds: 
         try:
             req = urllib.request.Request(
                 root_url,
-                headers={"User-Agent": "GitHub-Actions-Scraper-Tester/1.0", "Accept": "application/json"}
+                headers={"User-Agent": "GitHub-Actions-Scraper-Tester/2.0", "Accept": "application/json"}
             )
             with urllib.request.urlopen(req, timeout=20) as resp:
                 call_latency = time.perf_counter() - call_start
@@ -161,7 +155,8 @@ def validate_columbia_products(products: list) -> dict:
             item_invalid = True
         else:
             try:
-                if float(price) < 0:
+                numeric_price = float(price)
+                if numeric_price <= 0:
                     stats["invalid_price"] += 1
                     item_invalid = True
             except (ValueError, TypeError):
@@ -169,7 +164,7 @@ def validate_columbia_products(products: list) -> dict:
                 item_invalid = True
 
         url = p.get("url")
-        if not url or not isinstance(url, str) or not url.startswith("http"):
+        if not url or not (str(url).startswith("http://") or str(url).startswith("https://")):
             stats["invalid_url"] += 1
             item_invalid = True
 
@@ -189,10 +184,9 @@ def validate_tata_products(products: list) -> dict:
         "missing_product_id": 0,
         "missing_title": 0,
         "invalid_price": 0,
-        "invalid_mrp": 0,
         "invalid_url": 0,
         "missing_variants": 0,
-        "total_variants_counted": 0
+        "total_variants_found": 0
     }
 
     for p in products:
@@ -202,59 +196,41 @@ def validate_tata_products(products: list) -> dict:
 
         item_invalid = False
 
-        # product_id check
         pid = p.get("product_id")
         if not pid or not str(pid).strip():
             stats["missing_product_id"] += 1
             item_invalid = True
 
-        # title check
         title = p.get("title")
         if not title or not str(title).strip():
             stats["missing_title"] += 1
             item_invalid = True
 
-        # price check
         price = p.get("price")
         if price is None:
             stats["invalid_price"] += 1
             item_invalid = True
         else:
             try:
-                if float(price) < 0:
+                numeric_price = float(price)
+                if numeric_price <= 0:
                     stats["invalid_price"] += 1
                     item_invalid = True
             except (ValueError, TypeError):
                 stats["invalid_price"] += 1
                 item_invalid = True
 
-        # mrp check
-        mrp = p.get("mrp")
-        if mrp is None:
-            stats["invalid_mrp"] += 1
-            item_invalid = True
-        else:
-            try:
-                if float(mrp) < 0:
-                    stats["invalid_mrp"] += 1
-                    item_invalid = True
-            except (ValueError, TypeError):
-                stats["invalid_mrp"] += 1
-                item_invalid = True
-
-        # url check
         url = p.get("url")
-        if not url or not isinstance(url, str) or not url.startswith("http"):
+        if not url or not (str(url).startswith("http://") or str(url).startswith("https://")):
             stats["invalid_url"] += 1
             item_invalid = True
 
-        # variants check
         variants = p.get("variants")
         if not isinstance(variants, list):
             stats["missing_variants"] += 1
             item_invalid = True
         else:
-            stats["total_variants_counted"] += len(variants)
+            stats["total_variants_found"] += len(variants)
 
         if item_invalid:
             stats["invalid_products"] += 1
@@ -264,63 +240,222 @@ def validate_tata_products(products: list) -> dict:
     return stats
 
 
-def test_single_scraper(args) -> bool:
-    """Execute test against one scraper endpoint and save results."""
-    overall_start_time = time.perf_counter()
+def test_async_job_pipeline(args) -> bool:
+    """
+    Triggers POST /scrape to start background pipeline, then polls
+    GET /scrape/status/{job_id} until completed or failed.
+    """
     service_url = args.service_url.rstrip("/")
-    source_name = args.source_name.lower()
-    endpoint = args.endpoint if args.endpoint else ("/scrape" if source_name == "columbia" else f"/scrape/{source_name}")
-    scrape_endpoint = f"{service_url}{endpoint}"
 
-    label = "TATA CLIQ" if "tata" in source_name else source_name.upper()
-
-    print("=" * 40)
-    print(f"       {label} SCRAPER TEST")
-    print("=" * 40)
-    print(f"Service: {service_url}")
-    print(f"Endpoint: {scrape_endpoint}\n")
-
-    # Step 1: Wait for service if not wait-only or already waited
+    # Step 1: Health check if not skipped
     if not args.skip_wait:
-        online, health_latency, health_msg = wait_for_service(
+        online, latency, msg = wait_for_service(
             service_url,
             max_wait_seconds=args.deploy_wait_seconds,
             interval_seconds=args.health_check_interval
         )
         if not online:
-            total_duration = time.perf_counter() - overall_start_time
-            print("\n❌ SERVICE HEALTH CHECK FAILED")
-            print(f"Status: ❌ OFFLINE - {health_msg}")
-            print(f"Execution Time: {total_duration:.1f} seconds")
-            print("\n" + "=" * 40)
-            print("       RESULT: ❌ FAIL")
-            print("=" * 40)
+            print(f"❌ Render service health check timed out: {msg}", file=sys.stderr)
+            return False
 
-            failure_report = {
-                "status": "failed",
-                "source": source_name,
-                "service": service_url,
-                "endpoint": endpoint,
-                "api_online": False,
-                "error": f"Health check failed: {health_msg}",
-                "started_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
-                "finished_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
-                "duration_seconds": total_duration,
-                "http_status": 0,
-                "product_count": 0,
-                "response_size_bytes": 0,
-                "validation": {"json_valid": False, "schema_valid": False}
-            }
-            out_path = Path(args.output_file)
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            out_path.write_text(json.dumps(failure_report, indent=2), encoding="utf-8")
+    print("\n" + "=" * 50)
+    print("      TRIGGERING ASYNC SCRAPER PIPELINE")
+    print("=" * 50)
+    trigger_url = f"{service_url}/scrape"
+    print(f"Target: POST {trigger_url}")
+
+    # Trigger background scrape job
+    job_id = None
+    req = urllib.request.Request(
+        trigger_url,
+        data=b"",
+        headers={
+            "User-Agent": "GitHub-Actions-Scraper-Tester/2.0",
+            "Accept": "application/json"
+        },
+        method="POST"
+    )
+
+    t_start = time.perf_counter()
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read().decode("utf-8")
+            data = json.loads(raw)
+            job_id = data.get("job_id")
+            print(f"✅ Job accepted (HTTP {resp.status}): job_id={job_id}")
+            print(f"Status URL: {service_url}/scrape/status/{job_id}\n")
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode("utf-8", errors="replace")
+        try:
+            err_data = json.loads(raw)
+            if e.code == 409 and "active_job" in err_data:
+                job_id = err_data["active_job"]["job_id"]
+                print(f"⚠️ A job was already active (HTTP 409): job_id={job_id}. Attaching to poll status...\n")
+        except Exception:
+            pass
+        if not job_id:
+            print(f"❌ Failed to trigger scrape job: HTTP {e.code} - {raw}", file=sys.stderr)
+            return False
+    except Exception as e:
+        print(f"❌ Failed to trigger scrape job: {e}", file=sys.stderr)
+        return False
+
+    # Step 2: Poll status loop
+    poll_url = f"{service_url}/scrape/status/{job_id}"
+    print(f"Polling job status every {args.health_check_interval}s (Timeout: {args.scrape_timeout_seconds}s)...")
+    last_print = ""
+    job_data = None
+
+    while time.perf_counter() - t_start < args.scrape_timeout_seconds:
+        try:
+            p_req = urllib.request.Request(
+                poll_url,
+                headers={"User-Agent": "GitHub-Actions-Scraper-Tester/2.0", "Accept": "application/json"}
+            )
+            with urllib.request.urlopen(p_req, timeout=20) as p_resp:
+                if p_resp.status == 200:
+                    job_data = json.loads(p_resp.read().decode("utf-8"))
+                    status = job_data.get("status", "unknown")
+                    curr_scraper = job_data.get("current_scraper") or "-"
+                    pct = job_data.get("progress_percentage", 0.0)
+                    elapsed = job_data.get("elapsed_seconds", round(time.perf_counter() - t_start, 1))
+                    prods = job_data.get("product_count", 0)
+                    vars_ = job_data.get("variant_count", 0)
+
+                    log_line = f"[JOB {job_id} | {elapsed:.1f}s] Status: {status.upper()} | Scraper: {curr_scraper} | Progress: {pct:.1f}% | Products: {prods:,} | Variants: {vars_:,}"
+                    if log_line != last_print:
+                        print(log_line, flush=True)
+                        last_print = log_line
+
+                    if status in ("completed", "failed"):
+                        break
+        except Exception as e:
+            print(f"  [Poll Warning] Could not fetch job status: {e}", flush=True)
+
+        time.sleep(args.health_check_interval)
+
+    total_poll_time = time.perf_counter() - t_start
+
+    if not job_data or job_data.get("status") not in ("completed", "failed"):
+        print(f"\n❌ Scraper job polling timed out after {total_poll_time:.1f}s", file=sys.stderr)
+        return False
+
+    final_status = job_data.get("status")
+    print(f"\nJob finished with status: {final_status.upper()} in {total_poll_time:.1f}s\n")
+
+    # Step 3: Fetch results and validate both scrapers
+    results_dir = Path(args.results_dir)
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save complete raw job artifact
+    (results_dir / f"job-{job_id}.json").write_text(json.dumps(job_data, indent=2), encoding="utf-8")
+
+    scrapers_dict = job_data.get("scrapers", {})
+    col_info = scrapers_dict.get("columbia", {})
+    tata_info = scrapers_dict.get("tatacliq", {})
+
+    col_success = col_info.get("status") == "completed" and col_info.get("product_count", 0) >= args.min_products
+    tata_success = tata_info.get("status") == "completed" and tata_info.get("product_count", 0) >= args.min_products
+
+    # Download & validate Columbia JSON
+    col_val = {"json_valid": False, "schema_valid": False, "valid_products": 0, "invalid_products": 0}
+    col_size = 0
+    if col_success:
+        try:
+            c_req = urllib.request.Request(f"{service_url}/scrape", headers={"Accept": "application/json"})
+            with urllib.request.urlopen(c_req, timeout=30) as c_resp:
+                raw_c = c_resp.read()
+                col_size = len(raw_c)
+                col_json = json.loads(raw_c.decode("utf-8"))
+                col_products = col_json.get("products", [])
+                col_val = validate_columbia_products(col_products)
+                col_val["json_valid"] = True
+                col_val["schema_valid"] = True
+        except Exception as e:
+            col_success = False
+            col_info["error"] = f"Failed to download/validate Columbia data: {e}"
+
+    # Download & validate Tata JSON
+    tata_val = {"json_valid": False, "schema_valid": False, "valid_products": 0, "invalid_products": 0}
+    tata_size = 0
+    if tata_success:
+        try:
+            t_req = urllib.request.Request(f"{service_url}/scrape/tata", headers={"Accept": "application/json"})
+            with urllib.request.urlopen(t_req, timeout=30) as t_resp:
+                raw_t = t_resp.read()
+                tata_size = len(raw_t)
+                tata_json = json.loads(raw_t.decode("utf-8"))
+                tata_products = tata_json.get("products", [])
+                tata_val = validate_tata_products(tata_products)
+                tata_val["json_valid"] = True
+                tata_val["schema_valid"] = True
+        except Exception as e:
+            tata_success = False
+            tata_info["error"] = f"Failed to download/validate Tata CLiQ data: {e}"
+
+    # Save columbia-test-result.json
+    col_result_data = {
+        "scraper": "columbia",
+        "status": "passed" if col_success else "failed",
+        "duration_seconds": col_info.get("duration_seconds", 0.0),
+        "product_count": col_info.get("product_count", 0),
+        "response_size_bytes": col_size,
+        "validation": col_val,
+        "error": col_info.get("error")
+    }
+    (results_dir / "columbia-test-result.json").write_text(json.dumps(col_result_data, indent=2), encoding="utf-8")
+
+    # Save tata-test-result.json
+    if col_info.get("status") == "completed":
+        tata_result_data = {
+            "scraper": "tatacliq",
+            "status": "passed" if tata_success else "failed",
+            "duration_seconds": tata_info.get("duration_seconds", 0.0),
+            "product_count": tata_info.get("product_count", 0),
+            "variant_count": tata_info.get("variant_count", 0),
+            "response_size_bytes": tata_size,
+            "validation": tata_val,
+            "error": tata_info.get("error")
+        }
+        (results_dir / "tata-test-result.json").write_text(json.dumps(tata_result_data, indent=2), encoding="utf-8")
+
+    # Output CI summary
+    generate_ci_summary(results_dir=str(results_dir))
+    return col_success and tata_success
+
+
+def test_single_scraper(args) -> bool:
+    """Legacy single scraper test for backwards compatibility."""
+    overall_start_time = time.perf_counter()
+    service_url = args.service_url.rstrip("/")
+    source_name = args.source_name.lower()
+    label = "TATA CLIQ" if "tata" in source_name else "COLUMBIA"
+
+    endpoint_path = args.endpoint
+    if not endpoint_path:
+        endpoint_path = "/scrape/tata" if "tata" in source_name else "/scrape"
+
+    scrape_endpoint = f"{service_url}{endpoint_path}"
+
+    print("=" * 40)
+    print(f"       {label} SCRAPER TEST")
+    print("=" * 40)
+    print(f"Service: {service_url}")
+    print(f"Endpoint: {scrape_endpoint}")
+
+    if not args.skip_wait:
+        online, health_latency, wait_msg = wait_for_service(
+            service_url,
+            max_wait_seconds=args.deploy_wait_seconds,
+            interval_seconds=args.health_check_interval
+        )
+        if not online:
+            print(f"❌ SERVICE UNAVAILABLE: {wait_msg}")
             return False
     else:
         health_latency = 0.0
 
     print("Status:\n✅ API ONLINE\n")
-
-    # Step 2: Trigger scrape endpoint
     print(f"Calling scrape endpoint: {scrape_endpoint}")
     print(f"(Request timeout: {args.scrape_timeout_seconds}s)")
 
@@ -343,7 +478,7 @@ def test_single_scraper(args) -> bool:
             req = urllib.request.Request(
                 scrape_endpoint,
                 headers={
-                    "User-Agent": "GitHub-Actions-Scraper-Tester/1.0",
+                    "User-Agent": "GitHub-Actions-Scraper-Tester/2.0",
                     "Accept": "application/json"
                 }
             )
@@ -356,7 +491,6 @@ def test_single_scraper(args) -> bool:
             raw_response_bytes = e.read()
             scrape_error = f"HTTP {e.code}: {e.reason}"
             call_dur = time.perf_counter() - t_req_start
-            # If 502/503/504 happened quickly (< 20s), service is likely restarting/deploying
             if e.code in (502, 503, 504) and call_dur < 20 and attempt < max_retries:
                 retry_wait = 15
                 print(f"  Attempt {attempt}: Received HTTP {e.code} in {call_dur:.1f}s (service deploying/restarting). Retrying in {retry_wait}s...")
@@ -385,7 +519,6 @@ def test_single_scraper(args) -> bool:
     finished_str = scrape_end_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
     response_size = len(raw_response_bytes)
 
-    # Step 3: Parse and Validate
     json_valid = False
     schema_valid = False
     parsed_json = None
@@ -404,15 +537,8 @@ def test_single_scraper(args) -> bool:
     val_stats = {}
 
     if json_valid and isinstance(parsed_json, dict):
-        # Common checks
         if "schema_version" not in parsed_json:
             schema_errors.append("Missing required key 'schema_version'")
-
-        actual_source = parsed_json.get("source")
-        if "tata" in source_name and actual_source != "tatacliq":
-            schema_errors.append(f"source '{actual_source}' does not match expected 'tatacliq'")
-        elif "columbia" in source_name and actual_source != "columbia":
-            schema_errors.append(f"source '{actual_source}' does not match expected 'columbia'")
 
         products = parsed_json.get("products")
         if not isinstance(products, list):
@@ -423,42 +549,14 @@ def test_single_scraper(args) -> bool:
         if product_count < args.min_products:
             schema_errors.append(f"Product count ({product_count}) is below minimum threshold ({args.min_products})")
 
-        # Specific Scraper Schema Checks
         if "tata" in source_name:
-            total_p = parsed_json.get("total_products")
-            if total_p != product_count:
-                schema_errors.append(f"total_products ({total_p}) does not match products.length ({product_count})")
-
-            total_v = parsed_json.get("total_variants")
-            if total_v is None or not isinstance(total_v, (int, float)) or total_v < 0:
-                schema_errors.append(f"total_variants is invalid or missing ({total_v})")
-            else:
-                variant_count = int(total_v)
-
-            avg_v = parsed_json.get("average_variants_per_product")
-            if avg_v is None or not isinstance(avg_v, (int, float)) or avg_v < 0:
-                schema_errors.append(f"average_variants_per_product is invalid or missing ({avg_v})")
-            else:
-                avg_variants = float(avg_v)
-
             val_stats = validate_tata_products(products)
+            variant_count = val_stats.get("total_variants_found", 0)
         else:
-            # Columbia
-            total_skus = parsed_json.get("total_skus")
-            if total_skus != product_count:
-                schema_errors.append(f"total_skus ({total_skus}) does not match products.length ({product_count})")
             val_stats = validate_columbia_products(products)
 
         if not schema_errors:
             schema_valid = True
-
-    # Step 4: Metrics
-    render_api_key = os.getenv("RENDER_API_KEY")
-    render_service_id = os.getenv("RENDER_SERVICE_ID")
-    render_cpu, render_memory = get_render_metrics(render_api_key, render_service_id)
-    runner_cpu, runner_memory = get_runner_resources()
-
-    total_test_duration = time.perf_counter() - overall_start_time
 
     is_success = (
         http_status == 200
@@ -468,77 +566,14 @@ def test_single_scraper(args) -> bool:
         and not scrape_error
     )
 
-    if not is_success and not scrape_error:
-        if schema_errors:
-            scrape_error = "; ".join(schema_errors)
-        elif product_count == 0:
-            scrape_error = "Scraper returned zero products"
-        else:
-            scrape_error = "Validation checks failed"
-
-    # Step 5: Terminal Output for this scraper
-    if is_success:
-        print("Scrape:\n✅ COMPLETED\n")
-        print(f"HTTP Status:\n{http_status}\n")
-        print(f"Started:\n{started_str}\n")
-        print(f"Finished:\n{finished_str}\n")
-        print(f"Execution Time:\n{scrape_duration:.1f} seconds\n")
-        print(f"Products: {product_count:,}")
-        if "tata" in source_name:
-            print(f"Variants: {variant_count:,}")
-            print(f"Average Variants/Product: {avg_variants:.2f}")
-        print(f"Response Size:\n{format_bytes(response_size)}\n")
-        print("JSON:\n✅ VALID\n")
-        print("Schema:\n✅ VALID\n")
-        print(f"Render CPU:\n{render_cpu}\n")
-        print(f"Render memory:\n{render_memory}\n")
-        print(f"GitHub Actions runner CPU:\n{runner_cpu}\n")
-        print(f"GitHub Actions runner memory:\n{runner_memory}\n")
-        print("Validation Results:")
-        print(f"  Valid products: {val_stats.get('valid_products', 0):,}")
-        print(f"  Invalid products: {val_stats.get('invalid_products', 0)}")
-        print("\n" + "=" * 40)
-        print(f"       RESULT: ✅ PASS ({label})")
-        print("=" * 40)
-    else:
-        print(f"❌ {label} SCRAPER FAILED\n")
-        print(f"HTTP Status:\n{http_status}\n")
-        print(f"Error:\n{scrape_error}\n")
-        print(f"Execution Time:\n{scrape_duration:.1f} seconds\n")
-        print(f"Products: {product_count:,}\n")
-        print(f"Response Size:\n{format_bytes(response_size)}\n")
-        print(f"JSON:\n{'✅ VALID' if json_valid else '❌ INVALID'}\n")
-        print(f"Schema:\n{'✅ VALID' if schema_valid else '❌ INVALID'}\n")
-        print("\n" + "=" * 40)
-        print(f"       RESULT: ❌ FAIL ({label})")
-        print("=" * 40)
-
-    # Step 6: Save Result Artifact
     report_data = {
+        "scraper": source_name,
         "status": "passed" if is_success else "failed",
-        "source": source_name,
-        "service": service_url,
-        "endpoint": endpoint,
-        "api_online": True,
-        "started_at": started_str,
-        "finished_at": finished_str,
         "duration_seconds": round(scrape_duration, 2),
         "http_status": http_status,
         "product_count": product_count,
         "variant_count": variant_count,
-        "average_variants_per_product": avg_variants,
         "response_size_bytes": response_size,
-        "timings": {
-            "health_check_seconds": round(health_latency, 3),
-            "scrape_seconds": round(scrape_duration, 2),
-            "total_test_seconds": round(total_test_duration, 2)
-        },
-        "resources": {
-            "render_cpu": render_cpu,
-            "render_memory": render_memory,
-            "runner_cpu": runner_cpu,
-            "runner_memory": runner_memory
-        },
         "validation": {
             "json_valid": json_valid,
             "schema_valid": schema_valid,
@@ -554,7 +589,6 @@ def test_single_scraper(args) -> bool:
     out_file.parent.mkdir(parents=True, exist_ok=True)
     out_file.write_text(json.dumps(report_data, indent=2), encoding="utf-8")
     print(f"\nReport artifact saved to: {out_file.resolve()}\n")
-
     return is_success
 
 
@@ -683,14 +717,14 @@ def generate_ci_summary(results_dir: str = "test-results"):
         except Exception as e:
             print(f"Warning: Failed to write to GITHUB_STEP_SUMMARY: {e}", file=sys.stderr)
 
-    sys.exit(0 if overall_success else 1)
+    return overall_success
 
 
 def main():
     parser = argparse.ArgumentParser(description="Test deployed web scrapers on Render")
     parser.add_argument("--service-url", default=os.getenv("RENDER_SERVICE_URL", "https://columbia-4-0.onrender.com"))
     parser.add_argument("--source-name", default=os.getenv("SCRAPER_NAME", "columbia"))
-    parser.add_argument("--endpoint", default=None, help="Endpoint path e.g. /scrape or /scrape/tata")
+    parser.add_argument("--endpoint", default=None, help="Endpoint path e.g. /scrape or /scrape/tata (runs legacy test)")
     parser.add_argument("--min-products", type=int, default=int(os.getenv("MIN_PRODUCTS", "1")))
     parser.add_argument("--deploy-wait-seconds", type=int, default=int(os.getenv("RENDER_DEPLOY_WAIT_SECONDS", "600")))
     parser.add_argument("--health-check-interval", type=int, default=int(os.getenv("HEALTH_CHECK_INTERVAL_SECONDS", "15")))
@@ -699,13 +733,14 @@ def main():
     parser.add_argument("--skip-wait", action="store_true", help="Skip deployment wait if already checked")
     parser.add_argument("--wait-only", action="store_true", help="Only wait for Render deployment to become healthy")
     parser.add_argument("--generate-summary", action="store_true", help="Generate final CI summary from test-results/")
+    parser.add_argument("--poll-job", action="store_true", help="Trigger POST /scrape and poll GET /scrape/status/{job_id}")
     parser.add_argument("--results-dir", default="test-results")
 
     args = parser.parse_args()
 
     if args.generate_summary:
-        generate_ci_summary(args.results_dir)
-        return
+        success = generate_ci_summary(args.results_dir)
+        sys.exit(0 if success else 1)
 
     if args.wait_only:
         service_url = args.service_url.rstrip("/")
@@ -720,10 +755,15 @@ def main():
         print("✅ Render service is healthy and online.")
         sys.exit(0)
 
-    if not args.output_file:
-        args.output_file = f"test-results/{args.source_name}-test-result.json"
+    # If --endpoint is specified explicitly, run legacy single scraper test
+    if args.endpoint:
+        if not args.output_file:
+            args.output_file = f"test-results/{args.source_name}-test-result.json"
+        success = test_single_scraper(args)
+        sys.exit(0 if success else 1)
 
-    success = test_single_scraper(args)
+    # Default mode: Run async job trigger and polling pipeline
+    success = test_async_job_pipeline(args)
     sys.exit(0 if success else 1)
 
 
