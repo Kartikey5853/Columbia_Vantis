@@ -331,28 +331,53 @@ def test_single_scraper(args) -> bool:
     http_status = 0
     raw_response_bytes = b""
     scrape_error = None
+    max_retries = 3
 
-    try:
-        req = urllib.request.Request(
-            scrape_endpoint,
-            headers={
-                "User-Agent": "GitHub-Actions-Scraper-Tester/1.0",
-                "Accept": "application/json"
-            }
-        )
-        with urllib.request.urlopen(req, timeout=args.scrape_timeout_seconds) as resp:
-            http_status = resp.status
-            raw_response_bytes = resp.read()
-    except urllib.error.HTTPError as e:
-        http_status = e.code
-        raw_response_bytes = e.read()
-        scrape_error = f"HTTP {e.code}: {e.reason}"
-    except urllib.error.URLError as e:
-        scrape_error = f"Network URL error: {e.reason}"
-    except TimeoutError:
-        scrape_error = f"Request timed out after {args.scrape_timeout_seconds} seconds"
-    except Exception as e:
-        scrape_error = f"Unexpected error during scrape request: {e}"
+    for attempt in range(1, max_retries + 1):
+        scrape_error = None
+        http_status = 0
+        raw_response_bytes = b""
+        t_req_start = time.perf_counter()
+
+        try:
+            req = urllib.request.Request(
+                scrape_endpoint,
+                headers={
+                    "User-Agent": "GitHub-Actions-Scraper-Tester/1.0",
+                    "Accept": "application/json"
+                }
+            )
+            with urllib.request.urlopen(req, timeout=args.scrape_timeout_seconds) as resp:
+                http_status = resp.status
+                raw_response_bytes = resp.read()
+                break
+        except urllib.error.HTTPError as e:
+            http_status = e.code
+            raw_response_bytes = e.read()
+            scrape_error = f"HTTP {e.code}: {e.reason}"
+            call_dur = time.perf_counter() - t_req_start
+            # If 502/503/504 happened quickly (< 20s), service is likely restarting/deploying
+            if e.code in (502, 503, 504) and call_dur < 20 and attempt < max_retries:
+                retry_wait = 15
+                print(f"  Attempt {attempt}: Received HTTP {e.code} in {call_dur:.1f}s (service deploying/restarting). Retrying in {retry_wait}s...")
+                time.sleep(retry_wait)
+                continue
+            break
+        except (urllib.error.URLError, ConnectionResetError) as e:
+            call_dur = time.perf_counter() - t_req_start
+            scrape_error = f"Network URL error: {e}"
+            if call_dur < 20 and attempt < max_retries:
+                retry_wait = 15
+                print(f"  Attempt {attempt}: Connection reset/error in {call_dur:.1f}s. Retrying in {retry_wait}s...")
+                time.sleep(retry_wait)
+                continue
+            break
+        except TimeoutError:
+            scrape_error = f"Request timed out after {args.scrape_timeout_seconds} seconds"
+            break
+        except Exception as e:
+            scrape_error = f"Unexpected error during scrape request: {e}"
+            break
 
     t_scrape_end = time.perf_counter()
     scrape_duration = t_scrape_end - t_scrape_start
@@ -615,14 +640,36 @@ def generate_ci_summary(results_dir: str = "test-results"):
     # Step Summary Markdown Table
     summary_path = os.getenv("GITHUB_STEP_SUMMARY")
     if summary_path:
+        c_status = "✅ PASSED" if columbia_passed else "❌ FAILED"
+        c_count = f"{columbia_data.get('product_count', 0):,}" if columbia_data else "-"
+        c_skus = c_count
+        c_time = f"{columbia_data.get('duration_seconds', 0):.1f}s" if columbia_data else "-"
+        c_size = format_bytes(columbia_data.get('response_size_bytes', 0)) if columbia_data else "-"
+        c_val = "✅ Valid" if columbia_passed else "❌ Invalid"
+
+        if tata_data:
+            t_status = "✅ PASSED" if tata_passed else "❌ FAILED"
+            t_count = f"{tata_data.get('product_count', 0):,}"
+            t_skus = f"{tata_data.get('variant_count', 0):,}"
+            t_time = f"{tata_data.get('duration_seconds', 0):.1f}s"
+            t_size = format_bytes(tata_data.get('response_size_bytes', 0))
+            t_val = "✅ Valid" if tata_passed else "❌ Invalid"
+        else:
+            t_status = "⏭️ SKIPPED" if not columbia_passed else "❌ NOT RUN"
+            t_count = "-"
+            t_skus = "-"
+            t_time = "-"
+            t_size = "-"
+            t_val = "-"
+
         md = f"""# 🚀 Scraper Continuous Integration Pipeline
 
 ## 📊 Summary
 
 | Scraper | Status | Products | Variants / SKUs | Execution Time | Response Size | Validation |
 |---|:---:|---:|---:|---:|---:|:---:|
-| **Columbia** | {'✅ PASSED' if columbia_passed else '❌ FAILED'} | {columbia_data.get('product_count', 0):,} | {columbia_data.get('product_count', 0):,} | {columbia_data.get('duration_seconds', 0):.1f}s | {format_bytes(columbia_data.get('response_size_bytes', 0)) if columbia_data else '0 B'} | {'✅ Valid' if columbia_passed else '❌ Invalid'} |
-| **Tata CLiQ** | {'✅ PASSED' if tata_passed else ('⏭️ SKIPPED' if not columbia_passed else '❌ FAILED')} | {tata_data.get('product_count', 0):, if tata_data else 0} | {tata_data.get('variant_count', 0):, if tata_data else 0} | {f"{tata_data.get('duration_seconds', 0):.1f}s" if tata_data else '-'} | {format_bytes(tata_data.get('response_size_bytes', 0)) if tata_data else '-'} | {'✅ Valid' if tata_passed else ('-' if not columbia_passed else '❌ Invalid')} |
+| **Columbia** | {c_status} | {c_count} | {c_skus} | {c_time} | {c_size} | {c_val} |
+| **Tata CLiQ** | {t_status} | {t_count} | {t_skus} | {t_time} | {t_size} | {t_val} |
 
 **Total Test Time**: `{total_test_time:.2f} seconds`
 **Final Result**: **{final_result}**
