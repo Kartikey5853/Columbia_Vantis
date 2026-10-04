@@ -7,7 +7,9 @@
     const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
     const randomDelay = () =>
-        1500 + Math.floor(Math.random() * 2000);
+        typeof window.__PAGE_DELAY__ !== "undefined"
+            ? window.__PAGE_DELAY__
+            : 300;
 
 
     // --------------------------------------------------
@@ -16,7 +18,10 @@
 
     const PAGE_SIZE = 40;
 
-    const CONCURRENCY = 5;
+    const CONCURRENCY =
+        typeof window.__CONCURRENCY__ !== "undefined"
+            ? window.__CONCURRENCY__
+            : 8;
     const progressStartedAt = Date.now();
     window.updateProgress = function (progress) {
         const current = Number(progress.current || 0), total = Number(progress.total || 0);
@@ -467,7 +472,9 @@
             }
 
             await sleep(
-                1000 + Math.random() * 1000
+                typeof window.__VARIANT_DELAY__ !== "undefined"
+                    ? window.__VARIANT_DELAY__
+                    : 120
             );
 
         }
