@@ -1,11 +1,11 @@
 from fastapi import FastAPI
-from runner import main
+from runner import scrape_columbia, scrape_tata
 
 
 app = FastAPI(
-    title="Columbia Product Scraper API",
-    description="API for scraping Columbia Sportswear India product data.",
-    version="1.0.0"
+    title="Product Scraper API",
+    description="API for scraping Columbia Sportswear India and Tata CLiQ product data.",
+    version="1.1.0"
 )
 
 
@@ -13,11 +13,24 @@ app = FastAPI(
 async def root():
     return {
         "status": "online",
-        "service": "Columbia Product Scraper API"
+        "service": "Product Scraper API",
+        "scrapers": ["columbia", "tatacliq"],
+        "endpoints": {
+            "columbia": "/scrape",
+            "tata": "/scrape/tata"
+        }
     }
 
 
 @app.get("/scrape")
-async def scrape():
-    result = await main()
+async def scrape_columbia_endpoint():
+    """Scrapes Columbia Sportswear India product data."""
+    result = await scrape_columbia()
+    return result
+
+
+@app.get("/scrape/tata")
+async def scrape_tata_endpoint():
+    """Scrapes Tata CLiQ for Columbia products."""
+    result = await scrape_tata()
     return result

@@ -1,4 +1,4 @@
-﻿name: Scraper Continuous Testing Pipeline
+name: Scraper Continuous Testing Pipeline
 
 on:
   push:
@@ -19,7 +19,7 @@ on:
         required: false
         default: '15'
       scrape_timeout_seconds:
-        description: 'Timeout in seconds for /scrape endpoint request'
+        description: 'Timeout in seconds for each scraper endpoint request'
         required: false
         default: '900'
 
@@ -32,12 +32,17 @@ env:
 
 jobs:
   # =========================================================================
-  # 1. Columbia Sportswear India Scraper Test
+  # Sequential Multi-Scraper Pipeline:
+  # 1. Health check & Render readiness
+  # 2. Test Columbia scraper (/scrape)
+  # 3. Test Tata CLiQ scraper (/scrape/tata) [ONLY if Columbia passes]
+  # 4. Generate combined CI summary table & step summary
+  # 5. Upload test artifacts
   # =========================================================================
-  test-columbia:
-    name: Test Columbia Scraper (Render)
+  test-scrapers:
+    name: Sequential Scraper Testing (Columbia -> Tata CLiQ)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
 
     steps:
       - name: Checkout repository
@@ -53,7 +58,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install psutil
 
-      - name: Test deployed Columbia scraper on Render
+      - name: Create test results directory
+        run: mkdir -p test-results
+
+      - name: 1. Wait for Render deployment to be healthy
+        env:
+          RENDER_SERVICE_URL: ${{ secrets.RENDER_SERVICE_URL || env.DEFAULT_RENDER_URL }}
+        run: |
+          python .github/scripts/test_scraper.py \
+            --wait-only \
+            --service-url "${RENDER_SERVICE_URL}" \
+            --deploy-wait-seconds "${RENDER_DEPLOY_WAIT_SECONDS}" \
+            --health-check-interval "${HEALTH_CHECK_INTERVAL_SECONDS}"
+
+      - name: 2. Test Columbia scraper (/scrape)
         env:
           RENDER_SERVICE_URL: ${{ secrets.RENDER_SERVICE_URL || env.DEFAULT_RENDER_URL }}
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
@@ -62,51 +80,38 @@ jobs:
           python .github/scripts/test_scraper.py \
             --service-url "${RENDER_SERVICE_URL}" \
             --source-name "columbia" \
+            --endpoint "/scrape" \
             --min-products "${MIN_PRODUCTS}" \
-            --deploy-wait-seconds "${RENDER_DEPLOY_WAIT_SECONDS}" \
-            --health-check-interval "${HEALTH_CHECK_INTERVAL_SECONDS}" \
             --scrape-timeout-seconds "${SCRAPE_TIMEOUT_SECONDS}" \
-            --output-file "test-results/columbia-test-result.json"
+            --output-file "test-results/columbia-test-result.json" \
+            --skip-wait
 
-      - name: Upload Columbia test results artifact
+      - name: 3. Test Tata CLiQ scraper (/scrape/tata)
+        env:
+          RENDER_SERVICE_URL: ${{ secrets.RENDER_SERVICE_URL || env.DEFAULT_RENDER_URL }}
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+        run: |
+          python .github/scripts/test_scraper.py \
+            --service-url "${RENDER_SERVICE_URL}" \
+            --source-name "tatacliq" \
+            --endpoint "/scrape/tata" \
+            --min-products "${MIN_PRODUCTS}" \
+            --scrape-timeout-seconds "${SCRAPE_TIMEOUT_SECONDS}" \
+            --output-file "test-results/tata-test-result.json" \
+            --skip-wait
+
+      - name: 4. Generate CI summary and step summary
+        if: always()
+        run: |
+          python .github/scripts/test_scraper.py \
+            --generate-summary \
+            --results-dir "test-results"
+
+      - name: 5. Upload test result artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: columbia-test-result
-          path: test-results/columbia-test-result.json
+          name: scraper-test-results
+          path: test-results/
           retention-days: 30
-
-  # =========================================================================
-  # Sequential Multi-Scraper Pipeline (Future Expansion)
-  # When adding next scrapers, append them below with sequential dependencies:
-  #
-  # Columbia (PASS) -> Myntra (PASS) -> AJIO (PASS) -> Amazon (PASS) -> Tata (PASS)
-  # =========================================================================
-
-  # test-myntra:
-  #   name: Test Myntra Scraper (Render)
-  #   needs: test-columbia
-  #   runs-on: ubuntu-latest
-  #   timeout-minutes: 25
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: actions/setup-python@v5
-  #       with:
-  #         python-version: "3.12"
-  #     - run: pip install psutil
-  #     - name: Test deployed Myntra scraper
-  #       run: |
-  #         python .github/scripts/test_scraper.py \
-  #           --service-url "${MYNTRA_RENDER_URL}" \
-  #           --source-name "myntra" \
-  #           --output-file "test-results/myntra-test-result.json"
-  #     - uses: actions/upload-artifact@v4
-  #       if: always()
-  #       with:
-  #         name: myntra-test-result
-  #         path: test-results/myntra-test-result.json
-
-  # test-ajio:
-  #   name: Test AJIO Scraper (Render)
-  #   needs: test-myntra
-  #   ...
