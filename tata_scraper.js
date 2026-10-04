@@ -604,27 +604,57 @@
 
 
     // --------------------------------------------------
-    // Download
+    // Final Output & Playwright Signal
     // --------------------------------------------------
 
-    downloadJSON(
-        cleanProducts,
-        "tatacliq_columbia_products.json"
-    );
+    const output = {
+        schema_version: 1,
+        source: "tatacliq",
+        scrape_date: new Date().toISOString().slice(0, 10),
+        scraped_at: new Date().toISOString(),
+        total_products: cleanProducts.length,
+        total_variants: totalVariants,
+        average_variants_per_product: Number(
+            (
+                totalVariants /
+                Math.max(cleanProducts.length, 1)
+            ).toFixed(2)
+        ),
+        products: cleanProducts
+    };
 
-    console.log(
-        "Downloaded tatacliq_columbia_products.json"
-    );
+    window.output = cleanProducts;
+    window.scraperResult = output;
+    if (typeof window.updateProgress === "function") {
+        window.updateProgress({ stage: "Completed", current: cleanProducts.length, total: cleanProducts.length });
+    }
+    window.__SCRAPER_DONE__ = true;
 
-    // Optional: Close tab after 2 seconds
-    setTimeout(() => {
+    // --------------------------------------------------
+    // Download (Standalone Browser Only)
+    // --------------------------------------------------
 
-        try {
+    if (typeof window.__IS_PLAYWRIGHT__ === "undefined") {
+        downloadJSON(
+            cleanProducts,
+            "tatacliq_columbia_products.json"
+        );
 
-            window.close();
+        console.log(
+            "Downloaded tatacliq_columbia_products.json"
+        );
 
-        } catch (_) {}
-
-    }, 2000);
+        // Optional: Close tab after 2 seconds
+        setTimeout(() => {
+            try {
+                window.close();
+            } catch (_) {}
+        }, 2000);
+    } else {
+        console.log(
+            "[SCRAPER] Playwright execution: results stored in window.scraperResult and window.__SCRAPER_DONE__ = true"
+        );
+    }
 
 })();
+

@@ -15,33 +15,33 @@ on:
         required: false
         default: '600'
       health_check_interval_seconds:
-        description: 'Seconds between health check polls'
+        description: 'Seconds between job status polls (default: 300s / 5 mins)'
         required: false
-        default: '15'
+        default: '300'
       scrape_timeout_seconds:
         description: 'Timeout in seconds for scraper job completion'
         required: false
-        default: '2400'
+        default: '3600'
 
 env:
   DEFAULT_RENDER_URL: "https://columbia-4-0.onrender.com"
   MIN_PRODUCTS: ${{ inputs.min_products || '1' }}
   RENDER_DEPLOY_WAIT_SECONDS: ${{ inputs.deploy_wait_seconds || '600' }}
-  HEALTH_CHECK_INTERVAL_SECONDS: ${{ inputs.health_check_interval_seconds || '15' }}
-  SCRAPE_TIMEOUT_SECONDS: ${{ inputs.scrape_timeout_seconds || '2400' }}
+  HEALTH_CHECK_INTERVAL_SECONDS: ${{ inputs.health_check_interval_seconds || '300' }}
+  SCRAPE_TIMEOUT_SECONDS: ${{ inputs.scrape_timeout_seconds || '3600' }}
 
 jobs:
   # =========================================================================
   # Asynchronous Multi-Scraper Pipeline:
   # 1. Health check & Render readiness
-  # 2. Trigger POST /scrape (202 Accepted) & poll GET /scrape/status/{job_id}
+  # 2. Trigger POST /scrape (202 Accepted) & poll GET /scrape/status/{job_id} (every 5 mins)
   # 3. Generate combined CI summary table & step summary
   # 4. Upload test artifacts (JSON results & job trace)
   # =========================================================================
   test-scrapers:
     name: Async Scraper Testing (Columbia -> Tata CLiQ)
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repository
@@ -68,9 +68,9 @@ jobs:
             --wait-only \
             --service-url "${RENDER_SERVICE_URL}" \
             --deploy-wait-seconds "${RENDER_DEPLOY_WAIT_SECONDS}" \
-            --health-check-interval "${HEALTH_CHECK_INTERVAL_SECONDS}"
+            --health-check-interval 15
 
-      - name: 2. Trigger async scraper job & poll status until completion
+      - name: 2. Trigger async scraper job & poll status until completion (5-min interval)
         env:
           RENDER_SERVICE_URL: ${{ secrets.RENDER_SERVICE_URL || env.DEFAULT_RENDER_URL }}
         run: |

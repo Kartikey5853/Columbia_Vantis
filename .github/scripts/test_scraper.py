@@ -302,7 +302,7 @@ def test_async_job_pipeline(args) -> bool:
 
     # Step 2: Poll status loop
     poll_url = f"{service_url}/scrape/status/{job_id}"
-    print(f"Polling job status every {args.health_check_interval}s (Timeout: {args.scrape_timeout_seconds}s)...")
+    print(f"Polling job status every {args.health_check_interval}s ({args.health_check_interval // 60}m) (Timeout: {args.scrape_timeout_seconds}s)...")
     last_print = ""
     job_data = None
 
@@ -312,7 +312,7 @@ def test_async_job_pipeline(args) -> bool:
                 poll_url,
                 headers={"User-Agent": "GitHub-Actions-Scraper-Tester/2.0", "Accept": "application/json"}
             )
-            with urllib.request.urlopen(p_req, timeout=20) as p_resp:
+            with urllib.request.urlopen(p_req, timeout=30) as p_resp:
                 if p_resp.status == 200:
                     job_data = json.loads(p_resp.read().decode("utf-8"))
                     status = job_data.get("status", "unknown")
@@ -323,14 +323,14 @@ def test_async_job_pipeline(args) -> bool:
                     vars_ = job_data.get("variant_count", 0)
 
                     log_line = f"[JOB {job_id} | {elapsed:.1f}s] Status: {status.upper()} | Scraper: {curr_scraper} | Progress: {pct:.1f}% | Products: {prods:,} | Variants: {vars_:,}"
-                    if log_line != last_print:
-                        print(log_line, flush=True)
-                        last_print = log_line
+                    print(log_line, flush=True)
 
                     if status in ("completed", "failed"):
                         break
+        except urllib.error.HTTPError as e:
+            print(f"  [Poll Warning] HTTP Error {e.code} ({e.reason}). Retrying in {args.health_check_interval}s...", flush=True)
         except Exception as e:
-            print(f"  [Poll Warning] Could not fetch job status: {e}", flush=True)
+            print(f"  [Poll Warning] Could not fetch job status: {e}. Retrying in {args.health_check_interval}s...", flush=True)
 
         time.sleep(args.health_check_interval)
 
@@ -727,7 +727,7 @@ def main():
     parser.add_argument("--endpoint", default=None, help="Endpoint path e.g. /scrape or /scrape/tata (runs legacy test)")
     parser.add_argument("--min-products", type=int, default=int(os.getenv("MIN_PRODUCTS", "1")))
     parser.add_argument("--deploy-wait-seconds", type=int, default=int(os.getenv("RENDER_DEPLOY_WAIT_SECONDS", "600")))
-    parser.add_argument("--health-check-interval", type=int, default=int(os.getenv("HEALTH_CHECK_INTERVAL_SECONDS", "15")))
+    parser.add_argument("--health-check-interval", type=int, default=int(os.getenv("HEALTH_CHECK_INTERVAL_SECONDS", "300")))
     parser.add_argument("--scrape-timeout-seconds", type=int, default=int(os.getenv("SCRAPE_TIMEOUT_SECONDS", "2400")))
     parser.add_argument("--output-file", default=None)
     parser.add_argument("--skip-wait", action="store_true", help="Skip deployment wait if already checked")

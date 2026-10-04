@@ -1,13 +1,40 @@
 import asyncio
+import json
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, Any, Optional
+
+JOB_STORE_DIR = Path("jobs_data")
+JOB_STORE_DIR.mkdir(parents=True, exist_ok=True)
 
 # In-memory job repository (bounded to keep RAM < 1MB)
 _JOBS: Dict[str, Dict[str, Any]] = {}
 _ACTIVE_JOB_ID: Optional[str] = None
 _JOB_LOCK = asyncio.Lock()
 MAX_STORED_JOBS = 20
+
+
+def _save_job_to_disk(job: Dict[str, Any]) -> None:
+    """Save a job record to disk JSON file for durability across server restarts."""
+    try:
+        job_file = JOB_STORE_DIR / f"{job['job_id']}.json"
+        job_file.write_text(json.dumps(job, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"[JOBS] Warning: failed to save job to disk: {e}", flush=True)
+
+
+def _load_job_from_disk(job_id: str) -> Optional[Dict[str, Any]]:
+    """Load a job record from disk JSON file if available."""
+    try:
+        job_file = JOB_STORE_DIR / f"{job_id}.json"
+        if job_file.exists():
+            data = json.loads(job_file.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+    except Exception as e:
+        print(f"[JOBS] Warning: failed to read job {job_id} from disk: {e}", flush=True)
+    return None
 
 
 def generate_job_id() -> str:
@@ -20,10 +47,10 @@ def generate_job_id() -> str:
 async def get_active_job() -> Optional[Dict[str, Any]]:
     """Return the currently running or queued job, if any."""
     global _ACTIVE_JOB_ID
-    if _ACTIVE_JOB_ID and _ACTIVE_JOB_ID in _JOBS:
-        job = _JOBS[_ACTIVE_JOB_ID]
-        if job.get("status") in ("queued", "running"):
-            return dict(job)
+    if _ACTIVE_JOB_ID:
+        job = await get_job(_ACTIVE_JOB_ID)
+        if job and job.get("status") in ("queued", "running"):
+            return job
         _ACTIVE_JOB_ID = None
     return None
 
@@ -75,12 +102,18 @@ async def create_job() -> Dict[str, Any]:
 
         _JOBS[job_id] = job_record
         _ACTIVE_JOB_ID = job_id
+        _save_job_to_disk(job_record)
         return dict(job_record)
 
 
 async def get_job(job_id: str) -> Optional[Dict[str, Any]]:
     """Retrieve job details by job_id with real-time elapsed seconds."""
     job = _JOBS.get(job_id)
+    if not job:
+        job = _load_job_from_disk(job_id)
+        if job:
+            _JOBS[job_id] = job
+
     if job:
         copy_job = dict(job)
         if copy_job.get("status") in ("queued", "running"):
@@ -99,7 +132,11 @@ async def update_job(job_id: str, **kwargs) -> Optional[Dict[str, Any]]:
     async with _JOB_LOCK:
         job = _JOBS.get(job_id)
         if not job:
-            return None
+            job = _load_job_from_disk(job_id)
+            if job:
+                _JOBS[job_id] = job
+            else:
+                return None
 
         for k, v in kwargs.items():
             if k == "scrapers" and isinstance(v, dict):
@@ -116,4 +153,5 @@ async def update_job(job_id: str, **kwargs) -> Optional[Dict[str, Any]]:
             if _ACTIVE_JOB_ID == job_id:
                 _ACTIVE_JOB_ID = None
 
+        _save_job_to_disk(job)
         return dict(job)
