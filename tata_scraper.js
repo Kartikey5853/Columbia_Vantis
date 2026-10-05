@@ -312,6 +312,10 @@
 
 
     for (let page = 1; page < totalPages; page++) {
+        if (typeof window.__PRODUCT_LIMIT__ !== "undefined" && window.__PRODUCT_LIMIT__ > 0 && cleanProducts.length >= window.__PRODUCT_LIMIT__) {
+            console.log(`[TEST MODE] Reached product limit ${window.__PRODUCT_LIMIT__}, stopping listing pagination.`);
+            break;
+        }
 
         let success = false;
 
@@ -365,6 +369,10 @@
 
 
     console.log("----------------------------------------");
+    if (typeof window.__PRODUCT_LIMIT__ !== "undefined" && window.__PRODUCT_LIMIT__ > 0) {
+        cleanProducts.length = Math.min(cleanProducts.length, window.__PRODUCT_LIMIT__);
+        console.log(`[TEST MODE] Truncated product list to ${cleanProducts.length} items for variant fetching`);
+    }
     console.log(
         `Finished product listing (${cleanProducts.length} products)`
     );

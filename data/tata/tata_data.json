@@ -1,0 +1,968 @@
+{
+  "schema_version": 1,
+  "source": "tata",
+  "exported_at": "2026-10-05T18:04:05.649519+00:00",
+  "total_products": 20,
+  "products": [
+    {
+      "id": "77977e31-00ca-419d-920b-62bfaddb207d",
+      "scraper_id": "d62e9bbc-f1c2-4d35-985b-001caf7e1d96",
+      "source_product_id": "MP000000021183180",
+      "sku": null,
+      "ean": null,
+      "title": "Columbia Women White Fast Trek II Fleece Jacket upto 10�c",
+      "url": "https://www.tatacliq.com/columbia-women-white-fast-trek-ii-fleece-jacket-upto-10c/p-mp000000021183180",
+      "image_url": "https://img.tatacliq.com/images/i16//437Wx649H/MP000000021183170_437Wx649H_202402151529141.jpeg",
+      "available": true,
+      "current_price": 2599.0,
+      "current_mrp": 2599.0,
+      "variants": [
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000021183177",
+          "url": "https://www.tatacliq.com/columbia-women-white-fast-trek-ii-fleece-jacket-upto-10c/p-mp000000021183177",
+          "size": "XS",
+          "price": null,
+          "stock": 16,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000021183181",
+          "url": "https://www.tatacliq.com/columbia-women-white-fast-trek-ii-fleece-jacket-upto-10c/p-mp000000021183181",
+          "size": "S",
+          "price": null,
+          "stock": 90,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000021183179",
+          "url": "https://www.tatacliq.com/columbia-women-white-fast-trek-ii-fleece-jacket-upto-10c/p-mp000000021183179",
+          "size": "M",
+          "price": null,
+          "stock": 146,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000021183170",
+          "url": "https://www.tatacliq.com/columbia-women-white-fast-trek-ii-fleece-jacket-upto-10c/p-mp000000021183170",
+          "size": "L",
+          "price": null,
+          "stock": 141,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000021183178",
+          "url": "https://www.tatacliq.com/columbia-women-white-fast-trek-ii-fleece-jacket-upto-10c/p-mp000000021183178",
+          "size": "XL",
+          "price": null,
+          "stock": 84,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000021183180",
+          "url": "https://www.tatacliq.com/columbia-women-white-fast-trek-ii-fleece-jacket-upto-10c/p-mp000000021183180",
+          "size": "XXL",
+          "price": null,
+          "stock": 54,
+          "available": true
+        }
+      ],
+      "created_at": "2026-10-05T18:04:05.013807+00:00",
+      "updated_at": "2026-10-05T18:04:04.091386+00:00"
+    },
+    {
+      "id": "fd3e1701-4a7e-4465-9ecc-e9a0450022a2",
+      "scraper_id": "d62e9bbc-f1c2-4d35-985b-001caf7e1d96",
+      "source_product_id": "MP000000027696569",
+      "sku": null,
+      "ean": null,
+      "title": "Columbia Women Maroon Omni-Heat Reflective Suttle Mountain Insulated Jacket upto -10�c",
+      "url": "https://www.tatacliq.com/columbia-women-maroon-omniheat-reflective-suttle-mountain-insulated-jacket-upto-10c/p-mp000000027696569",
+      "image_url": "https://img.tatacliq.com/images/i26//437Wx649H/MP000000027696511_437Wx649H_202508072207371.jpeg",
+      "available": true,
+      "current_price": 12999.0,
+      "current_mrp": 12999.0,
+      "variants": [
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000027696569",
+          "url": "https://www.tatacliq.com/columbia-women-maroon-omni-heat-reflective-suttle-mountain-insulated-jacket-upto-10c/p-mp000000027696569",
+          "size": "S",
+          "price": null,
+          "stock": 15,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000027696527",
+          "url": "https://www.tatacliq.com/columbia-women-maroon-omni-heat-reflective-suttle-mountain-insulated-jacket-upto-10c/p-mp000000027696527",
+          "size": "M",
+          "price": null,
+          "stock": 62,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000027696511",
+          "url": "https://www.tatacliq.com/columbia-women-maroon-omni-heat-reflective-suttle-mountain-insulated-jacket-upto-10c/p-mp000000027696511",
+          "size": "L",
+          "price": null,
+          "stock": 70,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000027696571",
+          "url": "https://www.tatacliq.com/columbia-women-maroon-omni-heat-reflective-suttle-mountain-insulated-jacket-upto-10c/p-mp000000027696571",
+          "size": "XL",
+          "price": null,
+          "stock": 47,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000027696526",
+          "url": "https://www.tatacliq.com/columbia-women-maroon-omni-heat-reflective-suttle-mountain-insulated-jacket-upto-10c/p-mp000000027696526",
+          "size": "XXL",
+          "price": null,
+          "stock": 70,
+          "available": true
+        }
+      ],
+      "created_at": "2026-10-05T18:04:05.013807+00:00",
+      "updated_at": "2026-10-05T18:04:04.091514+00:00"
+    },
+    {
+      "id": "d9496552-9ca3-489f-8b4f-9a93a613f381",
+      "scraper_id": "d62e9bbc-f1c2-4d35-985b-001caf7e1d96",
+      "source_product_id": "MP000000027875458",
+      "sku": null,
+      "ean": null,
+      "title": "Columbia Women Purple Sequioa Grove Fleece Jacket upto 10�c",
+      "url": "https://www.tatacliq.com/columbia-women-purple-sequioa-grove-fleece-jacket-upto-10c/p-mp000000027875458",
+      "image_url": "https://img.tatacliq.com/images/i26//437Wx649H/MP000000027875449_437Wx649H_202508221856091.jpeg",
+      "available": true,
+      "current_price": 3999.0,
+      "current_mrp": 3999.0,
+      "variants": [
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000027875458",
+          "url": "https://www.tatacliq.com/columbia-women-purple-sequioa-grove-fleece-jacket-upto-10c/p-mp000000027875458",
+          "size": "XS",
+          "price": null,
+          "stock": 3,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000027875456",
+          "url": "https://www.tatacliq.com/columbia-women-purple-sequioa-grove-fleece-jacket-upto-10c/p-mp000000027875456",
+          "size": "S",
+          "price": null,
+          "stock": 17,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000027875454",
+          "url": "https://www.tatacliq.com/columbia-women-purple-sequioa-grove-fleece-jacket-upto-10c/p-mp000000027875454",
+          "size": "M",
+          "price": null,
+          "stock": 7,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000027875449",
+          "url": "https://www.tatacliq.com/columbia-women-purple-sequioa-grove-fleece-jacket-upto-10c/p-mp000000027875449",
+          "size": "L",
+          "price": null,
+          "stock": 2,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000027875457",
+          "url": "https://www.tatacliq.com/columbia-women-purple-sequioa-grove-fleece-jacket-upto-10c/p-mp000000027875457",
+          "size": "XL",
+          "price": null,
+          "stock": 4,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000027875459",
+          "url": "https://www.tatacliq.com/columbia-women-purple-sequioa-grove-fleece-jacket-upto-10c/p-mp000000027875459",
+          "size": "XXL",
+          "price": null,
+          "stock": 1,
+          "available": true
+        }
+      ],
+      "created_at": "2026-10-05T18:04:05.013807+00:00",
+      "updated_at": "2026-10-05T18:04:04.091608+00:00"
+    },
+    {
+      "id": "3ae8f378-eddd-45b1-9c9a-ba2c08ac63e7",
+      "scraper_id": "d62e9bbc-f1c2-4d35-985b-001caf7e1d96",
+      "source_product_id": "MP000000029744950",
+      "sku": null,
+      "ean": null,
+      "title": "Columbia Men White OmniWick Hike Polo Tshirt",
+      "url": "https://www.tatacliq.com/columbia-men-white-omniwick-hike-polo-tshirt/p-mp000000029744950",
+      "image_url": "https://img.tatacliq.com/images/i30/437Wx649H/MP000000029744941_437Wx649H_202602121737581.jpeg",
+      "available": true,
+      "current_price": 1799.0,
+      "current_mrp": 1799.0,
+      "variants": [
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000029744951",
+          "url": "https://www.tatacliq.com/columbia-men-white-omniwick-hike-polo-tshirt/p-mp000000029744951",
+          "size": "S",
+          "price": null,
+          "stock": 3,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000029744949",
+          "url": "https://www.tatacliq.com/columbia-men-white-omniwick-hike-polo-tshirt/p-mp000000029744949",
+          "size": "M",
+          "price": null,
+          "stock": 11,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000029744941",
+          "url": "https://www.tatacliq.com/columbia-men-white-omniwick-hike-polo-tshirt/p-mp000000029744941",
+          "size": "L",
+          "price": null,
+          "stock": 3,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000029744948",
+          "url": "https://www.tatacliq.com/columbia-men-white-omniwick-hike-polo-tshirt/p-mp000000029744948",
+          "size": "XL",
+          "price": null,
+          "stock": 2,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000029744950",
+          "url": "https://www.tatacliq.com/columbia-men-white-omniwick-hike-polo-tshirt/p-mp000000029744950",
+          "size": "XXL",
+          "price": null,
+          "stock": 6,
+          "available": true
+        }
+      ],
+      "created_at": "2026-10-05T18:04:05.013807+00:00",
+      "updated_at": "2026-10-05T18:04:04.091315+00:00"
+    },
+    {
+      "id": "76e79433-23f0-4d75-9ac0-d324d05c4a5a",
+      "scraper_id": "d62e9bbc-f1c2-4d35-985b-001caf7e1d96",
+      "source_product_id": "MP000000031654399",
+      "sku": null,
+      "ean": null,
+      "title": "Columbia Black MTR Timber Crest Regular Fit Jacket upto 15�c",
+      "url": "https://www.tatacliq.com/columbia-black-mtr-timber-crest-regular-fit-jacket-upto-15c/p-mp000000031654399",
+      "image_url": "https://img.tatacliq.com/images/i32/437Wx649H/MP000000031654399_437Wx649H_202607051617071.jpeg",
+      "available": true,
+      "current_price": 2599.0,
+      "current_mrp": 2599.0,
+      "variants": [
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031654412",
+          "url": "https://www.tatacliq.com/columbia-black-mtr-timber-crest-regular-fit-jacket-upto-15c/p-mp000000031654412",
+          "size": "S",
+          "price": null,
+          "stock": 94,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031654413",
+          "url": "https://www.tatacliq.com/columbia-black-mtr-timber-crest-regular-fit-jacket-upto-15c/p-mp000000031654413",
+          "size": "M",
+          "price": null,
+          "stock": 240,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031654399",
+          "url": "https://www.tatacliq.com/columbia-black-mtr-timber-crest-regular-fit-jacket-upto-15c/p-mp000000031654399",
+          "size": "L",
+          "price": null,
+          "stock": 264,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031654410",
+          "url": "https://www.tatacliq.com/columbia-black-mtr-timber-crest-regular-fit-jacket-upto-15c/p-mp000000031654410",
+          "size": "XL",
+          "price": null,
+          "stock": 132,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031654411",
+          "url": "https://www.tatacliq.com/columbia-black-mtr-timber-crest-regular-fit-jacket-upto-15c/p-mp000000031654411",
+          "size": "XXL",
+          "price": null,
+          "stock": 53,
+          "available": true
+        }
+      ],
+      "created_at": "2026-10-05T18:04:05.013807+00:00",
+      "updated_at": "2026-10-05T18:04:04.091543+00:00"
+    },
+    {
+      "id": "2709578b-bc8b-4ed5-9990-18a8a0dd137c",
+      "scraper_id": "d62e9bbc-f1c2-4d35-985b-001caf7e1d96",
+      "source_product_id": "MP000000031654458",
+      "sku": null,
+      "ean": null,
+      "title": "Columbia Black Gingham Rapid Rivers Checked Regular Fit Shirt",
+      "url": "https://www.tatacliq.com/columbia-black-gingham-rapid-rivers-checked-regular-fit-shirt/p-mp000000031654458",
+      "image_url": "https://img.tatacliq.com/images/i32/437Wx649H/MP000000031654458_437Wx649H_202607051619081.jpeg",
+      "available": true,
+      "current_price": 2599.0,
+      "current_mrp": 2599.0,
+      "variants": [
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031654473",
+          "url": "https://www.tatacliq.com/columbia-black-gingham-rapid-rivers-checked-regular-fit-shirt/p-mp000000031654473",
+          "size": "S",
+          "price": null,
+          "stock": 20,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031654472",
+          "url": "https://www.tatacliq.com/columbia-black-gingham-rapid-rivers-checked-regular-fit-shirt/p-mp000000031654472",
+          "size": "M",
+          "price": null,
+          "stock": 61,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031654458",
+          "url": "https://www.tatacliq.com/columbia-black-gingham-rapid-rivers-checked-regular-fit-shirt/p-mp000000031654458",
+          "size": "L",
+          "price": null,
+          "stock": 37,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031654471",
+          "url": "https://www.tatacliq.com/columbia-black-gingham-rapid-rivers-checked-regular-fit-shirt/p-mp000000031654471",
+          "size": "XL",
+          "price": null,
+          "stock": 23,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031654474",
+          "url": "https://www.tatacliq.com/columbia-black-gingham-rapid-rivers-checked-regular-fit-shirt/p-mp000000031654474",
+          "size": "XXL",
+          "price": null,
+          "stock": 26,
+          "available": true
+        }
+      ],
+      "created_at": "2026-10-05T18:04:05.013807+00:00",
+      "updated_at": "2026-10-05T18:04:04.091417+00:00"
+    },
+    {
+      "id": "ac82d30c-523a-4e5e-82e0-e637ae56ff1a",
+      "scraper_id": "d62e9bbc-f1c2-4d35-985b-001caf7e1d96",
+      "source_product_id": "MP000000031654479",
+      "sku": null,
+      "ean": null,
+      "title": "Columbia Rainy Day Gingham Rapid Rivers Checked Regular Fit Shirt",
+      "url": "https://www.tatacliq.com/columbia-rainy-day-gingham-rapid-rivers-checked-regular-fit-shirt/p-mp000000031654479",
+      "image_url": "https://img.tatacliq.com/images/i32/437Wx649H/MP000000031654461_437Wx649H_202607051619041.jpeg",
+      "available": true,
+      "current_price": 2599.0,
+      "current_mrp": 2599.0,
+      "variants": [
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031654479",
+          "url": "https://www.tatacliq.com/columbia-rainy-day-gingham-rapid-rivers-checked-regular-fit-shirt/p-mp000000031654479",
+          "size": "S",
+          "price": null,
+          "stock": 46,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031654482",
+          "url": "https://www.tatacliq.com/columbia-rainy-day-gingham-rapid-rivers-checked-regular-fit-shirt/p-mp000000031654482",
+          "size": "M",
+          "price": null,
+          "stock": 96,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031654461",
+          "url": "https://www.tatacliq.com/columbia-rainy-day-gingham-rapid-rivers-checked-regular-fit-shirt/p-mp000000031654461",
+          "size": "L",
+          "price": null,
+          "stock": 56,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031654480",
+          "url": "https://www.tatacliq.com/columbia-rainy-day-gingham-rapid-rivers-checked-regular-fit-shirt/p-mp000000031654480",
+          "size": "XL",
+          "price": null,
+          "stock": 33,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031654481",
+          "url": "https://www.tatacliq.com/columbia-rainy-day-gingham-rapid-rivers-checked-regular-fit-shirt/p-mp000000031654481",
+          "size": "XXL",
+          "price": null,
+          "stock": 19,
+          "available": true
+        }
+      ],
+      "created_at": "2026-10-05T18:04:05.013807+00:00",
+      "updated_at": "2026-10-05T18:04:04.091448+00:00"
+    },
+    {
+      "id": "4593825c-d90b-468a-b548-6c5c830dca97",
+      "scraper_id": "d62e9bbc-f1c2-4d35-985b-001caf7e1d96",
+      "source_product_id": "MP000000031654610",
+      "sku": null,
+      "ean": null,
+      "title": "Columbia Antique Mauve And Hike Happy Rolling Bend Regular Fit T Shirt",
+      "url": "https://www.tatacliq.com/columbia-antique-mauve-and-hike-happy-rolling-bend-regular-fit-t-shirt/p-mp000000031654610",
+      "image_url": "https://img.tatacliq.com/images/i32/437Wx649H/MP000000031654603_437Wx649H_202607051624061.jpeg",
+      "available": true,
+      "current_price": 1999.0,
+      "current_mrp": 1999.0,
+      "variants": [
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031654611",
+          "url": "https://www.tatacliq.com/columbia-antique-mauve-and-hike-happy-rolling-bend-regular-fit-t-shirt/p-mp000000031654611",
+          "size": "S",
+          "price": null,
+          "stock": 11,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031654610",
+          "url": "https://www.tatacliq.com/columbia-antique-mauve-and-hike-happy-rolling-bend-regular-fit-t-shirt/p-mp000000031654610",
+          "size": "M",
+          "price": null,
+          "stock": 22,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031654603",
+          "url": "https://www.tatacliq.com/columbia-antique-mauve-and-hike-happy-rolling-bend-regular-fit-t-shirt/p-mp000000031654603",
+          "size": "L",
+          "price": null,
+          "stock": 17,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031654609",
+          "url": "https://www.tatacliq.com/columbia-antique-mauve-and-hike-happy-rolling-bend-regular-fit-t-shirt/p-mp000000031654609",
+          "size": "XL",
+          "price": null,
+          "stock": 3,
+          "available": true
+        }
+      ],
+      "created_at": "2026-10-05T18:04:05.013807+00:00",
+      "updated_at": "2026-10-05T18:04:04.091631+00:00"
+    },
+    {
+      "id": "85024477-95db-4a50-acb2-650530ddf635",
+      "scraper_id": "d62e9bbc-f1c2-4d35-985b-001caf7e1d96",
+      "source_product_id": "MP000000031701950",
+      "sku": null,
+      "ean": null,
+      "title": "Columbia Black Omni Heat Inifinity Pulaski Regular Fit Parka Jacket upto -10�c",
+      "url": "https://www.tatacliq.com/columbia-black-omni-heat-inifinity-pulaski-regular-fit-parka-jacket-upto-10c/p-mp000000031701950",
+      "image_url": "https://img.tatacliq.com/images/i32/437Wx649H/MP000000031701941_437Wx649H_202607102016201.jpeg",
+      "available": true,
+      "current_price": 17999.0,
+      "current_mrp": 17999.0,
+      "variants": [
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031701949",
+          "url": "https://www.tatacliq.com/columbia-black-omni-heat-inifinity-pulaski-regular-fit-parka-jacket-upto-10c/p-mp000000031701949",
+          "size": "XS",
+          "price": null,
+          "stock": 5,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031701952",
+          "url": "https://www.tatacliq.com/columbia-black-omni-heat-inifinity-pulaski-regular-fit-parka-jacket-upto-10c/p-mp000000031701952",
+          "size": "S",
+          "price": null,
+          "stock": 15,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031701953",
+          "url": "https://www.tatacliq.com/columbia-black-omni-heat-inifinity-pulaski-regular-fit-parka-jacket-upto-10c/p-mp000000031701953",
+          "size": "M",
+          "price": null,
+          "stock": 41,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031701941",
+          "url": "https://www.tatacliq.com/columbia-black-omni-heat-inifinity-pulaski-regular-fit-parka-jacket-upto-10c/p-mp000000031701941",
+          "size": "L",
+          "price": null,
+          "stock": 39,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031701951",
+          "url": "https://www.tatacliq.com/columbia-black-omni-heat-inifinity-pulaski-regular-fit-parka-jacket-upto-10c/p-mp000000031701951",
+          "size": "XL",
+          "price": null,
+          "stock": 31,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031701950",
+          "url": "https://www.tatacliq.com/columbia-black-omni-heat-inifinity-pulaski-regular-fit-parka-jacket-upto-10c/p-mp000000031701950",
+          "size": "XXL",
+          "price": null,
+          "stock": 17,
+          "available": true
+        }
+      ],
+      "created_at": "2026-10-05T18:04:05.013807+00:00",
+      "updated_at": "2026-10-05T18:04:04.091575+00:00"
+    },
+    {
+      "id": "17feed06-86ea-44fb-a8c0-9d73b775a20a",
+      "scraper_id": "d62e9bbc-f1c2-4d35-985b-001caf7e1d96",
+      "source_product_id": "MP000000031763587",
+      "sku": null,
+      "ean": null,
+      "title": "Columbia Citron Haze Heather Slim Tshirt",
+      "url": "https://www.tatacliq.com/columbia-citron-haze-heather-slim-tshirt/p-mp000000031763587",
+      "image_url": "https://img.tatacliq.com/images/i32/437Wx649H/MP000000031763571_437Wx649H_202607181633561.jpeg",
+      "available": true,
+      "current_price": 2599.0,
+      "current_mrp": 2599.0,
+      "variants": [
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031763586",
+          "url": "https://www.tatacliq.com/columbia-citron-haze-heather-slim-tshirt/p-mp000000031763586",
+          "size": "S",
+          "price": null,
+          "stock": 25,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031763596",
+          "url": "https://www.tatacliq.com/columbia-citron-haze-heather-slim-tshirt/p-mp000000031763596",
+          "size": "M",
+          "price": null,
+          "stock": 57,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031763571",
+          "url": "https://www.tatacliq.com/columbia-citron-haze-heather-slim-tshirt/p-mp000000031763571",
+          "size": "L",
+          "price": null,
+          "stock": 85,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031763597",
+          "url": "https://www.tatacliq.com/columbia-citron-haze-heather-slim-tshirt/p-mp000000031763597",
+          "size": "XL",
+          "price": null,
+          "stock": 39,
+          "available": true
+        },
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "MP000000031763587",
+          "url": "https://www.tatacliq.com/columbia-citron-haze-heather-slim-tshirt/p-mp000000031763587",
+          "size": "XXL",
+          "price": null,
+          "stock": 12,
+          "available": true
+        }
+      ],
+      "created_at": "2026-10-05T18:04:05.013807+00:00",
+      "updated_at": "2026-10-05T18:04:04.091477+00:00"
+    },
+    {
+      "id": "0a4dc042-7f34-4b26-8638-8ab235b11699",
+      "scraper_id": "d62e9bbc-f1c2-4d35-985b-001caf7e1d96",
+      "source_product_id": "tata_prod_1",
+      "sku": null,
+      "ean": null,
+      "title": "Tata Active Trail Item 1",
+      "url": null,
+      "image_url": null,
+      "available": true,
+      "current_price": 1999.0,
+      "current_mrp": 2499.0,
+      "variants": [
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "TATA_1_M",
+          "url": null,
+          "size": "M",
+          "price": 1999.0,
+          "stock": 0,
+          "available": true
+        }
+      ],
+      "created_at": "2026-10-05T18:00:27.865117+00:00",
+      "updated_at": "2026-10-05T18:00:26.950392+00:00"
+    },
+    {
+      "id": "c505e52d-7b69-455b-8726-f70666ef8cf9",
+      "scraper_id": "d62e9bbc-f1c2-4d35-985b-001caf7e1d96",
+      "source_product_id": "tata_prod_10",
+      "sku": null,
+      "ean": null,
+      "title": "Tata Active Trail Item 10",
+      "url": null,
+      "image_url": null,
+      "available": true,
+      "current_price": 3799.0,
+      "current_mrp": 4299.0,
+      "variants": [
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "TATA_10_M",
+          "url": null,
+          "size": "M",
+          "price": 3799.0,
+          "stock": 0,
+          "available": true
+        }
+      ],
+      "created_at": "2026-10-05T18:00:36.254822+00:00",
+      "updated_at": "2026-10-05T18:00:35.240697+00:00"
+    },
+    {
+      "id": "790d87b8-db13-42aa-bbd5-97e1cfe50c76",
+      "scraper_id": "d62e9bbc-f1c2-4d35-985b-001caf7e1d96",
+      "source_product_id": "tata_prod_2",
+      "sku": null,
+      "ean": null,
+      "title": "Tata Active Trail Item 2",
+      "url": null,
+      "image_url": null,
+      "available": true,
+      "current_price": 2199.0,
+      "current_mrp": 2699.0,
+      "variants": [
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "TATA_2_M",
+          "url": null,
+          "size": "M",
+          "price": 2199.0,
+          "stock": 0,
+          "available": true
+        }
+      ],
+      "created_at": "2026-10-05T18:00:28.768929+00:00",
+      "updated_at": "2026-10-05T18:00:27.879332+00:00"
+    },
+    {
+      "id": "08485aa9-9ea7-4d53-bc0d-8045445f7f7b",
+      "scraper_id": "d62e9bbc-f1c2-4d35-985b-001caf7e1d96",
+      "source_product_id": "tata_prod_3",
+      "sku": null,
+      "ean": null,
+      "title": "Tata Active Trail Item 3",
+      "url": null,
+      "image_url": null,
+      "available": true,
+      "current_price": 2399.0,
+      "current_mrp": 2899.0,
+      "variants": [
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "TATA_3_M",
+          "url": null,
+          "size": "M",
+          "price": 2399.0,
+          "stock": 0,
+          "available": true
+        }
+      ],
+      "created_at": "2026-10-05T18:00:29.760251+00:00",
+      "updated_at": "2026-10-05T18:00:28.868657+00:00"
+    },
+    {
+      "id": "1ac9dbef-983e-4cd8-98e7-5ca3ef0f6c23",
+      "scraper_id": "d62e9bbc-f1c2-4d35-985b-001caf7e1d96",
+      "source_product_id": "tata_prod_4",
+      "sku": null,
+      "ean": null,
+      "title": "Tata Active Trail Item 4",
+      "url": null,
+      "image_url": null,
+      "available": true,
+      "current_price": 2599.0,
+      "current_mrp": 3099.0,
+      "variants": [
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "TATA_4_M",
+          "url": null,
+          "size": "M",
+          "price": 2599.0,
+          "stock": 0,
+          "available": true
+        }
+      ],
+      "created_at": "2026-10-05T18:00:30.635794+00:00",
+      "updated_at": "2026-10-05T18:00:29.754539+00:00"
+    },
+    {
+      "id": "b1dc818f-c22b-47db-bfb1-865390446d49",
+      "scraper_id": "d62e9bbc-f1c2-4d35-985b-001caf7e1d96",
+      "source_product_id": "tata_prod_5",
+      "sku": null,
+      "ean": null,
+      "title": "Tata Active Trail Item 5",
+      "url": null,
+      "image_url": null,
+      "available": true,
+      "current_price": 2799.0,
+      "current_mrp": 3299.0,
+      "variants": [
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "TATA_5_M",
+          "url": null,
+          "size": "M",
+          "price": 2799.0,
+          "stock": 0,
+          "available": true
+        }
+      ],
+      "created_at": "2026-10-05T18:00:31.490248+00:00",
+      "updated_at": "2026-10-05T18:00:30.609468+00:00"
+    },
+    {
+      "id": "1bf7c3a3-23e2-4dbd-9913-592f2337e635",
+      "scraper_id": "d62e9bbc-f1c2-4d35-985b-001caf7e1d96",
+      "source_product_id": "tata_prod_6",
+      "sku": null,
+      "ean": null,
+      "title": "Tata Active Trail Item 6",
+      "url": null,
+      "image_url": null,
+      "available": true,
+      "current_price": 2999.0,
+      "current_mrp": 3499.0,
+      "variants": [
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "TATA_6_M",
+          "url": null,
+          "size": "M",
+          "price": 2999.0,
+          "stock": 0,
+          "available": true
+        }
+      ],
+      "created_at": "2026-10-05T18:00:32.58061+00:00",
+      "updated_at": "2026-10-05T18:00:31.700477+00:00"
+    },
+    {
+      "id": "78180d44-8cec-4f46-bbeb-0a15c2f8a327",
+      "scraper_id": "d62e9bbc-f1c2-4d35-985b-001caf7e1d96",
+      "source_product_id": "tata_prod_7",
+      "sku": null,
+      "ean": null,
+      "title": "Tata Active Trail Item 7",
+      "url": null,
+      "image_url": null,
+      "available": true,
+      "current_price": 3199.0,
+      "current_mrp": 3699.0,
+      "variants": [
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "TATA_7_M",
+          "url": null,
+          "size": "M",
+          "price": 3199.0,
+          "stock": 0,
+          "available": true
+        }
+      ],
+      "created_at": "2026-10-05T18:00:33.474399+00:00",
+      "updated_at": "2026-10-05T18:00:32.589978+00:00"
+    },
+    {
+      "id": "b3248870-6aaf-40d0-b386-697955d0292f",
+      "scraper_id": "d62e9bbc-f1c2-4d35-985b-001caf7e1d96",
+      "source_product_id": "tata_prod_8",
+      "sku": null,
+      "ean": null,
+      "title": "Tata Active Trail Item 8",
+      "url": null,
+      "image_url": null,
+      "available": true,
+      "current_price": 3399.0,
+      "current_mrp": 3899.0,
+      "variants": [
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "TATA_8_M",
+          "url": null,
+          "size": "M",
+          "price": 3399.0,
+          "stock": 0,
+          "available": true
+        }
+      ],
+      "created_at": "2026-10-05T18:00:34.309901+00:00",
+      "updated_at": "2026-10-05T18:00:33.429687+00:00"
+    },
+    {
+      "id": "462c1570-7c33-4584-b869-4a9d21718932",
+      "scraper_id": "d62e9bbc-f1c2-4d35-985b-001caf7e1d96",
+      "source_product_id": "tata_prod_9",
+      "sku": null,
+      "ean": null,
+      "title": "Tata Active Trail Item 9",
+      "url": null,
+      "image_url": null,
+      "available": true,
+      "current_price": 3599.0,
+      "current_mrp": 4099.0,
+      "variants": [
+        {
+          "ean": null,
+          "mrp": null,
+          "sku": "TATA_9_M",
+          "url": null,
+          "size": "M",
+          "price": 3599.0,
+          "stock": 0,
+          "available": true
+        }
+      ],
+      "created_at": "2026-10-05T18:00:35.233635+00:00",
+      "updated_at": "2026-10-05T18:00:34.352022+00:00"
+    }
+  ]
+}
