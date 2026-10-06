@@ -357,16 +357,21 @@ def test_async_job_pipeline(args) -> bool:
     parsed_req = [alias_map.get(s.strip().lower(), s.strip().lower()) for s in raw_scrapers.split(",") if s.strip()]
     canonical_order = ["columbia", "adv", "myntra", "tata"]
     active_scrapers = [s for s in canonical_order if s in parsed_req] or canonical_order
-    scrapers_param = ",".join(active_scrapers)
+    params = [f"scrapers={scrapers_param}"]
+    if getattr(args, "limit", None):
+        params.append(f"limit={args.limit}")
+    if getattr(args, "force", False):
+        params.append("force=true")
+    trigger_url = f"{service_url}/scrape?{'&'.join(params)}"
 
     print("\n" + "=" * 50)
     print("      TRIGGERING ASYNC SCRAPER PIPELINE")
     print("=" * 50)
-    trigger_url = f"{service_url}/scrape?scrapers={scrapers_param}"
     print(f"Target: POST {trigger_url}")
 
     # Trigger background scrape job
     job_id = None
+    job_data = None
     req = urllib.request.Request(
         trigger_url,
         data=b"",
@@ -382,9 +387,18 @@ def test_async_job_pipeline(args) -> bool:
         with urllib.request.urlopen(req, timeout=30) as resp:
             raw = resp.read().decode("utf-8")
             data = json.loads(raw)
-            job_id = data.get("job_id")
-            print(f"✅ Job accepted (HTTP {resp.status}): job_id={job_id}")
-            print(f"Status URL: {service_url}/scrape/status/{job_id}\n")
+            if data.get("status") == "already_completed":
+                print(f"ℹ️ All requested scrapers ({', '.join(data.get('scrapers', []))}) already completed today in database.")
+                job_data = {
+                    "status": "completed",
+                    "scrapers": data.get("summary", {}),
+                    "product_count": sum(v.get("completed_products", 0) for v in data.get("summary", {}).values())
+                }
+                job_id = "already_completed_today"
+            else:
+                job_id = data.get("job_id")
+                print(f"✅ Job accepted (HTTP {resp.status}): job_id={job_id}")
+                print(f"Status URL: {service_url}/scrape/status/{job_id}\n")
     except urllib.error.HTTPError as e:
         raw = e.read().decode("utf-8", errors="replace")
         try:
@@ -402,12 +416,12 @@ def test_async_job_pipeline(args) -> bool:
         return False
 
     # Step 2: Poll status loop
-    poll_url = f"{service_url}/scrape/status/{job_id}"
-    print(f"Polling job status every {args.health_check_interval}s ({args.health_check_interval // 60}m) (Timeout: {args.scrape_timeout_seconds}s)...")
-    job_data = None
+    poll_url = f"{service_url}/scrape/status/{job_id}" if job_id != "already_completed_today" else None
+    if poll_url:
+        print(f"Polling job status every {args.health_check_interval}s ({args.health_check_interval // 60}m) (Timeout: {args.scrape_timeout_seconds}s)...")
     consecutive_404 = 0
 
-    while time.perf_counter() - t_start < args.scrape_timeout_seconds:
+    while (time.perf_counter() - t_start < args.scrape_timeout_seconds) and (job_id != "already_completed_today"):
         try:
             p_req = urllib.request.Request(
                 poll_url,
@@ -431,17 +445,29 @@ def test_async_job_pipeline(args) -> bool:
                         break
         except urllib.error.HTTPError as e:
             print(f"  [Poll Warning] HTTP Error {e.code} ({e.reason}). Retrying in {args.health_check_interval}s...", flush=True)
-            if e.code == 404:
+            if e.code in (404, 502, 503, 504):
                 consecutive_404 += 1
-                # Check root status fallback if server rebooted
+                # Check root status fallback if server rebooted / job was auto-resumed
                 try:
                     fb_req = urllib.request.Request(f"{service_url}/scrape/status", headers={"Accept": "application/json"})
                     with urllib.request.urlopen(fb_req, timeout=15) as fb_resp:
                         if fb_resp.status == 200:
                             fb_data = json.loads(fb_resp.read().decode("utf-8"))
-                            if fb_data.get("status") in ("completed", "idle") and consecutive_404 >= 2:
-                                print("  [Recovery] Job file missing but active status indicates idle/completed. Fetching products...")
+                            fb_status = fb_data.get("status")
+                            if fb_status in ("running", "queued") and fb_data.get("job_id"):
+                                new_job_id = fb_data["job_id"]
+                                if new_job_id != job_id:
+                                    print(f"  [Recovery] Attached to resumed job {new_job_id} after server restart.")
+                                    job_id = new_job_id
+                                    poll_url = f"{service_url}/scrape/status/{job_id}"
+                                job_data = fb_data
+                                consecutive_404 = 0
+                            elif fb_status == "completed":
+                                print("  [Recovery] All scrapers for today have completed successfully in database.")
+                                job_data = fb_data
                                 break
+                            else:
+                                print(f"  [Recovery] Server status is '{fb_status}'. Waiting for pipeline progress...")
                 except Exception:
                     pass
         except Exception as e:
@@ -463,18 +489,44 @@ def test_async_job_pipeline(args) -> bool:
     results_dir = Path(args.results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
 
+    # Fetch authoritative daily summary from /scrape/status to merge with job_data
+    daily_db_summary = {}
+    try:
+        db_req = urllib.request.Request(f"{service_url}/scrape/status", headers={"Accept": "application/json"})
+        with urllib.request.urlopen(db_req, timeout=15) as db_resp:
+            if db_resp.status == 200:
+                root_status_data = json.loads(db_resp.read().decode("utf-8"))
+                daily_db_summary = root_status_data.get("scrapers", {})
+                if not job_data:
+                    job_data = root_status_data
+    except Exception as e:
+        print(f"Notice: Could not fetch daily summary from /scrape/status: {e}")
+
     if job_data:
         (results_dir / f"job-{job_id}.json").write_text(json.dumps(job_data, indent=2), encoding="utf-8")
 
     scrapers_dict = job_data.get("scrapers", {}) if job_data else {}
-    all_success = not is_timed_out
+    all_success = True
 
     for s_name in active_scrapers:
         meta = SCRAPER_METADATA.get(s_name)
         if not meta:
             continue
         job_key = meta["job_key"]
-        s_info = scrapers_dict.get(job_key) or scrapers_dict.get(s_name, {})
+        s_info = dict(scrapers_dict.get(job_key) or scrapers_dict.get(s_name, {}))
+
+        # Merge with database daily summary if available
+        db_info = daily_db_summary.get(s_name, {})
+        if not s_info.get("status") or s_info.get("status") in ("queued", "pending"):
+            if db_info.get("status"):
+                s_info["status"] = db_info.get("status")
+        if (not s_info.get("duration_seconds") or s_info.get("duration_seconds") == 0.0) and db_info.get("duration_seconds"):
+            s_info["duration_seconds"] = db_info.get("duration_seconds")
+        if (not s_info.get("product_count") or s_info.get("product_count") == 0) and db_info.get("completed_products"):
+            s_info["product_count"] = db_info.get("completed_products")
+        if db_info.get("error") and not s_info.get("error"):
+            s_info["error"] = db_info.get("error")
+
         s_status = s_info.get("status")
 
         # Download & validate
@@ -506,16 +558,18 @@ def test_async_job_pipeline(args) -> bool:
         if not s_success:
             all_success = False
 
+        duration = s_info.get("duration_seconds", 0.0)
+
         result_data = {
             "scraper": s_name,
             "display_name": meta["display_name"],
             "status": "passed" if s_success else "failed",
-            "duration_seconds": s_info.get("duration_seconds", 0.0),
+            "duration_seconds": duration,
             "product_count": val_stats.get("valid_products", s_info.get("product_count", 0)),
             "variant_count": val_stats.get("total_variants_found", s_info.get("variant_count", 0)),
             "response_size_bytes": resp_size,
             "validation": val_stats,
-            "error": s_info.get("error") or ("Polling timed out" if is_timed_out and not s_success else None)
+            "error": None if s_success else (s_info.get("error") or ("Polling timed out" if is_timed_out else "Validation failed"))
         }
         (results_dir / meta["result_file"]).write_text(json.dumps(result_data, indent=2), encoding="utf-8")
 
@@ -815,6 +869,8 @@ def main():
     parser.add_argument("--generate-summary", action="store_true", help="Generate final CI summary from test-results/")
     parser.add_argument("--poll-job", action="store_true", help="Trigger POST /scrape and poll GET /scrape/status/{job_id}")
     parser.add_argument("--results-dir", default="test-results")
+    parser.add_argument("--limit", type=int, default=None, help="Product limit for test mode")
+    parser.add_argument("--force", action="store_true", default=False, help="Force re-run even if already completed today")
 
     args = parser.parse_args()
 

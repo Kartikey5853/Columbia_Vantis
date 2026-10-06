@@ -381,6 +381,18 @@
     let failedVariants = 0;
 
 
+    // Buffer for streaming persistence to database
+    window.__TATA_UNSAVED__ = window.__TATA_UNSAVED__ || [];
+    window.drainUnsavedProducts = function () {
+        const u = window.__TATA_UNSAVED__ || [];
+        window.__TATA_UNSAVED__ = [];
+        return u;
+    };
+    const alreadyCompletedSet = new Set(
+        Array.isArray(window.__ALREADY_COMPLETED_IDS__) ? window.__ALREADY_COMPLETED_IDS__ : []
+    );
+
+
     // --------------------------------------------------
     // Worker
     // --------------------------------------------------
@@ -397,12 +409,21 @@
             const product = cleanProducts[index];
 
             if (!product.product_id) {
-
                 completed++;
                 updateProgress({ stage: "Collecting Variants", current: completed, total: cleanProducts.length });
-
                 continue;
+            }
 
+            // Check if already persisted in database in earlier partial run
+            if (alreadyCompletedSet.has(product.product_id)) {
+                completed++;
+                updateProgress({
+                    stage: "Collecting Variants (Resuming)",
+                    current: completed,
+                    total: cleanProducts.length,
+                    variant_count: totalVariants
+                });
+                continue;
             }
 
             try {
@@ -424,6 +445,9 @@
                 product.variants = [];
 
             }
+
+            // Queue for streaming persistence
+            window.__TATA_UNSAVED__.push(product);
 
             completed++;
             updateProgress({

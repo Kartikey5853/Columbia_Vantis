@@ -52,16 +52,67 @@ def _format_product_payload(source: str, raw_products: list) -> dict:
     }
 
 
+from persistence.run_store import get_daily_scrapers_summary, is_scraper_completed_today, get_business_date
+from persistence.exporter import export_canonical_backup
+
+
 @app.on_event("startup")
 async def on_startup():
-    """Auto-resume any scrape job interrupted by a previous server restart/crash."""
+    """
+    On server boot:
+    1. Checks today's date in database (Asia/Kolkata timezone).
+    2. Inspects status of all scrapers (columbia, adv, myntra, tata).
+    3. If all scrapers are completed with valid data -> NO SCRAPING.
+    4. If any scraper failed, was interrupted, or has not run -> automatically resumes only those incomplete scrapers.
+    5. Ensures local rolling backup files exist (exports missing ones from Supabase).
+    """
+    b_date = get_business_date()
+    print(f"\n[STARTUP] 🔍 Checking database scraper status for business date: {b_date}...", flush=True)
+
+    try:
+        summary = await get_daily_scrapers_summary(business_date=b_date)
+    except Exception as e:
+        print(f"[STARTUP] Warning: Failed to query daily scrapers summary: {e}", flush=True)
+        summary = {}
+
+    canonical_order = ["columbia", "adv", "myntra", "tata"]
+    pending_scrapers = []
+    completed_scrapers = []
+
+    for name in canonical_order:
+        s_data = summary.get(name, {})
+        status = s_data.get("status")
+        prods = s_data.get("completed_products", 0)
+
+        backup_path = Path(f"data/{name}/{name}_data.json")
+        if status == "completed" and prods > 0:
+            completed_scrapers.append(name)
+            if not backup_path.exists():
+                try:
+                    await export_canonical_backup(name)
+                except Exception:
+                    pass
+        else:
+            pending_scrapers.append(name)
+
+    print(f"[STARTUP] Daily status: Completed: {completed_scrapers} | Pending/Incomplete: {pending_scrapers}", flush=True)
+
+    if not pending_scrapers:
+        print(f"[STARTUP] ✅ All {len(canonical_order)} scrapers for today ({b_date}) are already completed. No scraping needed.\n", flush=True)
+        return
+
+    # Check if there is an existing orphaned job
     orphaned = find_orphaned_job()
-    if orphaned:
-        job_id = orphaned["job_id"]
-        req_scrapers = list(orphaned.get("scrapers", {}).keys())
-        print(f"[STARTUP] 🔄 Interrupted scrape job detected: {job_id} (stage: {orphaned.get('current_scraper')}, progress: {orphaned.get('progress_percentage')}%, scrapers: {req_scrapers}). Auto-resuming pipeline in background...", flush=True)
-        task = asyncio.create_task(run_sequential_pipeline(job_id, selected_scrapers=req_scrapers))
-        set_pipeline_task(task)
+    job_id = orphaned["job_id"] if orphaned else None
+
+    if not job_id:
+        from jobs import create_job
+        job = await create_job(scrapers=pending_scrapers, force=True)
+        job_id = job["job_id"]
+
+    print(f"[STARTUP] 🔄 Auto-resuming incomplete scrapers for today ({b_date}): {pending_scrapers} (Job: {job_id}). Dispatching in background...\n", flush=True)
+    task = asyncio.create_task(run_sequential_pipeline(job_id, selected_scrapers=pending_scrapers))
+    set_pipeline_task(task)
 
 
 @app.on_event("shutdown")
@@ -72,9 +123,11 @@ async def on_shutdown():
 @app.get("/")
 async def root():
     active = await get_active_job()
+    b_date = get_business_date()
     return {
         "status": "online",
         "service": "Product Scraper API",
+        "business_date": b_date,
         "architecture": "unified_supabase_persistence",
         "active_job": active["job_id"] if active else None,
         "pipeline_running": is_pipeline_running(),
@@ -95,18 +148,50 @@ async def root():
 async def trigger_scrape_job(
     scrapers: str = Query("columbia,adv,myntra,tata", description="Comma-separated list of scrapers to run (columbia, adv, myntra, tata)"),
     limit: int = Query(None, description="Optional product limit for testing"),
-    force: bool = Query(False, description="Force start a new job even if an interrupted job exists")
+    force: bool = Query(False, description="Force start a new job even if an interrupted job exists or if scrapers already completed today")
 ):
     """
     Triggers the sequential scraping pipeline in the background.
     Supports selective execution (e.g., scrapers=columbia,adv or scrapers=tata).
     Executes scrapers in strictly sequential order: Columbia -> Adventuras -> Myntra -> Tata CLiQ.
+    If force=False and scrapers are already completed today, skips them.
     Automatically resumes interrupted jobs across server restarts unless force=true.
     Immediately returns HTTP 202 Accepted with a unique job_id.
     """
     selected = [s.strip() for s in (scrapers or "").split(",") if s.strip()]
     if not selected:
         selected = ["columbia", "adv", "myntra", "tata"]
+
+    alias_map = {"columbiasportswear": "columbia", "adventuras": "adv", "tatacliq": "tata"}
+    selected = [alias_map.get(s.lower(), s.lower()) for s in selected]
+    canonical_order = ["columbia", "adv", "myntra", "tata"]
+    ordered_selected = [s for s in canonical_order if s in selected] or canonical_order
+
+    # If force=False, filter out scrapers that are already completed today
+    if not force:
+        b_date = get_business_date()
+        daily_summary = await get_daily_scrapers_summary(business_date=b_date)
+        needed_scrapers = []
+        already_done = []
+        for s in ordered_selected:
+            s_info = daily_summary.get(s, {})
+            if s_info.get("status") == "completed" and (s_info.get("completed_products", 0) > 0 or limit):
+                already_done.append(s)
+            else:
+                needed_scrapers.append(s)
+
+        if not needed_scrapers:
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "already_completed",
+                    "business_date": b_date,
+                    "message": f"All requested scrapers ({', '.join(already_done)}) are already completed for today ({b_date}). No scraping needed.",
+                    "scrapers": already_done,
+                    "summary": daily_summary,
+                }
+            )
+        ordered_selected = needed_scrapers
 
     if is_pipeline_running():
         active = await get_active_job()
@@ -125,25 +210,25 @@ async def trigger_scrape_job(
     if orphaned and not force:
         job_id = orphaned["job_id"]
         print(f"[API] 🔄 Resuming interrupted job {job_id} in background...", flush=True)
-        task = asyncio.create_task(run_sequential_pipeline(job_id, selected_scrapers=selected, limit=limit))
+        task = asyncio.create_task(run_sequential_pipeline(job_id, selected_scrapers=ordered_selected, limit=limit, force=force))
         set_pipeline_task(task)
         return JSONResponse(
             status_code=202,
             content={
                 "job_id": job_id,
                 "status": "resumed",
-                "scrapers": selected,
+                "scrapers": ordered_selected,
                 "limit": limit,
                 "message": f"Resumed interrupted scrape job {job_id} in background",
                 "status_url": f"/scrape/status/{job_id}"
             }
         )
 
-    job = await create_job(scrapers=selected, force=force)
+    job = await create_job(scrapers=ordered_selected, force=force)
     job_id = job["job_id"]
 
     # Dispatch pipeline in background task
-    task = asyncio.create_task(run_sequential_pipeline(job_id, selected_scrapers=selected, limit=limit))
+    task = asyncio.create_task(run_sequential_pipeline(job_id, selected_scrapers=ordered_selected, limit=limit, force=force))
     set_pipeline_task(task)
 
     return JSONResponse(
@@ -151,9 +236,9 @@ async def trigger_scrape_job(
         content={
             "job_id": job_id,
             "status": "queued",
-            "scrapers": selected,
+            "scrapers": ordered_selected,
             "limit": limit,
-            "message": f"Scraper job started in background (Sequence: {' -> '.join(selected)})",
+            "message": f"Scraper job started in background (Sequence: {' -> '.join(ordered_selected)})",
             "status_url": f"/scrape/status/{job_id}"
         }
     )
@@ -175,7 +260,20 @@ async def get_latest_scrape_status():
     active = await get_active_job()
     if active:
         return active
-    return {"status": "idle", "message": "No scrape job is currently running"}
+
+    b_date = get_business_date()
+    daily_summary = await get_daily_scrapers_summary(business_date=b_date)
+    all_completed = all(v.get("status") == "completed" for v in daily_summary.values())
+    total_prods = sum(v.get("completed_products", 0) for v in daily_summary.values())
+
+    return {
+        "status": "completed" if all_completed else "idle",
+        "business_date": b_date,
+        "product_count": total_prods,
+        "pipeline_running": is_pipeline_running(),
+        "scrapers": daily_summary,
+        "message": "Today's scraping completed" if all_completed else "No active scrape job currently running"
+    }
 
 
 @app.get("/scrape")

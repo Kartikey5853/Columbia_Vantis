@@ -196,3 +196,96 @@ async def fail_run(
         return_representation=True
     )
     return res[0] if res else {}
+
+
+async def get_daily_scrapers_summary(
+    business_date: Optional[str] = None,
+    client: Optional[SupabaseClient] = None
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Returns today's execution and data status for all scrapers ('columbia', 'adv', 'myntra', 'tata').
+    Used on server startup and by API/jobs to determine what has already completed today.
+    """
+    cli = client or get_supabase_client()
+    b_date = business_date or get_business_date()
+
+    canonical_names = ["columbia", "adv", "myntra", "tata"]
+    id_to_name = {}
+    for name in canonical_names:
+        s_id = await get_scraper_id(name, cli)
+        id_to_name[s_id] = name
+
+    runs = await cli.select(
+        "scrape_runs",
+        columns="id,scraper_id,business_date,status,stage,total_products,completed_products,failed_products,started_at,completed_at,updated_at,last_error",
+        filters={"business_date": f"eq.{b_date}"},
+        order="started_at.desc"
+    )
+
+    summary: Dict[str, Dict[str, Any]] = {}
+    for name in canonical_names:
+        summary[name] = {
+            "status": "pending",
+            "run_id": None,
+            "completed_products": 0,
+            "failed_products": 0,
+            "started_at": None,
+            "completed_at": None,
+            "duration_seconds": 0.0,
+            "error": None,
+        }
+
+    for r in (runs or []):
+        s_name = id_to_name.get(r.get("scraper_id"))
+        if not s_name:
+            continue
+        curr_status = summary[s_name]["status"]
+        r_status = r.get("status")
+
+        # We prioritize completed runs or recent runs
+        if curr_status != "completed" or r_status == "completed":
+            dur = 0.0
+            if r.get("started_at") and r.get("completed_at"):
+                try:
+                    t_start = datetime.fromisoformat(r["started_at"].replace("Z", "+00:00"))
+                    t_end = datetime.fromisoformat(r["completed_at"].replace("Z", "+00:00"))
+                    dur = round((t_end - t_start).total_seconds(), 1)
+                except Exception:
+                    pass
+            summary[s_name] = {
+                "status": r_status,
+                "run_id": r.get("id"),
+                "completed_products": r.get("completed_products") or 0,
+                "failed_products": r.get("failed_products") or 0,
+                "started_at": r.get("started_at"),
+                "completed_at": r.get("completed_at"),
+                "duration_seconds": dur,
+                "error": r.get("last_error"),
+            }
+
+    return summary
+
+
+async def is_scraper_completed_today(
+    scraper_name: str,
+    business_date: Optional[str] = None,
+    client: Optional[SupabaseClient] = None
+) -> bool:
+    """Returns True if the scraper has a successful completed run today with >= 1 product."""
+    cli = client or get_supabase_client()
+    b_date = business_date or get_business_date()
+    s_id = await get_scraper_id(scraper_name, cli)
+    runs = await cli.select(
+        "scrape_runs",
+        columns="id,status,completed_products",
+        filters={
+            "scraper_id": f"eq.{s_id}",
+            "business_date": f"eq.{b_date}",
+            "status": "eq.completed"
+        },
+        limit=1
+    )
+    if runs and len(runs) > 0:
+        return (runs[0].get("completed_products") or 0) > 0
+    return False
+

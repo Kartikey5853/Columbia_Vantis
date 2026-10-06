@@ -118,52 +118,61 @@ async def _reconstruct_job_from_supabase(job_id: str) -> Optional[Dict[str, Any]
     Checks Supabase scrape_runs for today's date and reconstructs the job status.
     """
     try:
-        from persistence.supabase_client import get_supabase_client
-        from persistence.run_store import get_business_date
-        cli = get_supabase_client()
-        b_date = get_business_date()
-        runs = await cli.select(
-            "scrape_runs",
-            columns="id,scraper_id,business_date,status,stage,completed_count,failed_count,started_at,completed_at",
-            filters={"business_date": f"eq.{b_date}"}
-        )
-        if not runs:
+        from persistence.run_store import get_daily_scrapers_summary
+        summary = await get_daily_scrapers_summary()
+        if not summary:
             return None
-
-        # Fetch scrapers to map scraper_id -> name
-        scrapers_rows = await cli.select("scrapers", columns="id,name")
-        name_by_id = {s["id"]: s["name"] for s in scrapers_rows}
 
         scrapers_dict = {}
         total_prods = 0
         all_done = True
-        for r in runs:
-            s_name = name_by_id.get(r["scraper_id"], "unknown")
-            k = "tatacliq" if s_name in ("tata", "tatacliq") else s_name
-            r_status = r.get("status", "completed")
-            if r_status != "completed":
+        has_any_run = False
+        earliest_start = None
+        latest_complete = None
+
+        canonical_key_map = {
+            "columbia": "columbia",
+            "adv": "adv",
+            "myntra": "myntra",
+            "tata": "tatacliq",
+        }
+
+        for s_name, data in summary.items():
+            k = canonical_key_map.get(s_name, s_name)
+            s_status = data.get("status", "pending")
+            p_cnt = data.get("completed_products", 0)
+            if data.get("run_id"):
+                has_any_run = True
+            if s_status != "completed":
                 all_done = False
-            p_cnt = r.get("completed_count") or 0
             total_prods += p_cnt
+            if data.get("started_at") and (not earliest_start or data["started_at"] < earliest_start):
+                earliest_start = data["started_at"]
+            if data.get("completed_at") and (not latest_complete or data["completed_at"] > latest_complete):
+                latest_complete = data["completed_at"]
+
             scrapers_dict[k] = {
-                "status": r_status,
+                "status": s_status,
                 "product_count": p_cnt,
-                "variant_count": p_cnt if k == "tatacliq" else 0,
-                "duration_seconds": 0.0,
-                "error": None
+                "variant_count": p_cnt if s_name in ("tata", "adv", "myntra") else 0,
+                "duration_seconds": data.get("duration_seconds", 0.0),
+                "error": data.get("error")
             }
+
+        if not has_any_run:
+            return None
 
         rec_status = "completed" if all_done else "running"
         reconstructed = {
             "job_id": job_id,
             "status": rec_status,
             "current_scraper": None if all_done else list(scrapers_dict.keys())[-1],
-            "progress_percentage": 100.0 if all_done else 95.0,
+            "progress_percentage": 100.0 if all_done else 75.0,
             "product_count": total_prods,
-            "variant_count": scrapers_dict.get("tatacliq", {}).get("variant_count", 0),
-            "started_at": runs[0].get("started_at") or datetime.now(timezone.utc).isoformat(),
+            "variant_count": total_prods,
+            "started_at": earliest_start or datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
-            "completed_at": runs[-1].get("completed_at") if all_done else None,
+            "completed_at": latest_complete if all_done else None,
             "elapsed_seconds": 0.0,
             "error": None,
             "scrapers": scrapers_dict,

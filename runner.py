@@ -33,6 +33,8 @@ from persistence.run_store import (
     update_run_counts,
     complete_run,
     fail_run,
+    get_daily_scrapers_summary,
+    is_scraper_completed_today,
 )
 from persistence.checkpoint_store import (
     init_product_progress,
@@ -41,6 +43,8 @@ from persistence.checkpoint_store import (
     mark_product_failed,
     get_incomplete_products,
     batch_record_product_progress,
+    get_completed_listing_pages,
+    record_listing_page_completed,
 )
 from persistence.product_store import (
     upsert_canonical_product,
@@ -228,15 +232,32 @@ async def _wait_and_poll_progress(
     progress_flag: str,
     timeout_ms: int,
     poll_interval: float = 2.0,
-    callback=None
+    callback=None,
+    on_drain: Optional[Callable[[List[Any]], Any]] = None
 ) -> bool:
-    """Wait for completion while periodically streaming progress to callback."""
+    """Wait for completion while periodically streaming progress to callback and draining chunks."""
     start_t = time.perf_counter()
     timeout_sec = timeout_ms / 1000.0
 
     while time.perf_counter() - start_t < timeout_sec:
         is_done = await page.evaluate(f"() => window.{done_flag} === true")
+
+        if on_drain:
+            chunk = await page.evaluate("() => typeof window.drainUnsavedProducts === 'function' ? window.drainUnsavedProducts() : []")
+            if chunk and len(chunk) > 0:
+                try:
+                    await on_drain(chunk)
+                except Exception as e:
+                    print(f"[PROGRESS] Chunk drain error: {e}", flush=True)
+
         if is_done:
+            if on_drain:
+                chunk = await page.evaluate("() => typeof window.drainUnsavedProducts === 'function' ? window.drainUnsavedProducts() : []")
+                if chunk and len(chunk) > 0:
+                    try:
+                        await on_drain(chunk)
+                    except Exception:
+                        pass
             return True
 
         if callback:
@@ -711,17 +732,41 @@ def group_myntra_products(raw_items: List[Dict[str, Any]]) -> List[NormalizedPro
     return result
 
 
-async def fetch_myntra_raw_items(
+async def scrape_myntra(
     limit: Optional[int] = None,
-    progress_callback: Optional[Callable[[Dict[str, Any]], Any]] = None
-) -> List[Dict[str, Any]]:
+    progress_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
+    client=None
+) -> Dict[str, Any]:
     """
-    Directly fetches Myntra Columbia products matching scraper/myntra_scraper.js extraction logic.
-    Maintains session cookies from the web storefront and pages through the gateway search API.
+    Executes the Myntra Columbia scraper batchwise (persisting every 5 pages),
+    records listing page checkpoints in Supabase, and updates local rolling backups incrementally.
+    Resumes dynamically from the last completed page on server crash/restart.
     """
+    cli = client or get_supabase_client()
+
+    print("\n" + "=" * 60)
+    print("STARTING MYNTRA COLUMBIA SCRAPER (BATCHWISE CHECKPOINTED)")
+    if limit:
+        print(f"TEST MODE: Limited to {limit} products")
+    print("=" * 60, flush=True)
+
+    run = await get_or_create_daily_run("myntra", client=cli)
+    run_id = run["id"]
+    print(f"[RUN] Myntra Scrape Run ID: {run_id} (Date: {run['business_date']}, Status: {run['status']})")
+
+    completed_pages = await get_completed_listing_pages(run_id, client=cli)
+    start_page = (max(completed_pages) + 1) if completed_pages else 1
+    if completed_pages:
+        print(f"[MYNTRA CHECKPOINT] Resuming from checkpoint: Pages {sorted(completed_pages)} already persisted. Starting at page {start_page}.", flush=True)
+
     rows = 50
-    page = 1
-    all_products: List[Dict[str, Any]] = []
+    page = start_page
+    batch_pages_threshold = 5
+    accumulated_batch: List[Dict[str, Any]] = []
+    batch_pages: List[int] = []
+    total_persisted_products = run.get("completed_products") or 0
+    total_variants_persisted = 0
+    total_prices_added = 0
     pagination_ctx = None
     scraped_iso = datetime.now(timezone.utc).isoformat()
     limit_val = int(limit) if limit else 0
@@ -732,10 +777,47 @@ async def fetch_myntra_raw_items(
         "Accept-Language": "en-US,en;q=0.9",
     }
 
-    async with httpx.AsyncClient(http2=False, headers=headers_base, follow_redirects=True, timeout=20.0) as client:
+    async def persist_myntra_batch(batch_items: List[Dict[str, Any]], pages_in_batch: List[int]):
+        nonlocal total_persisted_products, total_variants_persisted, total_prices_added
+        if not batch_items:
+            for p_num in pages_in_batch:
+                await record_listing_page_completed(run_id, p_num, 0, client=cli)
+            return
+
+        norm_chunk = group_myntra_products(batch_items)
+        db_products = await upsert_canonical_products_batch(norm_chunk, client=cli, batch_size=200)
+        id_by_src = {p["source_product_id"]: p["id"] for p in db_products if "source_product_id" in p and "id" in p}
+
+        price_entries = []
+        progress_items = []
+        for prod in norm_chunk:
+            pid = id_by_src.get(prod.source_product_id)
+            if pid:
+                price_entries.append({"product_id": pid, "price": prod.price, "mrp": prod.mrp})
+                progress_items.append({"product_id": pid, "source_product_id": prod.source_product_id, "variant_count": len(prod.variants)})
+                total_variants_persisted += len(prod.variants)
+
+        if price_entries:
+            added = await batch_record_prices_if_changed(price_entries, scrape_run_id=run_id, client=cli, batch_size=200)
+            total_prices_added += added
+        if progress_items:
+            await batch_record_product_progress(run_id, progress_items, status="completed", client=cli, batch_size=200)
+
+        batch_count = len(progress_items)
+        total_persisted_products += batch_count
+        await update_run_counts(run_id, completed_delta=batch_count, client=cli)
+        for p_num in pages_in_batch:
+            await record_listing_page_completed(run_id, p_num, batch_count, client=cli)
+
+        await export_canonical_backup("myntra", client=cli)
+        print(f"[MYNTRA BATCH] Persisted batch of {len(norm_chunk)} products (Pages {pages_in_batch}) to Supabase & disk.", flush=True)
+
+    await update_run_stage(run_id, "products", client=cli)
+
+    async with httpx.AsyncClient(http2=False, headers=headers_base, follow_redirects=True, timeout=20.0) as client_http:
         print("[MYNTRA] Initializing storefront session cookies...", flush=True)
         try:
-            await client.get("https://www.myntra.com/")
+            await client_http.get("https://www.myntra.com/")
         except Exception as e:
             print(f"[MYNTRA] Note: Homepage visit: {e}", flush=True)
 
@@ -754,7 +836,7 @@ async def fetch_myntra_raw_items(
                 api_headers["pagination-context"] = pagination_ctx
 
             try:
-                resp = await client.get(url, headers=api_headers)
+                resp = await client_http.get(url, headers=api_headers)
             except Exception as e:
                 print(f"[MYNTRA] Request failed on page {page}: {e}", flush=True)
                 break
@@ -804,7 +886,7 @@ async def fetch_myntra_raw_items(
                     price_val = float(disc_price if disc_price is not None else (raw_price if raw_price is not None else (raw_mrp or 0.0)))
                     mrp_val = float(raw_mrp if raw_mrp is not None else (raw_price if raw_price is not None else (disc_price or 0.0)))
 
-                    all_products.append({
+                    accumulated_batch.append({
                         "product_id": pid,
                         "source": "myntra",
                         "sku": "",
@@ -821,25 +903,34 @@ async def fetch_myntra_raw_items(
                         "scraped_at": scraped_iso,
                     })
 
-                    if limit_val > 0 and len(all_products) >= limit_val:
+                    if limit_val > 0 and (total_persisted_products + len(group_myntra_products(accumulated_batch))) >= limit_val:
                         break
-                if limit_val > 0 and len(all_products) >= limit_val:
+                if limit_val > 0 and (total_persisted_products + len(group_myntra_products(accumulated_batch))) >= limit_val:
                     break
+
+            batch_pages.append(page)
+
+            # Persist batch every 5 pages or when limit is hit
+            is_limit_hit = limit_val > 0 and (total_persisted_products + len(group_myntra_products(accumulated_batch))) >= limit_val
+            if len(batch_pages) >= batch_pages_threshold or is_limit_hit:
+                await persist_myntra_batch(accumulated_batch, batch_pages)
+                accumulated_batch = []
+                batch_pages = []
 
             if progress_callback:
                 try:
                     await progress_callback({
-                        "stage": "Collecting Products",
+                        "stage": "Collecting Products (Batchwise)",
                         "current": page,
                         "total": total_pages,
-                        "variant_count": len(all_products)
+                        "variant_count": total_variants_persisted + len(accumulated_batch)
                     })
                 except Exception:
                     pass
 
-            print(f"[MYNTRA] Page {page}/{total_pages} processed ({len(products)} products, cumulative items: {len(all_products)})", flush=True)
+            print(f"[MYNTRA] Page {page}/{total_pages} processed ({len(products)} products, persisted: {total_persisted_products})", flush=True)
 
-            if limit_val > 0 and len(all_products) >= limit_val:
+            if is_limit_hit:
                 print(f"[MYNTRA] Reached product limit {limit_val}. Stopping.", flush=True)
                 break
 
@@ -851,93 +942,26 @@ async def fetch_myntra_raw_items(
             page += 1
             await asyncio.sleep(0.3)
 
-    return all_products
-
-
-async def scrape_myntra(
-    limit: Optional[int] = None,
-    progress_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
-    client=None
-) -> Dict[str, Any]:
-    """
-    Executes the Myntra Columbia scraper, normalizes products/variants,
-    and persists canonical records and price history to Supabase.
-    """
-    cli = client or get_supabase_client()
-
-    print("\n" + "=" * 60)
-    print("STARTING MYNTRA COLUMBIA SCRAPER")
-    if limit:
-        print(f"TEST MODE: Limited to {limit} products")
-    print("=" * 60, flush=True)
-
-    run = await get_or_create_daily_run("myntra", client=cli)
-    run_id = run["id"]
-    print(f"[RUN] Myntra Scrape Run ID: {run_id} (Date: {run['business_date']}, Status: {run['status']})")
-
-    raw_items = await fetch_myntra_raw_items(limit=limit, progress_callback=progress_callback)
-
-    await update_run_stage(run_id, "products", client=cli)
-    norm_products = group_myntra_products(raw_items)
-    if limit:
-        norm_products = norm_products[:limit]
-
-    batch_size = 200
-    print(f"\n[PERSISTENCE] Persisting {len(norm_products)} canonical Myntra products to Supabase (batches of {batch_size})...")
-
-    db_products = await upsert_canonical_products_batch(norm_products, client=cli, batch_size=batch_size)
-    id_by_src = {p["source_product_id"]: p["id"] for p in db_products if "source_product_id" in p and "id" in p}
-
-    price_entries = []
-    progress_items = []
-    total_variants_persisted = 0
-    for prod in norm_products:
-        pid = id_by_src.get(prod.source_product_id)
-        if pid:
-            price_entries.append({
-                "product_id": pid,
-                "price": prod.price,
-                "mrp": prod.mrp
-            })
-            progress_items.append({
-                "product_id": pid,
-                "source_product_id": prod.source_product_id,
-                "variant_count": len(prod.variants)
-            })
-            total_variants_persisted += len(prod.variants)
-
-    price_records_count = await batch_record_prices_if_changed(
-        price_entries, scrape_run_id=run_id, client=cli, batch_size=batch_size
-    )
-
-    await batch_record_product_progress(
-        run_id, progress_items, status="completed", client=cli, batch_size=batch_size
-    )
-
-    persisted_count = len(progress_items)
-    failed_count = len(norm_products) - persisted_count
-    await update_run_counts(run_id, completed_delta=persisted_count, failed_delta=failed_count, client=cli)
+    # Persist any trailing batch
+    if accumulated_batch or batch_pages:
+        await persist_myntra_batch(accumulated_batch, batch_pages)
 
     await update_run_stage(run_id, "finalizing", client=cli)
     export_path = await export_canonical_backup("myntra", client=cli)
     await complete_run(run_id, client=cli)
 
     print("\n" + "=" * 60)
-    print(f"MYNTRA SCRAPING FINISHED: {persisted_count} products persisted")
+    print(f"MYNTRA SCRAPING FINISHED: {total_persisted_products} products persisted")
     print(f"Total Variants Persisted: {total_variants_persisted}")
-    print(f"Price Records Added: {price_records_count}")
+    print(f"Price Records Added: {total_prices_added}")
     print(f"Local Rolling Backup: {export_path.resolve()}")
     print("=" * 60 + "\n", flush=True)
 
     return {
         "status": "completed",
         "run_id": run_id,
-        "completed_products": persisted_count,
-        "failed_products": failed_count,
+        "completed_products": total_persisted_products,
         "total_variants": total_variants_persisted,
-        "price_records_added": price_records_count,
-        "export_file": str(export_path),
-        "products": [p.to_dict() for p in norm_products],
     }
 
 
@@ -981,29 +1005,71 @@ async def scrape_tata(
     client=None
 ) -> Dict[str, Any]:
     """
-    Executes the Tata CLiQ browser scraper (tata_scraper.js) via Playwright,
-    then normalizes and persists all canonical products, variants, and price history to Supabase.
+    Executes the Tata CLiQ browser scraper with live streaming batch persistence (every ~200 variants),
+    records checkpoints in Supabase, and updates local rolling backups incrementally.
+    Dynamically skips already persisted products on resume across server restarts.
     """
     cli = client or get_supabase_client()
     scraper_path = SCRAPER_DIR / "tata_scraper.js"
     scraper_code = scraper_path.read_text(encoding="utf-8")
-
-    # Timeout for full Tata scrape (default 3600s / 60 mins)
     timeout_ms = int(os.getenv("TATA_SCRAPE_TIMEOUT_SECONDS", "3600")) * 1000
 
     print("\n" + "=" * 60)
-    print("STARTING TATA CLIQ COLUMBIA SCRAPER (BROWSER JS)")
+    print("STARTING TATA CLIQ COLUMBIA SCRAPER (STREAMING BATCH PERSISTENCE)")
     if limit:
         print(f"TEST MODE: Limited to {limit} products")
     print("=" * 60, flush=True)
 
-    # 1. Initialize or resume daily scrape run
     run = await get_or_create_daily_run("tata", client=cli)
     run_id = run["id"]
     print(f"[RUN] Tata Scrape Run ID: {run_id} (Date: {run['business_date']}, Status: {run['status']})")
 
-    raw_items = []
-    total_variants_from_js = 0
+    completed_rows = await cli.select(
+        "scrape_product_progress",
+        columns="source_product_id",
+        filters={"scrape_run_id": f"eq.{run_id}", "status": "eq.completed"}
+    )
+    already_completed_ids = [r["source_product_id"] for r in (completed_rows or []) if "source_product_id" in r]
+    if already_completed_ids:
+        print(f"[TATA CHECKPOINT] Resuming from checkpoint: {len(already_completed_ids)} products already completed in Supabase.", flush=True)
+
+    total_variants_persisted = 0
+    total_prices_added = 0
+    total_products_persisted = len(already_completed_ids)
+    persisted_product_ids = set(already_completed_ids)
+
+    async def drain_tata_chunk(chunk: List[Dict[str, Any]]):
+        nonlocal total_variants_persisted, total_prices_added, total_products_persisted
+        new_items = [p for p in chunk if str(p.get("product_id") or "").strip() not in persisted_product_ids]
+        if not new_items:
+            return
+
+        norm_chunk = [normalize_tata_js_product(p) for p in new_items]
+        db_prods = await upsert_canonical_products_batch(norm_chunk, client=cli, batch_size=200)
+        id_by_src = {p["source_product_id"]: p["id"] for p in db_prods if "source_product_id" in p and "id" in p}
+
+        price_entries = []
+        progress_items = []
+        for prod in norm_chunk:
+            pid = id_by_src.get(prod.source_product_id)
+            if pid:
+                price_entries.append({"product_id": pid, "price": prod.price, "mrp": prod.mrp})
+                progress_items.append({"product_id": pid, "source_product_id": prod.source_product_id, "variant_count": len(prod.variants)})
+                total_variants_persisted += len(prod.variants)
+                persisted_product_ids.add(prod.source_product_id)
+
+        if price_entries:
+            added = await batch_record_prices_if_changed(price_entries, scrape_run_id=run_id, client=cli, batch_size=200)
+            total_prices_added += added
+        if progress_items:
+            await batch_record_product_progress(run_id, progress_items, status="completed", client=cli, batch_size=200)
+
+        total_products_persisted += len(progress_items)
+        await update_run_counts(run_id, completed_delta=len(progress_items), client=cli)
+        await export_canonical_backup("tata", client=cli)
+        print(f"[TATA BATCH] Persisted batch of {len(norm_chunk)} products ({total_variants_persisted} total variants in DB).", flush=True)
+
+    await update_run_stage(run_id, "variants", client=cli)
 
     async with _SCRAPER_LOCK:
         browser = await get_shared_browser()
@@ -1016,13 +1082,14 @@ async def scrape_tata(
             print(f"Injecting and starting Tata CLiQ scraper (CONCURRENCY={tata_concurrency})...", flush=True)
             limit_val = int(limit) if limit else 0
             await page.evaluate(
-                """([code, limit, concurrency]) => {
+                """([code, limit, concurrency, doneIds]) => {
                     window.__IS_PLAYWRIGHT__ = true;
                     window.__CONCURRENCY__ = concurrency;
                     window.__PRODUCT_LIMIT__ = limit > 0 ? limit : undefined;
+                    window.__ALREADY_COMPLETED_IDS__ = doneIds || [];
                     window.eval(code);
                 }""",
-                [scraper_code, limit_val, tata_concurrency]
+                [scraper_code, limit_val, tata_concurrency, already_completed_ids]
             )
 
             print("Tata scraper is running. Waiting for completion...", flush=True)
@@ -1032,15 +1099,14 @@ async def scrape_tata(
                 progress_flag="__SCRAPER_PROGRESS__",
                 timeout_ms=timeout_ms,
                 poll_interval=2.0,
-                callback=progress_callback
+                callback=progress_callback,
+                on_drain=drain_tata_chunk
             )
 
-            result = await page.evaluate("() => window.scraperResult || null")
-            if result and isinstance(result, dict):
-                raw_items = result.get("products", [])
-                total_variants_from_js = result.get("total_variants", 0)
-            else:
-                raw_items = await page.evaluate("() => window.output || []")
+            # Drain any remaining buffered products
+            final_unsaved = await page.evaluate("() => typeof window.drainUnsavedProducts === 'function' ? window.drainUnsavedProducts() : []")
+            if final_unsaved:
+                await drain_tata_chunk(final_unsaved)
 
         finally:
             await close_shared_browser()
@@ -1048,69 +1114,23 @@ async def scrape_tata(
             gc.collect()
             print("[BROWSER] Tata CLiQ browser closed. Memory reclaimed.", flush=True)
 
-    # 2. Batch Persist into Supabase in chunks of 200
-    await update_run_stage(run_id, "variants", client=cli)
-    if limit:
-        raw_items = raw_items[:limit]
-
-    norm_products = [normalize_tata_js_product(item) for item in raw_items]
-    batch_size = 200
-    print(f"\n[PERSISTENCE] Persisting {len(norm_products)} Tata CLiQ products to Supabase (batches of {batch_size})...")
-
-    db_products = await upsert_canonical_products_batch(norm_products, client=cli, batch_size=batch_size)
-    id_by_src = {p["source_product_id"]: p["id"] for p in db_products if "source_product_id" in p and "id" in p}
-
-    price_entries = []
-    progress_items = []
-    total_variants_persisted = 0
-    for prod in norm_products:
-        pid = id_by_src.get(prod.source_product_id)
-        if pid:
-            price_entries.append({
-                "product_id": pid,
-                "price": prod.price,
-                "mrp": prod.mrp
-            })
-            progress_items.append({
-                "product_id": pid,
-                "source_product_id": prod.source_product_id,
-                "variant_count": len(prod.variants)
-            })
-            total_variants_persisted += len(prod.variants)
-
-    # Batch record prices (500 per call)
-    price_records_count = await batch_record_prices_if_changed(
-        price_entries, scrape_run_id=run_id, client=cli, batch_size=batch_size
-    )
-
-    # Batch record checkpoints (500 per call)
-    await batch_record_product_progress(
-        run_id, progress_items, status="completed", client=cli, batch_size=batch_size
-    )
-
-    persisted_count = len(progress_items)
-    failed_count = len(norm_products) - persisted_count
-    await update_run_counts(run_id, completed_delta=persisted_count, failed_delta=failed_count, client=cli)
-
-    # 3. Finalize run and export local rolling backup
     await update_run_stage(run_id, "finalizing", client=cli)
     export_path = await export_canonical_backup("tata", client=cli)
     await complete_run(run_id, client=cli)
 
     print("\n" + "=" * 60)
-    print(f"TATA CLIQ SCRAPING FINISHED: {persisted_count} products persisted")
+    print(f"TATA CLIQ SCRAPING FINISHED: {total_products_persisted} products persisted")
     print(f"Total Variants Persisted: {total_variants_persisted}")
-    print(f"Price Records Added: {price_records_count}")
+    print(f"Price Records Added: {total_prices_added}")
     print(f"Local Rolling Backup: {export_path.resolve()}")
     print("=" * 60 + "\n", flush=True)
 
     return {
         "status": "completed",
         "run_id": run_id,
-        "completed_products": persisted_count,
-        "failed_products": failed_count,
-        "total_variants": total_variants_persisted or total_variants_from_js,
-        "price_records_added": price_records_count,
+        "completed_products": total_products_persisted,
+        "total_variants": total_variants_persisted,
+        "price_records_added": total_prices_added,
         "export_file": str(export_path),
     }
 
@@ -1169,7 +1189,8 @@ def normalize_scraper_names(scrapers: Optional[List[str]]) -> List[str]:
 async def run_sequential_pipeline(
     job_id: str,
     selected_scrapers: Optional[List[str]] = None,
-    limit: Optional[int] = None
+    limit: Optional[int] = None,
+    force: bool = False,
 ):
     """
     Coordinates sequential execution of scrapers (columbia -> adv -> myntra -> tata)
@@ -1207,17 +1228,52 @@ async def run_sequential_pipeline(
         s_key = SCRAPER_KEY_MAP[s_name]
         step_base_pct = idx * weight_per_scraper
 
-        # Check if already completed in this job (for resumption across restarts)
+        # Check if already completed in this job or in database today (for resumption across restarts)
         already_completed = (
             existing_job
             and existing_job.get("scrapers", {}).get(s_key, {}).get("status") == "completed"
         )
+        prev_p = 0
+        prev_v = 0
+        prev_dur = 0.0
+
         if already_completed:
             prev_p = existing_job.get("scrapers", {}).get(s_key, {}).get("product_count", 0)
             prev_v = existing_job.get("scrapers", {}).get(s_key, {}).get("variant_count", 0)
+            prev_dur = existing_job.get("scrapers", {}).get(s_key, {}).get("duration_seconds", 0.0)
+        elif not force:
+            try:
+                is_done_today = await is_scraper_completed_today(s_name)
+                if is_done_today:
+                    already_completed = True
+                    summary = await get_daily_scrapers_summary()
+                    s_info = summary.get(s_name, {})
+                    prev_p = s_info.get("completed_products", 0)
+                    prev_v = prev_p
+                    prev_dur = s_info.get("duration_seconds", 0.0)
+            except Exception as e:
+                print(f"[JOB {job_id}] Warning checking today's run status for {s_name}: {e}", flush=True)
+
+        if already_completed:
             cumulative_products += prev_p
             cumulative_variants += prev_v
-            print(f"[JOB {job_id}] ⏩ {s_name.upper()} already completed ({prev_p} products). Resuming next...", flush=True)
+            completed_pct = round((idx + 1) * weight_per_scraper, 1)
+            await update_job(
+                job_id,
+                product_count=cumulative_products,
+                variant_count=cumulative_variants,
+                progress_percentage=min(100.0, completed_pct),
+                scrapers={
+                    s_key: {
+                        "status": "completed",
+                        "product_count": prev_p,
+                        "variant_count": prev_v,
+                        "duration_seconds": prev_dur,
+                        "error": None,
+                    }
+                },
+            )
+            print(f"[JOB {job_id}] ⏩ {s_name.upper()} already completed today ({prev_p} products, {prev_dur}s). Resuming next...", flush=True)
             continue
 
         await update_job(
@@ -1328,6 +1384,7 @@ async def _run_cli():
     parser.add_argument("--scraper", type=str, default=None, help="Scraper name: 'columbia', 'adv', 'myntra', 'tata', or 'pipeline'")
     parser.add_argument("--scrapers", type=str, default=None, help="Comma-separated scrapers e.g. 'columbia,adv' or 'all'")
     parser.add_argument("--limit", type=int, default=None, help="Product limit for test mode")
+    parser.add_argument("--force", action="store_true", default=False, help="Force re-run even if already completed today")
     args = parser.parse_args()
 
     scrapers_arg = args.scrapers
@@ -1340,14 +1397,14 @@ async def _run_cli():
             else:
                 selected = [s.strip() for s in scrapers_arg.split(",") if s.strip()]
             from jobs import create_job
-            job = await create_job(scrapers=selected)
-            await run_sequential_pipeline(job["job_id"], selected_scrapers=selected, limit=args.limit)
+            job = await create_job(scrapers=selected, force=args.force)
+            await run_sequential_pipeline(job["job_id"], selected_scrapers=selected, limit=args.limit, force=args.force)
         elif target_arg:
             target = target_arg.lower()
             if target in ("pipeline", "all"):
                 from jobs import create_job
-                job = await create_job()
-                await run_sequential_pipeline(job["job_id"], limit=args.limit)
+                job = await create_job(force=args.force)
+                await run_sequential_pipeline(job["job_id"], limit=args.limit, force=args.force)
             elif target in ("tata", "tatacliq"):
                 await scrape_tata(limit=args.limit)
             elif target in ("adv", "adventuras"):
