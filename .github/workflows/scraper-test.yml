@@ -15,9 +15,9 @@ on:
         required: false
         default: '600'
       health_check_interval_seconds:
-        description: 'Seconds between job status polls (default: 300s / 5 mins)'
+        description: 'Seconds between job status polls (default: 30s)'
         required: false
-        default: '300'
+        default: '30'
       scrape_timeout_seconds:
         description: 'Timeout in seconds for scraper job completion'
         required: false
@@ -27,7 +27,7 @@ env:
   DEFAULT_RENDER_URL: "https://columbia-4-0.onrender.com"
   MIN_PRODUCTS: ${{ inputs.min_products || '1' }}
   RENDER_DEPLOY_WAIT_SECONDS: ${{ inputs.deploy_wait_seconds || '600' }}
-  HEALTH_CHECK_INTERVAL_SECONDS: ${{ inputs.health_check_interval_seconds || '300' }}
+  HEALTH_CHECK_INTERVAL_SECONDS: ${{ inputs.health_check_interval_seconds || '30' }}
   SCRAPE_TIMEOUT_SECONDS: ${{ inputs.scrape_timeout_seconds || '3900' }}
 
 jobs:
@@ -70,7 +70,7 @@ jobs:
             --deploy-wait-seconds "${RENDER_DEPLOY_WAIT_SECONDS}" \
             --health-check-interval 15
 
-      - name: 2. Trigger async scraper job & poll status until completion (5-min interval)
+      - name: 2. Trigger async scraper job & poll status until completion (30s interval)
         env:
           RENDER_SERVICE_URL: ${{ secrets.RENDER_SERVICE_URL || env.DEFAULT_RENDER_URL }}
         run: |

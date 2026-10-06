@@ -21,7 +21,7 @@
     const CONCURRENCY =
         typeof window.__CONCURRENCY__ !== "undefined"
             ? window.__CONCURRENCY__
-            : 2;
+            : 7;
     const progressStartedAt = Date.now();
     window.updateProgress = function (progress) {
         const current = Number(progress.current || 0), total = Number(progress.total || 0);
@@ -128,29 +128,22 @@
     // --------------------------------------------------
     // Fetch Variant Information
     // --------------------------------------------------
-    // Variant Cache & Fetching
+    // Variant Fetching (Low Memory / Direct Stream)
     // --------------------------------------------------
-
-    const variantCache = new Map();
 
     async function fetchVariants(productId) {
         if (!productId) return [];
         const normalizedId = String(productId).trim();
-
-        if (variantCache.has(normalizedId)) {
-            return variantCache.get(normalizedId);
-        }
-
         const url = DETAIL_URL(normalizedId);
 
-        // Fetch with a 7-second abort timeout so hanging server sockets never freeze workers
+        // Fetch with a 5-second abort timeout so hanging server sockets never freeze workers
         for (let attempt = 1; attempt <= 2; attempt++) {
             let controller = null;
             let timeoutId = null;
 
             try {
                 controller = new AbortController();
-                timeoutId = setTimeout(() => controller.abort(), 7000);
+                timeoutId = setTimeout(() => controller.abort(), 5000);
 
                 const res = await fetch(url, {
                     headers: {
@@ -168,7 +161,7 @@
                 const data = await res.json();
                 const rawVariants = data.variantOptions || [];
 
-                const mapped = rawVariants.map(v => ({
+                return rawVariants.map(v => ({
                     size:
                         v.sizelink?.size ||
                         v.sizelink?.brandSize ||
@@ -189,14 +182,11 @@
                             : ""
                 }));
 
-                variantCache.set(normalizedId, mapped);
-                return mapped;
-
             } catch (err) {
                 if (timeoutId) clearTimeout(timeoutId);
 
                 if (attempt === 1) {
-                    await sleep(300);
+                    await sleep(200);
                 } else {
                     console.warn(
                         `Variant fetch failed for ${normalizedId}: ${err.message}`
@@ -205,7 +195,6 @@
             }
         }
 
-        variantCache.set(normalizedId, []);
         return [];
     }
 
@@ -437,63 +426,52 @@
             }
 
             completed++;
-            updateProgress({ stage: "Collecting Variants", current: completed, total: cleanProducts.length });
+            updateProgress({
+                stage: "Collecting Variants",
+                current: completed,
+                total: cleanProducts.length,
+                variant_count: totalVariants
+            });
 
-            console.log(
-
-                `[Worker ${workerId}] ` +
-
-                `${completed}/${cleanProducts.length}` +
-
-                ` | Product ${product.product_id}` +
-
-                ` | Variants: ${product.variants.length}` +
-
-                ` | Total Variants: ${totalVariants}` +
-
-                ` | Avg: ${(
-                    totalVariants /
-                    completed
-                ).toFixed(2)}`
-
-            );
+            if (completed % 25 === 0 || completed === cleanProducts.length) {
+                console.log(
+                    `[Worker ${workerId}] ` +
+                    `${completed}/${cleanProducts.length}` +
+                    ` | Product ${product.product_id}` +
+                    ` | Variants: ${product.variants.length}` +
+                    ` | Total Variants: ${totalVariants}` +
+                    ` | Avg: ${(totalVariants / Math.max(completed, 1)).toFixed(2)}`
+                );
+            }
 
             // checkpoint every 100 products
-
             if (
                 completed % 100 === 0 ||
                 completed === cleanProducts.length
             ) {
-
                 console.log("--------------------------------");
-
                 console.log(
                     `Completed : ${completed}/${cleanProducts.length}`
                 );
-
                 console.log(
                     `Total Variants : ${totalVariants}`
                 );
-
                 console.log(
                     `Average Variants/Product : ${(
                         totalVariants /
-                        completed
+                        Math.max(completed, 1)
                     ).toFixed(2)}`
                 );
-
                 console.log(
                     `Failed Variant Calls : ${failedVariants}`
                 );
-
                 console.log("--------------------------------");
-
             }
 
             await sleep(
                 typeof window.__VARIANT_DELAY__ !== "undefined"
                     ? window.__VARIANT_DELAY__
-                    : 120
+                    : 30
             );
 
         }

@@ -19,6 +19,9 @@ if hasattr(sys.stderr, "reconfigure"):
 
 load_dotenv()
 
+# Ensure project root is first in sys.path
+sys.path.insert(0, str(Path(__file__).parent.resolve()))
+
 from persistence.models import NormalizedProduct, NormalizedVariant
 from persistence.supabase_client import get_supabase_client, SupabaseClient
 from persistence.run_store import get_or_create_daily_run, complete_run
@@ -53,6 +56,7 @@ async def run_scraper_simulation(client, scraper_name: str, count: int = 10):
             price=price,
             mrp=price + 500.0,
             available=True,
+            url=f"https://www.example.com/{scraper_name}/{i+1}",
             variants=[
                 NormalizedVariant(size="M", sku=f"{scraper_name.upper()}_{i+1}_M", price=price)
             ]

@@ -495,16 +495,17 @@ async def scrape_tata(
             print("Opening lean tab for Tata CLiQ scraper (on shared browser)...", flush=True)
             page = await _create_lean_tab(browser, "https://www.tatacliq.com/")
 
-            print("Injecting and starting Tata CLiQ scraper (CONCURRENCY=2)...", flush=True)
+            tata_concurrency = int(os.getenv("TATA_CONCURRENCY", "7"))
+            print(f"Injecting and starting Tata CLiQ scraper (CONCURRENCY={tata_concurrency})...", flush=True)
             limit_val = int(limit) if limit else 0
             await page.evaluate(
-                """([code, limit]) => {
+                """([code, limit, concurrency]) => {
                     window.__IS_PLAYWRIGHT__ = true;
-                    window.__CONCURRENCY__ = 2;
+                    window.__CONCURRENCY__ = concurrency;
                     window.__PRODUCT_LIMIT__ = limit > 0 ? limit : undefined;
                     window.eval(code);
                 }""",
-                [scraper_code, limit_val]
+                [scraper_code, limit_val, tata_concurrency]
             )
 
             print("Tata scraper is running. Waiting for completion...", flush=True)
@@ -642,6 +643,7 @@ async def run_sequential_pipeline(job_id: str, limit: Optional[int] = None):
         stage = prog.get("stage", "")
         curr = prog.get("current", 0)
         tot = prog.get("total", 1)
+        var_count = prog.get("variant_count", 0)
         pct = (curr / tot) if tot > 0 else 0.0
 
         if "Listing" in stage or "Collecting Products" in stage:
@@ -649,63 +651,78 @@ async def run_sequential_pipeline(job_id: str, limit: Optional[int] = None):
         else:
             overall_pct = round(30.0 + (pct * 70.0), 1)
 
-        await update_job(
-            job_id,
-            progress_percentage=min(99.0, overall_pct),
-            scrapers={
-                "tatacliq": {
-                    "stage": stage,
-                    "current": curr,
-                    "total": tot,
-                }
-            }
-        )
+        tata_metrics = {
+            "stage": stage,
+            "current": curr,
+            "total": tot,
+        }
+        kwargs = {
+            "progress_percentage": min(99.0, overall_pct),
+        }
+        if var_count > 0:
+            tata_metrics["variant_count"] = var_count
+            kwargs["variant_count"] = var_count
+
+        kwargs["scrapers"] = {"tatacliq": tata_metrics}
+        await update_job(job_id, **kwargs)
 
     t_pipeline_start = time.perf_counter()
     col_products = 0
 
-    # Step 1: Columbia Scraper
-    try:
-        t0 = time.perf_counter()
-        columbia_res = await scrape_columbia(limit=limit, progress_callback=columbia_progress_cb)
-        col_dur = round(time.perf_counter() - t0, 1)
-        col_products = columbia_res.get("completed_products", len(columbia_res.get("products", [])))
+    # Check if Columbia scraper already completed in this job (e.g. on auto-resume after server restart)
+    from jobs import get_job
+    existing_job = await get_job(job_id)
+    col_already_completed = (
+        existing_job
+        and existing_job.get("scrapers", {}).get("columbia", {}).get("status") == "completed"
+    )
 
-        await update_job(
-            job_id,
-            product_count=col_products,
-            progress_percentage=15.0,
-            scrapers={
-                "columbia": {
-                    "status": "completed",
-                    "product_count": col_products,
-                    "duration_seconds": col_dur,
-                    "error": None
+    if col_already_completed:
+        col_products = existing_job.get("scrapers", {}).get("columbia", {}).get("product_count", 0)
+        print(f"[JOB {job_id}] ⏩ Columbia scraper already completed ({col_products} products). Resuming straight to Tata CLiQ...", flush=True)
+    else:
+        # Step 1: Columbia Scraper
+        try:
+            t0 = time.perf_counter()
+            columbia_res = await scrape_columbia(limit=limit, progress_callback=columbia_progress_cb)
+            col_dur = round(time.perf_counter() - t0, 1)
+            col_products = columbia_res.get("completed_products", len(columbia_res.get("products", [])))
+
+            await update_job(
+                job_id,
+                product_count=col_products,
+                progress_percentage=15.0,
+                scrapers={
+                    "columbia": {
+                        "status": "completed",
+                        "product_count": col_products,
+                        "duration_seconds": col_dur,
+                        "error": None
+                    }
                 }
-            }
-        )
-    except Exception as e:
-        col_dur = round(time.perf_counter() - t_pipeline_start, 1)
-        err_msg = f"Columbia scraper failed: {e}"
-        print(f"[JOB {job_id}] ❌ {err_msg}", flush=True)
-        await update_job(
-            job_id,
-            status="failed",
-            current_scraper="columbia",
-            error=err_msg,
-            scrapers={
-                "columbia": {
-                    "status": "failed",
-                    "duration_seconds": col_dur,
-                    "error": str(e)
-                },
-                "tatacliq": {
-                    "status": "skipped",
-                    "error": "Skipped due to Columbia failure (fail-fast)"
+            )
+        except Exception as e:
+            col_dur = round(time.perf_counter() - t_pipeline_start, 1)
+            err_msg = f"Columbia scraper failed: {e}"
+            print(f"[JOB {job_id}] ❌ {err_msg}", flush=True)
+            await update_job(
+                job_id,
+                status="failed",
+                current_scraper="columbia",
+                error=err_msg,
+                scrapers={
+                    "columbia": {
+                        "status": "failed",
+                        "duration_seconds": col_dur,
+                        "error": str(e)
+                    },
+                    "tatacliq": {
+                        "status": "skipped",
+                        "error": "Skipped due to Columbia failure (fail-fast)"
+                    }
                 }
-            }
-        )
-        return
+            )
+            return
 
     # Step 2: Tata CLiQ Scraper (Only executed if Columbia passed)
     await update_job(

@@ -149,7 +149,7 @@ def validate_columbia_products(products: list) -> dict:
             stats["missing_title"] += 1
             item_invalid = True
 
-        price = p.get("price")
+        price = p.get("price") if p.get("price") is not None else p.get("current_price")
         if price is None:
             stats["invalid_price"] += 1
             item_invalid = True
@@ -196,7 +196,7 @@ def validate_tata_products(products: list) -> dict:
 
         item_invalid = False
 
-        pid = p.get("product_id")
+        pid = p.get("product_id") or p.get("source_product_id")
         if not pid or not str(pid).strip():
             stats["missing_product_id"] += 1
             item_invalid = True
@@ -206,7 +206,7 @@ def validate_tata_products(products: list) -> dict:
             stats["missing_title"] += 1
             item_invalid = True
 
-        price = p.get("price")
+        price = p.get("price") if p.get("price") is not None else p.get("current_price")
         if price is None:
             stats["invalid_price"] += 1
             item_invalid = True
@@ -335,22 +335,24 @@ def test_async_job_pipeline(args) -> bool:
         time.sleep(args.health_check_interval)
 
     total_poll_time = time.perf_counter() - t_start
+    is_timed_out = not job_data or job_data.get("status") not in ("completed", "failed")
 
-    if not job_data or job_data.get("status") not in ("completed", "failed"):
+    if is_timed_out:
         print(f"\n❌ Scraper job polling timed out after {total_poll_time:.1f}s", file=sys.stderr)
-        return False
-
-    final_status = job_data.get("status")
-    print(f"\nJob finished with status: {final_status.upper()} in {total_poll_time:.1f}s\n")
+        final_status = "timed_out"
+    else:
+        final_status = job_data.get("status", "unknown")
+        print(f"\nJob finished with status: {final_status.upper()} in {total_poll_time:.1f}s\n")
 
     # Step 3: Fetch results and validate both scrapers
     results_dir = Path(args.results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save complete raw job artifact
-    (results_dir / f"job-{job_id}.json").write_text(json.dumps(job_data, indent=2), encoding="utf-8")
+    # Save complete raw job artifact if available
+    if job_data:
+        (results_dir / f"job-{job_id}.json").write_text(json.dumps(job_data, indent=2), encoding="utf-8")
 
-    scrapers_dict = job_data.get("scrapers", {})
+    scrapers_dict = job_data.get("scrapers", {}) if job_data else {}
     col_info = scrapers_dict.get("columbia", {})
     tata_info = scrapers_dict.get("tatacliq", {})
 
@@ -360,7 +362,7 @@ def test_async_job_pipeline(args) -> bool:
     # Download & validate Columbia JSON
     col_val = {"json_valid": False, "schema_valid": False, "valid_products": 0, "invalid_products": 0}
     col_size = 0
-    if col_success:
+    if col_info.get("status") == "completed":
         try:
             c_req = urllib.request.Request(f"{service_url}/scrape", headers={"Accept": "application/json"})
             with urllib.request.urlopen(c_req, timeout=30) as c_resp:
@@ -371,6 +373,8 @@ def test_async_job_pipeline(args) -> bool:
                 col_val = validate_columbia_products(col_products)
                 col_val["json_valid"] = True
                 col_val["schema_valid"] = True
+                if col_val["valid_products"] < args.min_products:
+                    col_success = False
         except Exception as e:
             col_success = False
             col_info["error"] = f"Failed to download/validate Columbia data: {e}"
@@ -378,7 +382,7 @@ def test_async_job_pipeline(args) -> bool:
     # Download & validate Tata JSON
     tata_val = {"json_valid": False, "schema_valid": False, "valid_products": 0, "invalid_products": 0}
     tata_size = 0
-    if tata_success:
+    if tata_info.get("status") == "completed":
         try:
             t_req = urllib.request.Request(f"{service_url}/scrape/tata", headers={"Accept": "application/json"})
             with urllib.request.urlopen(t_req, timeout=30) as t_resp:
@@ -389,6 +393,8 @@ def test_async_job_pipeline(args) -> bool:
                 tata_val = validate_tata_products(tata_products)
                 tata_val["json_valid"] = True
                 tata_val["schema_valid"] = True
+                if tata_val["valid_products"] < args.min_products:
+                    tata_success = False
         except Exception as e:
             tata_success = False
             tata_info["error"] = f"Failed to download/validate Tata CLiQ data: {e}"
@@ -406,20 +412,19 @@ def test_async_job_pipeline(args) -> bool:
     (results_dir / "columbia-test-result.json").write_text(json.dumps(col_result_data, indent=2), encoding="utf-8")
 
     # Save tata-test-result.json
-    if col_info.get("status") == "completed":
-        tata_result_data = {
-            "scraper": "tatacliq",
-            "status": "passed" if tata_success else "failed",
-            "duration_seconds": tata_info.get("duration_seconds", 0.0),
-            "product_count": tata_info.get("product_count", 0),
-            "variant_count": tata_info.get("variant_count", 0),
-            "response_size_bytes": tata_size,
-            "validation": tata_val,
-            "error": tata_info.get("error")
-        }
-        (results_dir / "tata-test-result.json").write_text(json.dumps(tata_result_data, indent=2), encoding="utf-8")
+    tata_result_data = {
+        "scraper": "tatacliq",
+        "status": "passed" if tata_success else "failed",
+        "duration_seconds": tata_info.get("duration_seconds", 0.0),
+        "product_count": tata_info.get("product_count", 0),
+        "variant_count": tata_info.get("variant_count", 0),
+        "response_size_bytes": tata_size,
+        "validation": tata_val,
+        "error": tata_info.get("error") or ("Polling timed out" if is_timed_out and not tata_success else None)
+    }
+    (results_dir / "tata-test-result.json").write_text(json.dumps(tata_result_data, indent=2), encoding="utf-8")
 
-    # Output CI summary
+    # Always output CI summary
     generate_ci_summary(results_dir=str(results_dir))
     return col_success and tata_success
 
@@ -727,7 +732,7 @@ def main():
     parser.add_argument("--endpoint", default=None, help="Endpoint path e.g. /scrape or /scrape/tata (runs legacy test)")
     parser.add_argument("--min-products", type=int, default=int(os.getenv("MIN_PRODUCTS", "1")))
     parser.add_argument("--deploy-wait-seconds", type=int, default=int(os.getenv("RENDER_DEPLOY_WAIT_SECONDS", "600")))
-    parser.add_argument("--health-check-interval", type=int, default=int(os.getenv("HEALTH_CHECK_INTERVAL_SECONDS", "300")))
+    parser.add_argument("--health-check-interval", type=int, default=int(os.getenv("HEALTH_CHECK_INTERVAL_SECONDS", "30")))
     parser.add_argument("--scrape-timeout-seconds", type=int, default=int(os.getenv("SCRAPE_TIMEOUT_SECONDS", "3900")))
     parser.add_argument("--output-file", default=None)
     parser.add_argument("--skip-wait", action="store_true", help="Skip deployment wait if already checked")
