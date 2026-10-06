@@ -14,6 +14,44 @@ _ACTIVE_JOB_ID: Optional[str] = None
 _JOB_LOCK = asyncio.Lock()
 MAX_STORED_JOBS = 20
 
+# Active background asyncio task tracking
+_PIPELINE_TASK: Optional[asyncio.Task] = None
+
+
+def set_pipeline_task(task: Optional[asyncio.Task]) -> None:
+    global _PIPELINE_TASK
+    _PIPELINE_TASK = task
+
+
+def get_pipeline_task() -> Optional[asyncio.Task]:
+    global _PIPELINE_TASK
+    if _PIPELINE_TASK and _PIPELINE_TASK.done():
+        _PIPELINE_TASK = None
+    return _PIPELINE_TASK
+
+
+def is_pipeline_running() -> bool:
+    task = get_pipeline_task()
+    return task is not None and not task.done()
+
+
+def find_orphaned_job() -> Optional[Dict[str, Any]]:
+    """Finds the most recent job on disk that was left in running/queued state without an active in-process task."""
+    if is_pipeline_running():
+        return None
+    try:
+        json_files = sorted(JOB_STORE_DIR.glob("job_*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+        for jf in json_files:
+            try:
+                data = json.loads(jf.read_text(encoding="utf-8"))
+                if isinstance(data, dict) and data.get("status") in ("queued", "running"):
+                    return data
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return None
+
 
 def _save_job_to_disk(job: Dict[str, Any]) -> None:
     """Save a job record to disk JSON file for durability across server restarts."""
@@ -50,18 +88,36 @@ async def get_active_job() -> Optional[Dict[str, Any]]:
     if _ACTIVE_JOB_ID:
         job = await get_job(_ACTIVE_JOB_ID)
         if job and job.get("status") in ("queued", "running"):
+            if not is_pipeline_running():
+                job["is_orphaned"] = True
             return job
         _ACTIVE_JOB_ID = None
+
+    orphaned = find_orphaned_job()
+    if orphaned:
+        orphaned["is_orphaned"] = True
+        return orphaned
+
     return None
 
 
-async def create_job() -> Dict[str, Any]:
+async def create_job(force: bool = False) -> Dict[str, Any]:
     """Create a new scrape job if no job is currently running."""
     global _ACTIVE_JOB_ID, _JOBS
     async with _JOB_LOCK:
         active = await get_active_job()
         if active:
-            raise RuntimeError(f"A scrape job is already active: {active['job_id']}")
+            if active.get("is_orphaned") or force:
+                # Mark orphaned or superseded job as failed
+                old_id = active["job_id"]
+                print(f"[JOBS] Overwriting orphaned/interrupted job {old_id} with new scrape job.", flush=True)
+                if old_id in _JOBS:
+                    _JOBS[old_id]["status"] = "failed"
+                    _JOBS[old_id]["error"] = "Interrupted by server restart and superseded by new scrape request"
+                    _save_job_to_disk(_JOBS[old_id])
+                _ACTIVE_JOB_ID = None
+            else:
+                raise RuntimeError(f"A scrape job is already active: {active['job_id']}")
 
         job_id = generate_job_id()
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -74,6 +130,7 @@ async def create_job() -> Dict[str, Any]:
             "product_count": 0,
             "variant_count": 0,
             "started_at": now_iso,
+            "updated_at": now_iso,
             "completed_at": None,
             "elapsed_seconds": 0.0,
             "error": None,
@@ -148,10 +205,12 @@ async def update_job(job_id: str, **kwargs) -> Optional[Dict[str, Any]]:
             else:
                 job[k] = v
 
+        job["updated_at"] = datetime.now(timezone.utc).isoformat()
         if kwargs.get("status") in ("completed", "failed"):
             job["completed_at"] = datetime.now(timezone.utc).isoformat()
             if _ACTIVE_JOB_ID == job_id:
                 _ACTIVE_JOB_ID = None
+            set_pipeline_task(None)
 
         _save_job_to_disk(job)
         return dict(job)
