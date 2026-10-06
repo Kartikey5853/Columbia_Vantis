@@ -36,7 +36,9 @@ async def get_scraper_id(scraper_name: str, client: Optional[SupabaseClient] = N
     # Create if missing
     source_map = {
         "tata": "tatacliq",
-        "columbia": "columbia_sportswear_india"
+        "columbia": "columbia_sportswear_india",
+        "adv": "adventuras",
+        "myntra": "myntra"
     }
     new_rows = await cli.upsert(
         "scrapers",

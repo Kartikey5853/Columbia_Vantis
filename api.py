@@ -58,8 +58,9 @@ async def on_startup():
     orphaned = find_orphaned_job()
     if orphaned:
         job_id = orphaned["job_id"]
-        print(f"[STARTUP] 🔄 Interrupted scrape job detected: {job_id} (stage: {orphaned.get('current_scraper')}, progress: {orphaned.get('progress_percentage')}%). Auto-resuming pipeline in background...", flush=True)
-        task = asyncio.create_task(run_sequential_pipeline(job_id))
+        req_scrapers = list(orphaned.get("scrapers", {}).keys())
+        print(f"[STARTUP] 🔄 Interrupted scrape job detected: {job_id} (stage: {orphaned.get('current_scraper')}, progress: {orphaned.get('progress_percentage')}%, scrapers: {req_scrapers}). Auto-resuming pipeline in background...", flush=True)
+        task = asyncio.create_task(run_sequential_pipeline(job_id, selected_scrapers=req_scrapers))
         set_pipeline_task(task)
 
 
@@ -78,10 +79,12 @@ async def root():
         "active_job": active["job_id"] if active else None,
         "pipeline_running": is_pipeline_running(),
         "endpoints": {
-            "trigger_job": "POST /scrape",
+            "trigger_job": "POST /scrape?scrapers=columbia,adv,myntra,tata",
             "check_status": "GET /scrape/status/{job_id}",
             "active_status": "GET /scrape/status",
-            "columbia_products": "GET /scrape",
+            "columbia_products": "GET /scrape (or GET /scrape/columbia)",
+            "adv_products": "GET /scrape/adv",
+            "myntra_products": "GET /scrape/myntra",
             "tata_products": "GET /scrape/tata",
             "db_diagnostics": "GET /db/diagnostics"
         }
@@ -90,14 +93,21 @@ async def root():
 
 @app.post("/scrape", status_code=202)
 async def trigger_scrape_job(
+    scrapers: str = Query("columbia,adv,myntra,tata", description="Comma-separated list of scrapers to run (columbia, adv, myntra, tata)"),
     limit: int = Query(None, description="Optional product limit for testing"),
     force: bool = Query(False, description="Force start a new job even if an interrupted job exists")
 ):
     """
-    Triggers the sequential scraping pipeline (Columbia -> Tata CLiQ) in the background.
+    Triggers the sequential scraping pipeline in the background.
+    Supports selective execution (e.g., scrapers=columbia,adv or scrapers=tata).
+    Executes scrapers in strictly sequential order: Columbia -> Adventuras -> Myntra -> Tata CLiQ.
     Automatically resumes interrupted jobs across server restarts unless force=true.
     Immediately returns HTTP 202 Accepted with a unique job_id.
     """
+    selected = [s.strip() for s in (scrapers or "").split(",") if s.strip()]
+    if not selected:
+        selected = ["columbia", "adv", "myntra", "tata"]
+
     if is_pipeline_running():
         active = await get_active_job()
         return JSONResponse(
@@ -115,24 +125,25 @@ async def trigger_scrape_job(
     if orphaned and not force:
         job_id = orphaned["job_id"]
         print(f"[API] 🔄 Resuming interrupted job {job_id} in background...", flush=True)
-        task = asyncio.create_task(run_sequential_pipeline(job_id, limit=limit))
+        task = asyncio.create_task(run_sequential_pipeline(job_id, selected_scrapers=selected, limit=limit))
         set_pipeline_task(task)
         return JSONResponse(
             status_code=202,
             content={
                 "job_id": job_id,
                 "status": "resumed",
+                "scrapers": selected,
                 "limit": limit,
                 "message": f"Resumed interrupted scrape job {job_id} in background",
                 "status_url": f"/scrape/status/{job_id}"
             }
         )
 
-    job = await create_job(force=force)
+    job = await create_job(scrapers=selected, force=force)
     job_id = job["job_id"]
 
     # Dispatch pipeline in background task
-    task = asyncio.create_task(run_sequential_pipeline(job_id, limit=limit))
+    task = asyncio.create_task(run_sequential_pipeline(job_id, selected_scrapers=selected, limit=limit))
     set_pipeline_task(task)
 
     return JSONResponse(
@@ -140,8 +151,9 @@ async def trigger_scrape_job(
         content={
             "job_id": job_id,
             "status": "queued",
+            "scrapers": selected,
             "limit": limit,
-            "message": "Scraper job started in background (Columbia -> Tata CLiQ sequentially)",
+            "message": f"Scraper job started in background (Sequence: {' -> '.join(selected)})",
             "status_url": f"/scrape/status/{job_id}"
         }
     )
@@ -197,6 +209,58 @@ async def get_columbia_data():
             pass
 
     return _format_product_payload("columbia", [])
+
+
+@app.get("/scrape/columbia")
+async def get_columbia_data_alias():
+    """Alias for /scrape returning canonical Columbia products."""
+    return await get_columbia_data()
+
+
+@app.get("/scrape/adv")
+async def get_adv_data():
+    """
+    Returns canonical Adventuras products from Supabase, or from rolling backup.
+    """
+    try:
+        prods = await get_all_canonical_products("adv")
+        if prods:
+            return _format_product_payload("adv", prods)
+    except Exception:
+        pass
+
+    backup_file = Path("data/adv/adv_data.json")
+    if backup_file.exists():
+        try:
+            data = json.loads(backup_file.read_text(encoding="utf-8"))
+            return _format_product_payload("adv", data.get("products", []))
+        except Exception:
+            pass
+
+    return _format_product_payload("adv", [])
+
+
+@app.get("/scrape/myntra")
+async def get_myntra_data():
+    """
+    Returns canonical Myntra products from Supabase, or from rolling backup.
+    """
+    try:
+        prods = await get_all_canonical_products("myntra")
+        if prods:
+            return _format_product_payload("myntra", prods)
+    except Exception:
+        pass
+
+    backup_file = Path("data/myntra/myntra_data.json")
+    if backup_file.exists():
+        try:
+            data = json.loads(backup_file.read_text(encoding="utf-8"))
+            return _format_product_payload("myntra", data.get("products", []))
+        except Exception:
+            pass
+
+    return _format_product_payload("myntra", [])
 
 
 @app.get("/scrape/tata")

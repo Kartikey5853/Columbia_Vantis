@@ -6,6 +6,10 @@ on:
       - main
   workflow_dispatch:
     inputs:
+      scrapers:
+        description: 'Comma-separated scrapers to test (columbia, adv, myntra, tata)'
+        required: false
+        default: 'columbia,adv,myntra,tata'
       min_products:
         description: 'Minimum expected products/SKUs'
         required: false
@@ -25,6 +29,7 @@ on:
 
 env:
   DEFAULT_RENDER_URL: "https://columbia-4-0.onrender.com"
+  SCRAPERS: ${{ inputs.scrapers || 'columbia,adv,myntra,tata' }}
   MIN_PRODUCTS: ${{ inputs.min_products || '1' }}
   RENDER_DEPLOY_WAIT_SECONDS: ${{ inputs.deploy_wait_seconds || '600' }}
   HEALTH_CHECK_INTERVAL_SECONDS: ${{ inputs.health_check_interval_seconds || '30' }}
@@ -34,12 +39,12 @@ jobs:
   # =========================================================================
   # Asynchronous Multi-Scraper Pipeline:
   # 1. Health check & Render readiness
-  # 2. Trigger POST /scrape (202 Accepted) & poll GET /scrape/status/{job_id} (every 5 mins)
+  # 2. Trigger POST /scrape?scrapers=... (202 Accepted) & poll status
   # 3. Generate combined CI summary table & step summary
   # 4. Upload test artifacts (JSON results & job trace)
   # =========================================================================
   test-scrapers:
-    name: Async Scraper Testing (Columbia -> Tata CLiQ)
+    name: Async Scraper Testing (Columbia -> Adventuras -> Myntra -> Tata CLiQ)
     runs-on: ubuntu-latest
     timeout-minutes: 75
 
@@ -77,6 +82,7 @@ jobs:
           python .github/scripts/test_scraper.py \
             --poll-job \
             --service-url "${RENDER_SERVICE_URL}" \
+            --scrapers "${SCRAPERS}" \
             --min-products "${MIN_PRODUCTS}" \
             --scrape-timeout-seconds "${SCRAPE_TIMEOUT_SECONDS}" \
             --health-check-interval "${HEALTH_CHECK_INTERVAL_SECONDS}" \

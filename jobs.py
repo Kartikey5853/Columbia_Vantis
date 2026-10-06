@@ -101,8 +101,83 @@ async def get_active_job() -> Optional[Dict[str, Any]]:
     return None
 
 
-async def create_job(force: bool = False) -> Dict[str, Any]:
-    """Create a new scrape job if no job is currently running."""
+SCRAPER_KEY_MAP = {
+    "columbia": "columbia",
+    "columbiasportswear": "columbia",
+    "adv": "adv",
+    "adventuras": "adv",
+    "myntra": "myntra",
+    "tata": "tatacliq",
+    "tatacliq": "tatacliq",
+}
+
+
+async def _reconstruct_job_from_supabase(job_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Fallback recovery for ephemeral container restarts:
+    Checks Supabase scrape_runs for today's date and reconstructs the job status.
+    """
+    try:
+        from persistence.supabase_client import get_supabase_client
+        from persistence.run_store import get_business_date
+        cli = get_supabase_client()
+        b_date = get_business_date()
+        runs = await cli.select(
+            "scrape_runs",
+            columns="id,scraper_id,business_date,status,stage,completed_count,failed_count,started_at,completed_at",
+            filters={"business_date": f"eq.{b_date}"}
+        )
+        if not runs:
+            return None
+
+        # Fetch scrapers to map scraper_id -> name
+        scrapers_rows = await cli.select("scrapers", columns="id,name")
+        name_by_id = {s["id"]: s["name"] for s in scrapers_rows}
+
+        scrapers_dict = {}
+        total_prods = 0
+        all_done = True
+        for r in runs:
+            s_name = name_by_id.get(r["scraper_id"], "unknown")
+            k = "tatacliq" if s_name in ("tata", "tatacliq") else s_name
+            r_status = r.get("status", "completed")
+            if r_status != "completed":
+                all_done = False
+            p_cnt = r.get("completed_count") or 0
+            total_prods += p_cnt
+            scrapers_dict[k] = {
+                "status": r_status,
+                "product_count": p_cnt,
+                "variant_count": p_cnt if k == "tatacliq" else 0,
+                "duration_seconds": 0.0,
+                "error": None
+            }
+
+        rec_status = "completed" if all_done else "running"
+        reconstructed = {
+            "job_id": job_id,
+            "status": rec_status,
+            "current_scraper": None if all_done else list(scrapers_dict.keys())[-1],
+            "progress_percentage": 100.0 if all_done else 95.0,
+            "product_count": total_prods,
+            "variant_count": scrapers_dict.get("tatacliq", {}).get("variant_count", 0),
+            "started_at": runs[0].get("started_at") or datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "completed_at": runs[-1].get("completed_at") if all_done else None,
+            "elapsed_seconds": 0.0,
+            "error": None,
+            "scrapers": scrapers_dict,
+            "recovered_from_supabase": True
+        }
+        _save_job_to_disk(reconstructed)
+        return reconstructed
+    except Exception as e:
+        print(f"[JOBS] Notice: Supabase job reconstruction failed: {e}", flush=True)
+        return None
+
+
+async def create_job(scrapers: Optional[list] = None, force: bool = False) -> Dict[str, Any]:
+    """Create a new scrape job with dynamic scraper configuration if no job is currently running."""
     global _ACTIVE_JOB_ID, _JOBS
     async with _JOB_LOCK:
         active = await get_active_job()
@@ -122,10 +197,26 @@ async def create_job(force: bool = False) -> Dict[str, Any]:
         job_id = generate_job_id()
         now_iso = datetime.now(timezone.utc).isoformat()
 
+        if scrapers:
+            keys = [SCRAPER_KEY_MAP.get(str(s).strip().lower(), str(s).strip().lower()) for s in scrapers if s]
+        else:
+            keys = ["columbia", "adv", "myntra", "tatacliq"]
+
+        scrapers_dict = {
+            k: {
+                "status": "queued",
+                "product_count": 0,
+                "variant_count": 0,
+                "duration_seconds": 0.0,
+                "error": None
+            }
+            for k in keys
+        }
+
         job_record = {
             "job_id": job_id,
             "status": "queued",  # queued | running | completed | failed
-            "current_scraper": None,  # columbia | tatacliq | None
+            "current_scraper": None,
             "progress_percentage": 0.0,
             "product_count": 0,
             "variant_count": 0,
@@ -134,21 +225,7 @@ async def create_job(force: bool = False) -> Dict[str, Any]:
             "completed_at": None,
             "elapsed_seconds": 0.0,
             "error": None,
-            "scrapers": {
-                "columbia": {
-                    "status": "queued",
-                    "product_count": 0,
-                    "duration_seconds": 0.0,
-                    "error": None
-                },
-                "tatacliq": {
-                    "status": "queued",
-                    "product_count": 0,
-                    "variant_count": 0,
-                    "duration_seconds": 0.0,
-                    "error": None
-                }
-            }
+            "scrapers": scrapers_dict
         }
 
         # Keep memory minimal: evict oldest completed/failed job if limit reached
@@ -164,12 +241,16 @@ async def create_job(force: bool = False) -> Dict[str, Any]:
 
 
 async def get_job(job_id: str) -> Optional[Dict[str, Any]]:
-    """Retrieve job details by job_id with real-time elapsed seconds."""
+    """Retrieve job details by job_id with real-time elapsed seconds and Supabase fallback."""
     job = _JOBS.get(job_id)
     if not job:
         job = _load_job_from_disk(job_id)
         if job:
             _JOBS[job_id] = job
+        else:
+            job = await _reconstruct_job_from_supabase(job_id)
+            if job:
+                _JOBS[job_id] = job
 
     if job:
         copy_job = dict(job)

@@ -7,6 +7,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+import httpx
 from dotenv import load_dotenv
 from playwright.async_api import async_playwright
 
@@ -48,6 +49,8 @@ from persistence.product_store import (
     batch_record_prices_if_changed,
 )
 from persistence.exporter import export_canonical_backup
+
+SCRAPER_DIR = Path("scraper")
 
 TOKEN = os.getenv("SHOPIFY_TOKEN")
 if TOKEN:
@@ -97,6 +100,7 @@ LOW_MEMORY_CHROMIUM_ARGS = [
     "--disable-ipc-flooding-protection",
     "--disable-renderer-backgrounding",
     "--js-flags=--max-old-space-size=256",
+    "--disable-http2",
 ]
 
 _SHARED_PLAYWRIGHT = None
@@ -162,7 +166,12 @@ async def _create_lean_tab(browser, url: str, timeout: int = 60_000):
             pass
         _ACTIVE_PAGE = None
 
-    page = await browser.new_page()
+    context = await browser.new_context(
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        viewport={"width": 1280, "height": 800},
+        locale="en-US"
+    )
+    page = await context.new_page()
     _ACTIVE_PAGE = page
 
     page.on("console", log_console)
@@ -173,8 +182,11 @@ async def _create_lean_tab(browser, url: str, timeout: int = 60_000):
         res_type = req.resource_type
         url_lower = req.url.lower()
 
-        if res_type in ("image", "media", "font", "stylesheet"):
-            await route.abort()
+        if res_type in ("image", "media", "font"):
+            try:
+                await route.abort()
+            except Exception:
+                pass
             return
 
         tracker_keywords = (
@@ -184,15 +196,29 @@ async def _create_lean_tab(browser, url: str, timeout: int = 60_000):
             "sentry", "shopifyanalytics"
         )
         if any(kw in url_lower for kw in tracker_keywords):
-            await route.abort()
+            try:
+                await route.abort()
+            except Exception:
+                pass
             return
 
-        await route.continue_()
+        try:
+            await route.continue_()
+        except Exception:
+            pass
 
     await page.route("**/*", block_unnecessary_resources)
 
-    print(f"[BROWSER] Navigating single tab to {url} (images/styles blocked)...", flush=True)
-    await page.goto(url, wait_until="domcontentloaded", timeout=timeout)
+    for attempt in range(1, 4):
+        try:
+            print(f"[BROWSER] Navigating single tab to {url} (attempt {attempt}/3)...", flush=True)
+            await page.goto(url, wait_until="domcontentloaded", timeout=timeout)
+            break
+        except Exception as e:
+            if attempt == 3:
+                raise
+            print(f"[BROWSER] Navigation retry {attempt}/3 due to: {e}", flush=True)
+            await asyncio.sleep(2)
     return page
 
 
@@ -315,7 +341,7 @@ async def scrape_columbia(
     run_id = run["id"]
     print(f"[RUN] Columbia Scrape Run ID: {run_id} (Date: {run['business_date']}, Status: {run['status']})")
 
-    scraper_path = Path("columbia_scraper.js")
+    scraper_path = SCRAPER_DIR / "columbia_scraper.js"
     scraper_code = scraper_path.read_text(encoding="utf-8")
 
     raw_products = []
@@ -326,14 +352,16 @@ async def scrape_columbia(
             print("Opening lean tab for Columbia scraper...", flush=True)
             page = await _create_lean_tab(browser, "https://www.columbiasportswear.co.in/")
 
+            limit_val = int(limit) if limit else 0
             print("Injecting and starting Columbia scraper...", flush=True)
             await page.evaluate(
-                """([code, token]) => {
+                """([code, token, limit]) => {
                     window.__SHOPIFY_TOKEN__ = token;
                     window.__IS_PLAYWRIGHT__ = true;
+                    if (limit > 0) window.__PRODUCT_LIMIT__ = limit;
                     window.eval(code);
                 }""",
-                [scraper_code, TOKEN]
+                [scraper_code, TOKEN, limit_val]
             )
 
             print("Columbia scraper is running. Waiting for completion...", flush=True)
@@ -346,18 +374,17 @@ async def scrape_columbia(
                 callback=progress_callback
             )
 
-            raw_products = await page.evaluate("() => window.output || []")
+            result = await page.evaluate("() => window.scraperResult || null")
+            if result and isinstance(result, dict):
+                raw_products = result.get("products", [])
+            else:
+                raw_products = await page.evaluate("() => window.output || []")
 
         finally:
-            if page:
-                print("[BROWSER] Closing Columbia tab to reclaim RAM...", flush=True)
-                try:
-                    await page.close()
-                except Exception:
-                    pass
-                global _ACTIVE_PAGE
-                _ACTIVE_PAGE = None
-                print("[BROWSER] Columbia tab destroyed. Memory reclaimed.", flush=True)
+            await close_shared_browser()
+            import gc
+            gc.collect()
+            print("[BROWSER] Columbia browser closed. Memory reclaimed.", flush=True)
 
     # 2. Normalize raw products into canonical product structures
     await update_run_stage(run_id, "products", client=cli)
@@ -365,8 +392,8 @@ async def scrape_columbia(
     if limit:
         norm_products = norm_products[:limit]
 
-    # 2. Batch Persist into Supabase in chunks of 500
-    batch_size = 500
+    # 2. Batch Persist into Supabase in chunks of 200
+    batch_size = 200
     print(f"\n[PERSISTENCE] Persisting {len(norm_products)} canonical Columbia products to Supabase (batches of {batch_size})...")
 
     db_products = await upsert_canonical_products_batch(norm_products, client=cli, batch_size=batch_size)
@@ -425,6 +452,496 @@ async def scrape_columbia(
 
 
 # =========================================================================
+# Adventuras Scraper (Browser JS + Supabase Persistence)
+# =========================================================================
+
+def group_adv_products(raw_items: List[Dict[str, Any]]) -> List[NormalizedProduct]:
+    """
+    Groups raw variant items from adv_scraper.js into canonical NormalizedProduct objects.
+    Each product has one canonical row per source_product_id with its variants JSON array.
+    """
+    grouped: Dict[str, Dict[str, Any]] = {}
+
+    for item in raw_items:
+        pid = str(item.get("product_id") or "").strip()
+        if not pid:
+            continue
+
+        if pid not in grouped:
+            grouped[pid] = {
+                "source_product_id": pid,
+                "title": item.get("title") or "",
+                "sku": item.get("sku") or None,
+                "ean": item.get("ean") or None,
+                "price": float(item.get("price") or 0.0),
+                "mrp": float(item.get("mrp") or 0.0) if item.get("mrp") else None,
+                "image_url": item.get("image_url") or "",
+                "url": item.get("url") or "",
+                "variants": [],
+            }
+
+        var = NormalizedVariant(
+            size=str(item.get("size") or ""),
+            sku=item.get("sku") or None,
+            available=True,
+            stock=0,
+            url=item.get("url") or "",
+        )
+        grouped[pid]["variants"].append(var)
+        p_val = float(item.get("price") or 0.0)
+        if p_val > 0 and (grouped[pid]["price"] == 0 or p_val < grouped[pid]["price"]):
+            grouped[pid]["price"] = p_val
+        m_val = float(item.get("mrp") or 0.0) if item.get("mrp") else None
+        if m_val and (grouped[pid]["mrp"] is None or m_val > grouped[pid]["mrp"]):
+            grouped[pid]["mrp"] = m_val
+
+    result = []
+    scraped_iso = datetime.now(timezone.utc).isoformat()
+    for pid, g in grouped.items():
+        result.append(
+            NormalizedProduct(
+                source="adv",
+                source_product_id=pid,
+                title=g["title"],
+                sku=g["sku"],
+                ean=g["ean"],
+                price=g["price"],
+                mrp=g["mrp"],
+                available=True,
+                image_url=g["image_url"],
+                url=g["url"],
+                variants=g["variants"],
+                scraped_at=scraped_iso,
+            )
+        )
+    return result
+
+
+async def scrape_adv(
+    limit: Optional[int] = None,
+    progress_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
+    client=None
+) -> Dict[str, Any]:
+    """
+    Executes the Adventuras browser scraper (adv_scraper.js) via Playwright,
+    then normalizes and persists all canonical products, variants, and price history to Supabase.
+    """
+    cli = client or get_supabase_client()
+    scraper_path = SCRAPER_DIR / "adv_scraper.js"
+    scraper_code = scraper_path.read_text(encoding="utf-8")
+
+    print("\n" + "=" * 60)
+    print("STARTING ADVENTURAS SCRAPER (BROWSER JS)")
+    if limit:
+        print(f"TEST MODE: Limited to {limit} products")
+    print("=" * 60, flush=True)
+
+    run = await get_or_create_daily_run("adv", client=cli)
+    run_id = run["id"]
+    print(f"[RUN] Adventuras Scrape Run ID: {run_id} (Date: {run['business_date']}, Status: {run['status']})")
+
+    raw_items = []
+    async with _SCRAPER_LOCK:
+        browser = await get_shared_browser()
+        page = None
+        try:
+            print("Opening lean tab for Adventuras scraper...", flush=True)
+            page = await _create_lean_tab(browser, "https://adventuras.in/")
+
+            limit_val = int(limit) if limit else 0
+            print("Injecting and starting Adventuras scraper...", flush=True)
+            await page.evaluate(
+                """([code, limit]) => {
+                    window.__IS_PLAYWRIGHT__ = true;
+                    if (limit > 0) window.__PRODUCT_LIMIT__ = limit;
+                    window.eval(code);
+                }""",
+                [scraper_code, limit_val]
+            )
+
+            print("Adventuras scraper is running. Waiting for completion...", flush=True)
+            await _wait_and_poll_progress(
+                page,
+                done_flag="__SCRAPER_DONE__",
+                progress_flag="__SCRAPER_PROGRESS__",
+                timeout_ms=300_000,
+                poll_interval=1.5,
+                callback=progress_callback
+            )
+
+            result = await page.evaluate("() => window.scraperResult || null")
+            if result and isinstance(result, dict):
+                raw_items = result.get("products", [])
+            else:
+                raw_items = await page.evaluate("() => window.output || []")
+
+        finally:
+            await close_shared_browser()
+            import gc
+            gc.collect()
+            print("[BROWSER] Adventuras browser closed. Memory reclaimed.", flush=True)
+
+    await update_run_stage(run_id, "products", client=cli)
+    norm_products = group_adv_products(raw_items)
+    if limit:
+        norm_products = norm_products[:limit]
+
+    batch_size = 200
+    print(f"\n[PERSISTENCE] Persisting {len(norm_products)} canonical Adventuras products to Supabase (batches of {batch_size})...")
+
+    db_products = await upsert_canonical_products_batch(norm_products, client=cli, batch_size=batch_size)
+    id_by_src = {p["source_product_id"]: p["id"] for p in db_products if "source_product_id" in p and "id" in p}
+
+    price_entries = []
+    progress_items = []
+    total_variants_persisted = 0
+    for prod in norm_products:
+        pid = id_by_src.get(prod.source_product_id)
+        if pid:
+            price_entries.append({
+                "product_id": pid,
+                "price": prod.price,
+                "mrp": prod.mrp
+            })
+            progress_items.append({
+                "product_id": pid,
+                "source_product_id": prod.source_product_id,
+                "variant_count": len(prod.variants)
+            })
+            total_variants_persisted += len(prod.variants)
+
+    price_records_count = await batch_record_prices_if_changed(
+        price_entries, scrape_run_id=run_id, client=cli, batch_size=batch_size
+    )
+
+    await batch_record_product_progress(
+        run_id, progress_items, status="completed", client=cli, batch_size=batch_size
+    )
+
+    persisted_count = len(progress_items)
+    failed_count = len(norm_products) - persisted_count
+    await update_run_counts(run_id, completed_delta=persisted_count, failed_delta=failed_count, client=cli)
+
+    await update_run_stage(run_id, "finalizing", client=cli)
+    export_path = await export_canonical_backup("adv", client=cli)
+    await complete_run(run_id, client=cli)
+
+    print("\n" + "=" * 60)
+    print(f"ADVENTURAS SCRAPING FINISHED: {persisted_count} products persisted")
+    print(f"Total Variants Persisted: {total_variants_persisted}")
+    print(f"Price Records Added: {price_records_count}")
+    print(f"Local Rolling Backup: {export_path.resolve()}")
+    print("=" * 60 + "\n", flush=True)
+
+    return {
+        "status": "completed",
+        "run_id": run_id,
+        "completed_products": persisted_count,
+        "failed_products": failed_count,
+        "total_variants": total_variants_persisted,
+        "price_records_added": price_records_count,
+        "export_file": str(export_path),
+        "products": [p.to_dict() for p in norm_products],
+    }
+
+
+# =========================================================================
+# Myntra Scraper (Browser JS + Supabase Persistence)
+# =========================================================================
+
+def group_myntra_products(raw_items: List[Dict[str, Any]]) -> List[NormalizedProduct]:
+    """
+    Groups raw variant items from myntra_scraper.js into canonical NormalizedProduct objects.
+    Each product has one canonical row per source_product_id with its variants JSON array.
+    """
+    grouped: Dict[str, Dict[str, Any]] = {}
+
+    for item in raw_items:
+        pid = str(item.get("product_id") or "").strip()
+        if not pid:
+            continue
+
+        if pid not in grouped:
+            grouped[pid] = {
+                "source_product_id": pid,
+                "title": item.get("title") or "",
+                "sku": item.get("sku") or None,
+                "ean": item.get("ean") or None,
+                "price": float(item.get("price") or 0.0),
+                "mrp": float(item.get("mrp") or 0.0) if item.get("mrp") else None,
+                "image_url": item.get("image_url") or "",
+                "url": item.get("url") or "",
+                "variants": [],
+            }
+
+        var = NormalizedVariant(
+            size=str(item.get("size") or ""),
+            sku=str(item.get("variant_id") or "") or None,
+            available=True,
+            stock=0,
+            url=item.get("url") or "",
+        )
+        grouped[pid]["variants"].append(var)
+        p_val = float(item.get("price") or 0.0)
+        if p_val > 0 and (grouped[pid]["price"] == 0 or p_val < grouped[pid]["price"]):
+            grouped[pid]["price"] = p_val
+        m_val = float(item.get("mrp") or 0.0) if item.get("mrp") else None
+        if m_val and (grouped[pid]["mrp"] is None or m_val > grouped[pid]["mrp"]):
+            grouped[pid]["mrp"] = m_val
+
+    result = []
+    scraped_iso = datetime.now(timezone.utc).isoformat()
+    for pid, g in grouped.items():
+        result.append(
+            NormalizedProduct(
+                source="myntra",
+                source_product_id=pid,
+                title=g["title"],
+                sku=g["sku"],
+                ean=g["ean"],
+                price=g["price"],
+                mrp=g["mrp"],
+                available=True,
+                image_url=g["image_url"],
+                url=g["url"],
+                variants=g["variants"],
+                scraped_at=scraped_iso,
+            )
+        )
+    return result
+
+
+async def fetch_myntra_raw_items(
+    limit: Optional[int] = None,
+    progress_callback: Optional[Callable[[Dict[str, Any]], Any]] = None
+) -> List[Dict[str, Any]]:
+    """
+    Directly fetches Myntra Columbia products matching scraper/myntra_scraper.js extraction logic.
+    Maintains session cookies from the web storefront and pages through the gateway search API.
+    """
+    rows = 50
+    page = 1
+    all_products: List[Dict[str, Any]] = []
+    pagination_ctx = None
+    scraped_iso = datetime.now(timezone.utc).isoformat()
+    limit_val = int(limit) if limit else 0
+
+    headers_base = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    async with httpx.AsyncClient(http2=False, headers=headers_base, follow_redirects=True, timeout=20.0) as client:
+        print("[MYNTRA] Initializing storefront session cookies...", flush=True)
+        try:
+            await client.get("https://www.myntra.com/")
+        except Exception as e:
+            print(f"[MYNTRA] Note: Homepage visit: {e}", flush=True)
+
+        while True:
+            offset = 0 if page == 1 else ((page - 1) * rows) - 1
+            url = (
+                f"https://www.myntra.com/gateway/v4/search/columbia"
+                f"?rawQuery=columbia&rows={rows}&o={offset}&plaEnabled=true&xdEnabled=false&isFacet=true&p={page}&pincode=500038"
+            )
+            api_headers = {
+                "Accept": "application/json",
+                "Referer": "https://www.myntra.com/columbia",
+                "x-meta-app": "channel=web",
+            }
+            if pagination_ctx:
+                api_headers["pagination-context"] = pagination_ctx
+
+            try:
+                resp = await client.get(url, headers=api_headers)
+            except Exception as e:
+                print(f"[MYNTRA] Request failed on page {page}: {e}", flush=True)
+                break
+
+            if resp.status_code != 200:
+                print(f"[MYNTRA] Non-200 HTTP status {resp.status_code} on page {page}", flush=True)
+                break
+
+            pagination_ctx = resp.headers.get("pagination-context")
+            data = resp.json()
+            products = (
+                data.get("products")
+                or (data.get("results") or {}).get("products")
+                or (data.get("searchData") or {}).get("results", {}).get("products")
+                or []
+            )
+
+            total_count = int(data.get("totalCount") or 0)
+            total_pages = max(1, (total_count + rows - 1) // rows)
+
+            for prod in products:
+                pid = str(prod.get("productId") or prod.get("id") or "").strip()
+                if not pid:
+                    continue
+
+                inv = prod.get("inventoryInfo")
+                size_entries = []
+                if isinstance(inv, list) and inv:
+                    size_entries = inv
+                else:
+                    raw_sizes = str(prod.get("sizes") or "")
+                    if raw_sizes:
+                        size_entries = [{"label": s.strip(), "skuId": ""} for s in raw_sizes.split(",") if s.strip()]
+
+                if not size_entries:
+                    size_entries = [{"label": "", "skuId": ""}]
+
+                for se in size_entries:
+                    size_label = se.get("label") or prod.get("size") or prod.get("sizeName") or prod.get("variantSize") or ""
+                    sku_id = str(se.get("skuId") or prod.get("buyButtonWinnerSkuId") or prod.get("variantId") or prod.get("variant_id") or prod.get("sku") or "")
+                    color = prod.get("primaryColour") or prod.get("color") or prod.get("colorName") or prod.get("variantColor") or ""
+                    landing = prod.get("landingPageUrl") or ""
+                    p_url = f"https://www.myntra.com/{landing.lstrip('/')}" if landing else ""
+                    disc_price = prod.get("discountedPrice")
+                    raw_price = prod.get("price")
+                    raw_mrp = prod.get("mrp")
+                    price_val = float(disc_price if disc_price is not None else (raw_price if raw_price is not None else (raw_mrp or 0.0)))
+                    mrp_val = float(raw_mrp if raw_mrp is not None else (raw_price if raw_price is not None else (disc_price or 0.0)))
+
+                    all_products.append({
+                        "product_id": pid,
+                        "source": "myntra",
+                        "sku": "",
+                        "ean": "",
+                        "size": size_label,
+                        "color": color,
+                        "variant_id": sku_id,
+                        "title": prod.get("productName") or prod.get("name") or "",
+                        "price": price_val,
+                        "mrp": mrp_val,
+                        "url": p_url,
+                        "image_url": prod.get("searchImage") or prod.get("image") or "",
+                        "available": True,
+                        "scraped_at": scraped_iso,
+                    })
+
+                    if limit_val > 0 and len(all_products) >= limit_val:
+                        break
+                if limit_val > 0 and len(all_products) >= limit_val:
+                    break
+
+            if progress_callback:
+                try:
+                    await progress_callback({
+                        "stage": "Collecting Products",
+                        "current": page,
+                        "total": total_pages,
+                        "variant_count": len(all_products)
+                    })
+                except Exception:
+                    pass
+
+            print(f"[MYNTRA] Page {page}/{total_pages} processed ({len(products)} products, cumulative items: {len(all_products)})", flush=True)
+
+            if limit_val > 0 and len(all_products) >= limit_val:
+                print(f"[MYNTRA] Reached product limit {limit_val}. Stopping.", flush=True)
+                break
+
+            has_next = data.get("hasNextPage", False)
+            if not has_next or len(products) == 0 or page >= total_pages:
+                print("[MYNTRA] No more pages available. Finished collection.", flush=True)
+                break
+
+            page += 1
+            await asyncio.sleep(0.3)
+
+    return all_products
+
+
+async def scrape_myntra(
+    limit: Optional[int] = None,
+    progress_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
+    client=None
+) -> Dict[str, Any]:
+    """
+    Executes the Myntra Columbia scraper, normalizes products/variants,
+    and persists canonical records and price history to Supabase.
+    """
+    cli = client or get_supabase_client()
+
+    print("\n" + "=" * 60)
+    print("STARTING MYNTRA COLUMBIA SCRAPER")
+    if limit:
+        print(f"TEST MODE: Limited to {limit} products")
+    print("=" * 60, flush=True)
+
+    run = await get_or_create_daily_run("myntra", client=cli)
+    run_id = run["id"]
+    print(f"[RUN] Myntra Scrape Run ID: {run_id} (Date: {run['business_date']}, Status: {run['status']})")
+
+    raw_items = await fetch_myntra_raw_items(limit=limit, progress_callback=progress_callback)
+
+    await update_run_stage(run_id, "products", client=cli)
+    norm_products = group_myntra_products(raw_items)
+    if limit:
+        norm_products = norm_products[:limit]
+
+    batch_size = 200
+    print(f"\n[PERSISTENCE] Persisting {len(norm_products)} canonical Myntra products to Supabase (batches of {batch_size})...")
+
+    db_products = await upsert_canonical_products_batch(norm_products, client=cli, batch_size=batch_size)
+    id_by_src = {p["source_product_id"]: p["id"] for p in db_products if "source_product_id" in p and "id" in p}
+
+    price_entries = []
+    progress_items = []
+    total_variants_persisted = 0
+    for prod in norm_products:
+        pid = id_by_src.get(prod.source_product_id)
+        if pid:
+            price_entries.append({
+                "product_id": pid,
+                "price": prod.price,
+                "mrp": prod.mrp
+            })
+            progress_items.append({
+                "product_id": pid,
+                "source_product_id": prod.source_product_id,
+                "variant_count": len(prod.variants)
+            })
+            total_variants_persisted += len(prod.variants)
+
+    price_records_count = await batch_record_prices_if_changed(
+        price_entries, scrape_run_id=run_id, client=cli, batch_size=batch_size
+    )
+
+    await batch_record_product_progress(
+        run_id, progress_items, status="completed", client=cli, batch_size=batch_size
+    )
+
+    persisted_count = len(progress_items)
+    failed_count = len(norm_products) - persisted_count
+    await update_run_counts(run_id, completed_delta=persisted_count, failed_delta=failed_count, client=cli)
+
+    await update_run_stage(run_id, "finalizing", client=cli)
+    export_path = await export_canonical_backup("myntra", client=cli)
+    await complete_run(run_id, client=cli)
+
+    print("\n" + "=" * 60)
+    print(f"MYNTRA SCRAPING FINISHED: {persisted_count} products persisted")
+    print(f"Total Variants Persisted: {total_variants_persisted}")
+    print(f"Price Records Added: {price_records_count}")
+    print(f"Local Rolling Backup: {export_path.resolve()}")
+    print("=" * 60 + "\n", flush=True)
+
+    return {
+        "status": "completed",
+        "run_id": run_id,
+        "completed_products": persisted_count,
+        "failed_products": failed_count,
+        "total_variants": total_variants_persisted,
+        "price_records_added": price_records_count,
+        "export_file": str(export_path),
+        "products": [p.to_dict() for p in norm_products],
+    }
+
+
+# =========================================================================
 # Tata CLiQ Scraper (Browser JS + Supabase Persistence)
 # =========================================================================
 
@@ -468,7 +985,7 @@ async def scrape_tata(
     then normalizes and persists all canonical products, variants, and price history to Supabase.
     """
     cli = client or get_supabase_client()
-    scraper_path = Path("tata_scraper.js")
+    scraper_path = SCRAPER_DIR / "tata_scraper.js"
     scraper_code = scraper_path.read_text(encoding="utf-8")
 
     # Timeout for full Tata scrape (default 3600s / 60 mins)
@@ -526,22 +1043,18 @@ async def scrape_tata(
                 raw_items = await page.evaluate("() => window.output || []")
 
         finally:
-            if page:
-                print("[BROWSER] Closing Tata CLiQ tab to reclaim RAM...", flush=True)
-                try:
-                    await page.close()
-                except Exception:
-                    pass
-                _ACTIVE_PAGE = None
-                print("[BROWSER] Tata CLiQ tab destroyed. Memory reclaimed.", flush=True)
+            await close_shared_browser()
+            import gc
+            gc.collect()
+            print("[BROWSER] Tata CLiQ browser closed. Memory reclaimed.", flush=True)
 
-    # 2. Batch Persist into Supabase in chunks of 500
+    # 2. Batch Persist into Supabase in chunks of 200
     await update_run_stage(run_id, "variants", client=cli)
     if limit:
         raw_items = raw_items[:limit]
 
     norm_products = [normalize_tata_js_product(item) for item in raw_items]
-    batch_size = 500
+    batch_size = 200
     print(f"\n[PERSISTENCE] Persisting {len(norm_products)} Tata CLiQ products to Supabase (batches of {batch_size})...")
 
     db_products = await upsert_canonical_products_batch(norm_products, client=cli, batch_size=batch_size)
@@ -603,202 +1116,248 @@ async def scrape_tata(
 
 
 # =========================================================================
-# Sequential Pipeline Coordinator (Columbia -> Tata CLiQ)
+# Sequential Pipeline Coordinator (Columbia -> Adventuras -> Myntra -> Tata CLiQ)
 # =========================================================================
 
-async def run_sequential_pipeline(job_id: str, limit: Optional[int] = None):
+ORDERED_SCRAPERS = ["columbia", "adv", "myntra", "tata"]
+
+SCRAPER_KEY_MAP = {
+    "columbia": "columbia",
+    "adv": "adv",
+    "myntra": "myntra",
+    "tata": "tatacliq",
+}
+
+SCRAPER_FUNCS = {
+    "columbia": scrape_columbia,
+    "adv": scrape_adv,
+    "myntra": scrape_myntra,
+    "tata": scrape_tata,
+}
+
+
+def normalize_scraper_names(scrapers: Optional[List[str]]) -> List[str]:
     """
-    Coordinates sequential execution of Columbia -> Tata CLiQ with live job status updates
-    and unified Supabase persistence.
+    Normalizes scraper aliases and strictly enforces canonical sequential execution order:
+    columbia -> adv -> myntra -> tata.
     """
-    from jobs import update_job
+    if not scrapers:
+        return list(ORDERED_SCRAPERS)
+
+    alias_map = {
+        "columbia": "columbia",
+        "columbiasportswear": "columbia",
+        "adv": "adv",
+        "adventuras": "adv",
+        "myntra": "myntra",
+        "tata": "tata",
+        "tatacliq": "tata"
+    }
+
+    requested = set()
+    for s in scrapers:
+        if not s:
+            continue
+        norm = alias_map.get(str(s).strip().lower())
+        if norm:
+            requested.add(norm)
+
+    filtered = [s for s in ORDERED_SCRAPERS if s in requested]
+    return filtered or list(ORDERED_SCRAPERS)
+
+
+async def run_sequential_pipeline(
+    job_id: str,
+    selected_scrapers: Optional[List[str]] = None,
+    limit: Optional[int] = None
+):
+    """
+    Coordinates sequential execution of scrapers (columbia -> adv -> myntra -> tata)
+    with live job status updates and unified Supabase persistence.
+    Supports running any subset of scrapers selectively.
+    """
+    from jobs import update_job, get_job
+
+    active_scrapers = normalize_scraper_names(selected_scrapers)
+    num_scrapers = len(active_scrapers)
+    weight_per_scraper = 100.0 / num_scrapers if num_scrapers > 0 else 100.0
+
+    print(f"\n[PIPELINE {job_id}] 🚀 Starting sequential pipeline with scrapers: {active_scrapers}")
+
+    # Mark initial status
+    first_scraper = active_scrapers[0]
+    first_key = SCRAPER_KEY_MAP[first_scraper]
+    init_scrapers_status = {SCRAPER_KEY_MAP[s]: {"status": "queued"} for s in active_scrapers}
+    init_scrapers_status[first_key] = {"status": "running"}
 
     await update_job(
         job_id,
         status="running",
-        current_scraper="columbia",
-        scrapers={"columbia": {"status": "running"}},
+        current_scraper=first_key,
+        scrapers=init_scrapers_status,
     )
-
-    # Progress callback for Columbia
-    async def columbia_progress_cb(prog: dict):
-        curr = prog.get("current", 0)
-        tot = prog.get("total", 1)
-        pct = round((curr / tot) * 100, 1) if tot > 0 else 0.0
-        overall_pct = round(pct * 0.15, 1)
-        await update_job(
-            job_id,
-            progress_percentage=overall_pct,
-            scrapers={
-                "columbia": {
-                    "stage": prog.get("stage", "Running"),
-                    "current": curr,
-                    "total": tot
-                }
-            }
-        )
-
-    # Progress callback for Tata CLiQ
-    async def tata_progress_cb(prog: dict):
-        stage = prog.get("stage", "")
-        curr = prog.get("current", 0)
-        tot = prog.get("total", 1)
-        var_count = prog.get("variant_count", 0)
-        pct = (curr / tot) if tot > 0 else 0.0
-
-        if "Listing" in stage or "Collecting Products" in stage:
-            overall_pct = round(15.0 + (pct * 15.0), 1)
-        else:
-            overall_pct = round(30.0 + (pct * 70.0), 1)
-
-        tata_metrics = {
-            "stage": stage,
-            "current": curr,
-            "total": tot,
-        }
-        kwargs = {
-            "progress_percentage": min(99.0, overall_pct),
-        }
-        if var_count > 0:
-            tata_metrics["variant_count"] = var_count
-            kwargs["variant_count"] = var_count
-
-        kwargs["scrapers"] = {"tatacliq": tata_metrics}
-        await update_job(job_id, **kwargs)
 
     t_pipeline_start = time.perf_counter()
-    col_products = 0
+    cumulative_products = 0
+    cumulative_variants = 0
 
-    # Check if Columbia scraper already completed in this job (e.g. on auto-resume after server restart)
-    from jobs import get_job
     existing_job = await get_job(job_id)
-    col_already_completed = (
-        existing_job
-        and existing_job.get("scrapers", {}).get("columbia", {}).get("status") == "completed"
-    )
 
-    if col_already_completed:
-        col_products = existing_job.get("scrapers", {}).get("columbia", {}).get("product_count", 0)
-        print(f"[JOB {job_id}] ⏩ Columbia scraper already completed ({col_products} products). Resuming straight to Tata CLiQ...", flush=True)
-    else:
-        # Step 1: Columbia Scraper
+    for idx, s_name in enumerate(active_scrapers):
+        s_key = SCRAPER_KEY_MAP[s_name]
+        step_base_pct = idx * weight_per_scraper
+
+        # Check if already completed in this job (for resumption across restarts)
+        already_completed = (
+            existing_job
+            and existing_job.get("scrapers", {}).get(s_key, {}).get("status") == "completed"
+        )
+        if already_completed:
+            prev_p = existing_job.get("scrapers", {}).get(s_key, {}).get("product_count", 0)
+            prev_v = existing_job.get("scrapers", {}).get(s_key, {}).get("variant_count", 0)
+            cumulative_products += prev_p
+            cumulative_variants += prev_v
+            print(f"[JOB {job_id}] ⏩ {s_name.upper()} already completed ({prev_p} products). Resuming next...", flush=True)
+            continue
+
+        await update_job(
+            job_id,
+            current_scraper=s_key,
+            scrapers={s_key: {"status": "running"}},
+        )
+
+        async def scraper_progress_cb(prog: dict):
+            curr = prog.get("current", 0)
+            tot = prog.get("total", 1)
+            stage = prog.get("stage", "Running")
+            local_pct = (curr / tot) if tot > 0 else 0.0
+            overall_pct = step_base_pct + (local_pct * weight_per_scraper)
+            metrics = {
+                "stage": stage,
+                "current": curr,
+                "total": tot,
+            }
+            var_count = prog.get("variant_count", 0)
+            kwargs = {
+                "progress_percentage": min(99.0, round(overall_pct, 1)),
+            }
+            if var_count > 0:
+                metrics["variant_count"] = var_count
+                kwargs["variant_count"] = cumulative_variants + var_count
+
+            kwargs["scrapers"] = {s_key: metrics}
+            await update_job(job_id, **kwargs)
+
         try:
             t0 = time.perf_counter()
-            columbia_res = await scrape_columbia(limit=limit, progress_callback=columbia_progress_cb)
-            col_dur = round(time.perf_counter() - t0, 1)
-            col_products = columbia_res.get("completed_products", len(columbia_res.get("products", [])))
+            runner_fn = SCRAPER_FUNCS[s_name]
+            res = await runner_fn(limit=limit, progress_callback=scraper_progress_cb)
+            dur = round(time.perf_counter() - t0, 1)
 
+            prods = res.get("completed_products", len(res.get("products", [])))
+            vars_cnt = res.get("total_variants", 0)
+            cumulative_products += prods
+            cumulative_variants += vars_cnt
+
+            completed_pct = round((idx + 1) * weight_per_scraper, 1)
             await update_job(
                 job_id,
-                product_count=col_products,
-                progress_percentage=15.0,
+                product_count=cumulative_products,
+                variant_count=cumulative_variants,
+                progress_percentage=min(100.0, completed_pct),
                 scrapers={
-                    "columbia": {
+                    s_key: {
                         "status": "completed",
-                        "product_count": col_products,
-                        "duration_seconds": col_dur,
+                        "product_count": prods,
+                        "variant_count": vars_cnt,
+                        "duration_seconds": dur,
                         "error": None
                     }
                 }
             )
+            print(f"[JOB {job_id}] ✅ {s_name.upper()} COMPLETED ({prods} products, {vars_cnt} variants, {dur}s)", flush=True)
+
         except Exception as e:
-            col_dur = round(time.perf_counter() - t_pipeline_start, 1)
-            err_msg = f"Columbia scraper failed: {e}"
+            dur = round(time.perf_counter() - t_pipeline_start, 1)
+            err_msg = f"{s_name.upper()} scraper failed: {e}"
             print(f"[JOB {job_id}] ❌ {err_msg}", flush=True)
-            await update_job(
-                job_id,
-                status="failed",
-                current_scraper="columbia",
-                error=err_msg,
-                scrapers={
-                    "columbia": {
-                        "status": "failed",
-                        "duration_seconds": col_dur,
-                        "error": str(e)
-                    },
-                    "tatacliq": {
-                        "status": "skipped",
-                        "error": "Skipped due to Columbia failure (fail-fast)"
-                    }
-                }
-            )
-            return
 
-    # Step 2: Tata CLiQ Scraper (Only executed if Columbia passed)
-    await update_job(
-        job_id,
-        current_scraper="tatacliq",
-        scrapers={"tatacliq": {"status": "running"}},
-    )
-
-    try:
-        t0 = time.perf_counter()
-        tata_res = await scrape_tata(limit=limit, progress_callback=tata_progress_cb)
-        tata_dur = round(time.perf_counter() - t0, 1)
-        tata_products = tata_res.get("completed_products", 0)
-        tata_variants = tata_res.get("total_variants", 0)
-
-        total_prods = col_products + tata_products
-        await update_job(
-            job_id,
-            status="completed",
-            current_scraper=None,
-            progress_percentage=100.0,
-            product_count=total_prods,
-            variant_count=tata_variants,
-            error=None,
-            scrapers={
-                "tatacliq": {
-                    "status": "completed",
-                    "product_count": tata_products,
-                    "variant_count": tata_variants,
-                    "duration_seconds": tata_dur,
-                    "error": None
-                }
-            }
-        )
-        print(f"[JOB {job_id}] ✅ ALL SCRAPERS COMPLETED SUCCESSFULLY ({total_prods} products, {tata_variants} variants)", flush=True)
-
-    except Exception as e:
-        tata_dur = round(time.perf_counter() - t0, 1)
-        err_msg = f"Tata CLiQ scraper failed: {e}"
-        print(f"[JOB {job_id}] ❌ {err_msg}", flush=True)
-        await update_job(
-            job_id,
-            status="failed",
-            current_scraper="tatacliq",
-            error=err_msg,
-            scrapers={
-                "tatacliq": {
+            scrapers_update = {
+                s_key: {
                     "status": "failed",
-                    "duration_seconds": tata_dur,
+                    "duration_seconds": dur,
                     "error": str(e)
                 }
             }
-        )
+            # Mark any remaining scrapers as skipped
+            for rem_name in active_scrapers[idx + 1:]:
+                rem_key = SCRAPER_KEY_MAP[rem_name]
+                scrapers_update[rem_key] = {
+                    "status": "skipped",
+                    "error": f"Skipped due to {s_name} failure (fail-fast)"
+                }
+
+            await update_job(
+                job_id,
+                status="failed",
+                current_scraper=s_key,
+                error=err_msg,
+                scrapers=scrapers_update
+            )
+            return
+
+    # All requested scrapers succeeded
+    await update_job(
+        job_id,
+        status="completed",
+        current_scraper=None,
+        progress_percentage=100.0,
+        product_count=cumulative_products,
+        variant_count=cumulative_variants,
+        error=None,
+    )
+    print(f"\n[JOB {job_id}] 🎉 ALL REQUESTED SCRAPERS ({', '.join(active_scrapers)}) COMPLETED SUCCESSFULLY!", flush=True)
 
 
 main = scrape_columbia
 
 
 async def _run_cli():
-    parser = argparse.ArgumentParser(description="Unified Columbia & Tata Scraper Pipeline")
-    parser.add_argument("target", nargs="?", default="columbia", help="Target scraper: 'columbia', 'tata', or 'pipeline'")
-    parser.add_argument("--scraper", type=str, default=None, help="Scraper name: 'columbia', 'tata', or 'pipeline'")
-    parser.add_argument("--limit", type=int, default=None, help="Product limit for test mode (applies to Tata)")
+    parser = argparse.ArgumentParser(description="Unified Columbia Scrapers Pipeline")
+    parser.add_argument("target", nargs="?", default=None, help="Target scraper: 'columbia', 'adv', 'myntra', 'tata', or 'pipeline'")
+    parser.add_argument("--scraper", type=str, default=None, help="Scraper name: 'columbia', 'adv', 'myntra', 'tata', or 'pipeline'")
+    parser.add_argument("--scrapers", type=str, default=None, help="Comma-separated scrapers e.g. 'columbia,adv' or 'all'")
+    parser.add_argument("--limit", type=int, default=None, help="Product limit for test mode")
     args = parser.parse_args()
 
-    target = (args.scraper or args.target).lower()
+    scrapers_arg = args.scrapers
+    target_arg = args.scraper or args.target
 
     try:
-        if target in ("tata", "tatacliq"):
-            await scrape_tata(limit=args.limit)
-        elif target in ("pipeline", "all"):
+        if scrapers_arg:
+            if scrapers_arg.strip().lower() in ("all", "pipeline"):
+                selected = list(ORDERED_SCRAPERS)
+            else:
+                selected = [s.strip() for s in scrapers_arg.split(",") if s.strip()]
             from jobs import create_job
-            job = await create_job()
-            await run_sequential_pipeline(job["job_id"], limit=args.limit)
+            job = await create_job(scrapers=selected)
+            await run_sequential_pipeline(job["job_id"], selected_scrapers=selected, limit=args.limit)
+        elif target_arg:
+            target = target_arg.lower()
+            if target in ("pipeline", "all"):
+                from jobs import create_job
+                job = await create_job()
+                await run_sequential_pipeline(job["job_id"], limit=args.limit)
+            elif target in ("tata", "tatacliq"):
+                await scrape_tata(limit=args.limit)
+            elif target in ("adv", "adventuras"):
+                await scrape_adv(limit=args.limit)
+            elif target in ("myntra",):
+                await scrape_myntra(limit=args.limit)
+            else:
+                await scrape_columbia(limit=args.limit)
         else:
-            await scrape_columbia()
+            await scrape_columbia(limit=args.limit)
     finally:
         await close_shared_browser()
 
