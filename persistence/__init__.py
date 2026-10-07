@@ -9,6 +9,10 @@ from persistence.run_store import (
     update_run_counts,
     complete_run,
     fail_run,
+    stop_run,
+    save_run_report,
+    get_daily_run_report,
+    get_all_daily_reports,
     get_business_date,
     get_scraper_id
 )
@@ -45,6 +49,10 @@ __all__ = [
     "update_run_counts",
     "complete_run",
     "fail_run",
+    "stop_run",
+    "save_run_report",
+    "get_daily_run_report",
+    "get_all_daily_reports",
     "get_business_date",
     "get_scraper_id",
     "get_completed_listing_pages",

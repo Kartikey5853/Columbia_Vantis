@@ -17,6 +17,101 @@ MAX_STORED_JOBS = 20
 # Active background asyncio task tracking
 _PIPELINE_TASK: Optional[asyncio.Task] = None
 
+# Stop request tracking to allow Swagger / API cancellation and prevent restart loops
+STOP_MARKER_FILE = JOB_STORE_DIR / "stop_requested.json"
+BOOT_TRACKER_FILE = JOB_STORE_DIR / "startup_tracker.json"
+_STOP_REQUESTED = False
+
+
+def request_stop(reason: str = "Stopped by user request") -> Dict[str, Any]:
+    """Flag the pipeline to stop immediately and persist to disk to avoid restart loops."""
+    global _STOP_REQUESTED
+    _STOP_REQUESTED = True
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    stop_data = {
+        "stopped_at": datetime.now(timezone.utc).isoformat(),
+        "reason": reason,
+        "date": today
+    }
+    try:
+        STOP_MARKER_FILE.write_text(json.dumps(stop_data, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"[JOBS] Notice: Failed to write stop marker file: {e}", flush=True)
+    return stop_data
+
+
+def clear_stop_flag() -> None:
+    """Clear stop flags to allow new jobs to proceed."""
+    global _STOP_REQUESTED
+    _STOP_REQUESTED = False
+    try:
+        if STOP_MARKER_FILE.exists():
+            STOP_MARKER_FILE.unlink()
+    except Exception:
+        pass
+
+
+def is_stop_requested() -> bool:
+    """Checks if a stop has been requested in-memory or persisted for today."""
+    global _STOP_REQUESTED
+    if _STOP_REQUESTED:
+        return True
+    try:
+        if STOP_MARKER_FILE.exists():
+            data = json.loads(STOP_MARKER_FILE.read_text(encoding="utf-8"))
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            if data.get("date") == today:
+                _STOP_REQUESTED = True
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def get_stop_reason() -> str:
+    """Return why the stop was requested."""
+    try:
+        if STOP_MARKER_FILE.exists():
+            data = json.loads(STOP_MARKER_FILE.read_text(encoding="utf-8"))
+            return data.get("reason", "Stopped by user request")
+    except Exception:
+        pass
+    return "Stopped by user request"
+
+
+def track_boot_trigger(max_retries: int = 3) -> bool:
+    """
+    Guards against infinite boot-crash loops:
+    Returns True if auto-boot trigger is permitted; False if crash limit reached today.
+    """
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    count = 0
+    try:
+        if BOOT_TRACKER_FILE.exists():
+            data = json.loads(BOOT_TRACKER_FILE.read_text(encoding="utf-8"))
+            if data.get("date") == today:
+                count = int(data.get("count", 0))
+    except Exception:
+        count = 0
+
+    if count >= max_retries:
+        return False
+
+    try:
+        BOOT_TRACKER_FILE.write_text(json.dumps({"date": today, "count": count + 1}, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+    return True
+
+
+def reset_boot_tracker() -> None:
+    """Resets boot tracker once scrapers successfully complete."""
+    try:
+        if BOOT_TRACKER_FILE.exists():
+            BOOT_TRACKER_FILE.unlink()
+    except Exception:
+        pass
+
 
 def set_pipeline_task(task: Optional[asyncio.Task]) -> None:
     global _PIPELINE_TASK
@@ -33,6 +128,40 @@ def get_pipeline_task() -> Optional[asyncio.Task]:
 def is_pipeline_running() -> bool:
     task = get_pipeline_task()
     return task is not None and not task.done()
+
+
+async def stop_active_pipeline(reason: str = "Stopped by user request via Swagger / API") -> Dict[str, Any]:
+    """
+    Cancels active pipeline task, updates active job to stopped, and prevents restart loops.
+    """
+    global _ACTIVE_JOB_ID, _PIPELINE_TASK
+    stop_data = request_stop(reason)
+    stopped_job_id = None
+
+    # Cancel in-memory pipeline task
+    task = get_pipeline_task()
+    if task and not task.done():
+        task.cancel()
+        _PIPELINE_TASK = None
+
+    async with _JOB_LOCK:
+        active = await get_active_job()
+        if active:
+            stopped_job_id = active.get("job_id")
+            active["status"] = "failed"
+            active["error"] = f"STOPPED: {reason}"
+            active["completed_at"] = datetime.now(timezone.utc).isoformat()
+            if stopped_job_id:
+                _JOBS[stopped_job_id] = active
+                _save_job_to_disk(active)
+            _ACTIVE_JOB_ID = None
+
+    return {
+        "status": "stopped",
+        "message": f"Pipeline successfully halted: {reason}",
+        "stopped_job": stopped_job_id,
+        "stop_details": stop_data
+    }
 
 
 def find_orphaned_job() -> Optional[Dict[str, Any]]:

@@ -263,6 +263,16 @@ async def fail_run(
         return res[0] if res else {}
 
 
+async def stop_run(
+    run_id: str,
+    reason: str = "Stopped by user request",
+    report: Optional[Dict[str, Any]] = None,
+    client: Optional[SupabaseClient] = None
+) -> Dict[str, Any]:
+    """Marks a scrape run as stopped/paused in Supabase."""
+    return await fail_run(run_id, error=f"STOPPED: {reason}", report=report, client=client)
+
+
 async def get_daily_scrapers_summary(
     business_date: Optional[str] = None,
     client: Optional[SupabaseClient] = None

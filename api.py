@@ -18,8 +18,30 @@ if hasattr(sys.stderr, "reconfigure"):
     except Exception:
         pass
 
-from jobs import create_job, get_job, get_active_job, is_pipeline_running, set_pipeline_task, find_orphaned_job
-from runner import scrape_columbia, scrape_tata, run_sequential_pipeline, close_shared_browser
+from jobs import (
+    create_job,
+    get_job,
+    get_active_job,
+    is_pipeline_running,
+    set_pipeline_task,
+    find_orphaned_job,
+    request_stop,
+    clear_stop_flag,
+    is_stop_requested,
+    get_stop_reason,
+    stop_active_pipeline,
+    track_boot_trigger,
+    reset_boot_tracker
+)
+from runner import (
+    scrape_columbia,
+    scrape_adv,
+    scrape_myntra,
+    scrape_tata,
+    run_sequential_pipeline,
+    close_shared_browser,
+    stop_current_scraper
+)
 from persistence import get_all_canonical_products, get_database_storage_stats
 
 
@@ -84,6 +106,33 @@ async def check_and_trigger_scrapers(force: bool = False) -> Dict[str, Any]:
     canonical_order = ["columbia", "adv", "myntra", "tata"]
     pending_scrapers = []
     completed_scrapers = []
+
+    if force:
+        clear_stop_flag()
+        reset_boot_tracker()
+    else:
+        if is_stop_requested():
+            reason = get_stop_reason()
+            msg = f"Startup auto-trigger suppressed because scraper was manually stopped today ({reason}). Use POST /scrape or /deploy-trigger?force=true to restart."
+            print(f"[DEPLOY/STARTUP TRIGGER] 🛑 {msg}\n", flush=True)
+            return {
+                "status": "stopped_by_user",
+                "business_date": b_date,
+                "message": msg,
+                "completed_scrapers": [],
+                "pending_scrapers": canonical_order,
+            }
+
+        if not track_boot_trigger(max_retries=3):
+            msg = "Crash loop guard: Server auto-triggered 3 times today without finishing. Auto-trigger paused to prevent crash loops. Trigger manually via Swagger /scrape to resume."
+            print(f"[DEPLOY/STARTUP TRIGGER] ⚠️ {msg}\n", flush=True)
+            return {
+                "status": "crash_guard_paused",
+                "business_date": b_date,
+                "message": msg,
+                "completed_scrapers": [],
+                "pending_scrapers": canonical_order,
+            }
 
     for name in canonical_order:
         s_data = summary.get(name, {})
@@ -175,6 +224,7 @@ async def root():
         "pipeline_running": is_pipeline_running(),
         "endpoints": {
             "deploy_trigger": "POST /deploy-trigger (or GET /deploy-trigger)",
+            "stop_pipeline": "POST /scrape/stop (or GET /scrape/stop)",
             "trigger_job": "POST /scrape?scrapers=columbia,adv,myntra,tata",
             "check_status": "GET /scrape/status/{job_id}",
             "active_status": "GET /scrape/status",
@@ -186,6 +236,23 @@ async def root():
             "db_diagnostics": "GET /db/diagnostics"
         }
     }
+
+
+@app.post("/scrape/stop", tags=["Scraper Pipeline"])
+@app.get("/scrape/stop", tags=["Scraper Pipeline"])
+async def stop_pipeline_endpoint(
+    reason: str = Query("Stopped by user request via API / Swagger", description="Reason for stopping the active scraper")
+):
+    """
+    🛑 EMERGENCY STOP SWITCH:
+    Immediately halts the currently executing scraper pipeline.
+    Cancels background execution tasks, aborts active browser pages,
+    marks active jobs and Supabase runs as stopped,
+    and suppresses automatic startup restart loops.
+    """
+    await stop_current_scraper(reason=reason)
+    res = await stop_active_pipeline(reason=reason)
+    return JSONResponse(status_code=200, content=res)
 
 
 @app.post("/deploy-trigger")
@@ -247,6 +314,10 @@ async def trigger_scrape_job(
     selected = [alias_map.get(s.lower(), s.lower()) for s in selected]
     canonical_order = ["columbia", "adv", "myntra", "tata"]
     ordered_selected = [s for s in canonical_order if s in selected] or canonical_order
+
+    clear_stop_flag()
+    if force:
+        reset_boot_tracker()
 
     # If force=False, filter out scrapers that are already completed today
     if not force:

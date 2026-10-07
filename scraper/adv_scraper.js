@@ -4,6 +4,13 @@
     const LIMIT = 250;
 
     window.output = [];
+    window.__ADVENTURAS_UNSAVED__ = [];
+
+    window.drainUnsavedProducts = function () {
+        const chunk = window.__ADVENTURAS_UNSAVED__ || [];
+        window.__ADVENTURAS_UNSAVED__ = [];
+        return chunk;
+    };
 
     const progressStartedAt = Date.now();
     window.updateProgress = function (progress) {
@@ -29,12 +36,19 @@
     };
 
     const sleep = ms => new Promise(r => setTimeout(r, ms));
-    const randomDelay = () => 1200 + Math.floor(Math.random() * 1000);
+    // Slower pacing to minimize CPU and RAM spikes on containerized environments
+    const randomDelay = () => 2000 + Math.floor(Math.random() * 1000);
 
-    let page = 1;
+    let page = window.__START_PAGE__ ? Number(window.__START_PAGE__) : 1;
     const limit = window.__PRODUCT_LIMIT__ ? Number(window.__PRODUCT_LIMIT__) : 0;
+    let totalItemsEmitted = 0;
 
     while (true) {
+        if (window.__STOP_REQUESTED__ === true) {
+            console.log("[ADV] Stop requested from host. Exiting pagination loop gracefully.");
+            break;
+        }
+
         console.log(`Fetching Page ${page}...`);
         window.updateProgress({ stage: "Collecting Products", current: page, total: page + 1 });
 
@@ -95,7 +109,7 @@
 
             pageColumbiaCount++;
             for (const variant of (product.variants || [])) {
-                window.output.push({
+                const item = {
                     source: "adventuras",
                     product_id: String(product.id),
                     sku: variant.sku || "",
@@ -110,8 +124,12 @@
                         product.images?.[0]?.src || "",
                     url:
                         `${BASE_URL}/products/${product.handle}`
-                });
-                if (limit > 0 && window.output.length >= limit) {
+                };
+                window.output.push(item);
+                window.__ADVENTURAS_UNSAVED__.push(item);
+                totalItemsEmitted++;
+
+                if (limit > 0 && totalItemsEmitted >= limit) {
                     limitReached = true;
                     break;
                 }
@@ -122,7 +140,7 @@
         }
 
         console.log(
-            `Page ${page}: ${data.products.length} products (${pageColumbiaCount} Columbia). Total SKUs so far: ${window.output.length}`
+            `Page ${page}: ${data.products.length} products (${pageColumbiaCount} Columbia). Total SKUs so far: ${totalItemsEmitted}`
         );
 
         if (limitReached) {

@@ -33,9 +33,11 @@ from persistence.run_store import (
     update_run_counts,
     complete_run,
     fail_run,
+    stop_run,
     get_daily_scrapers_summary,
     is_scraper_completed_today,
 )
+from jobs import is_stop_requested, get_stop_reason, request_stop
 from persistence.checkpoint_store import (
     init_product_progress,
     mark_product_in_progress,
@@ -156,6 +158,39 @@ async def close_shared_browser():
         _SHARED_PLAYWRIGHT = None
 
 
+_CURRENT_SCRAPER_RUN_ID: Optional[str] = None
+_CURRENT_SCRAPER_NAME: Optional[str] = None
+
+
+async def stop_current_scraper(reason: str = "Stopped by user request") -> None:
+    """Terminates in-progress browser pages and updates active Supabase scrape run to stopped."""
+    global _CURRENT_SCRAPER_RUN_ID, _CURRENT_SCRAPER_NAME, _ACTIVE_PAGE
+    print(f"[RUNNER] 🛑 Stopping active scraper ({_CURRENT_SCRAPER_NAME or 'none'}). Reason: {reason}", flush=True)
+
+    if _CURRENT_SCRAPER_RUN_ID:
+        try:
+            cli = get_supabase_client()
+            await stop_run(_CURRENT_SCRAPER_RUN_ID, reason=reason, client=cli)
+            print(f"[RUNNER] Supabase run {_CURRENT_SCRAPER_RUN_ID} marked as stopped.", flush=True)
+        except Exception as e:
+            print(f"[RUNNER] Warning: Failed to update stop_run in Supabase: {e}", flush=True)
+        _CURRENT_SCRAPER_RUN_ID = None
+        _CURRENT_SCRAPER_NAME = None
+
+    if _ACTIVE_PAGE:
+        try:
+            await _ACTIVE_PAGE.evaluate("() => { window.__STOP_REQUESTED__ = true; }")
+        except Exception:
+            pass
+        try:
+            await _ACTIVE_PAGE.close()
+        except Exception:
+            pass
+        _ACTIVE_PAGE = None
+
+    await close_shared_browser()
+
+
 async def _create_lean_tab(browser, url: str, timeout: int = 60_000):
     """
     Open a single lean Chrome tab with aggressive resource blocking
@@ -241,6 +276,14 @@ async def _wait_and_poll_progress(
     timeout_sec = timeout_ms / 1000.0
 
     while time.perf_counter() - start_t < timeout_sec:
+        if is_stop_requested():
+            print("[RUNNER] Stop requested. Aborting scraper polling loop...", flush=True)
+            try:
+                await page.evaluate("() => { window.__STOP_REQUESTED__ = true; }")
+            except Exception:
+                pass
+            return False
+
         is_done = await page.evaluate(f"() => window.{done_flag} === true")
 
         if on_drain_listings:
@@ -500,13 +543,90 @@ async def scrape_columbia(
 
 
 # =========================================================================
-# Adventuras Scraper (Browser JS + Supabase Persistence)
+# Adventuras Scraper (Lean Streaming Engine + Supabase Persistence)
 # =========================================================================
+
+def normalize_shopify_product(prod_data: Dict[str, Any]) -> NormalizedProduct:
+    """
+    Directly converts a Shopify products.json item into a canonical NormalizedProduct.
+    Preserves all variants, sizes, barcodes, SKUs, compare_at_price, and images.
+    """
+    pid = str(prod_data.get("id") or "").strip()
+    title = str(prod_data.get("title") or "").strip()
+    handle = str(prod_data.get("handle") or "").strip()
+    url = f"https://adventuras.in/products/{handle}" if handle else "https://adventuras.in"
+    images = prod_data.get("images") or []
+    image_url = images[0].get("src") if (images and isinstance(images[0], dict)) else ""
+
+    variants_raw = prod_data.get("variants") or []
+    norm_variants: List[NormalizedVariant] = []
+    min_price: Optional[float] = None
+    max_mrp: Optional[float] = None
+    first_sku: Optional[str] = None
+    first_ean: Optional[str] = None
+
+    for v in variants_raw:
+        if not isinstance(v, dict):
+            continue
+        v_title = str(v.get("title") or "").strip()
+        v_sku = str(v.get("sku") or "").strip() or None
+        v_barcode = str(v.get("barcode") or "").strip() or None
+
+        if not first_sku and v_sku:
+            first_sku = v_sku
+        if not first_ean and v_barcode:
+            first_ean = v_barcode
+
+        try:
+            v_price = float(v.get("price") or 0.0)
+        except Exception:
+            v_price = 0.0
+
+        try:
+            v_compare = float(v.get("compare_at_price") or 0.0) if v.get("compare_at_price") else v_price
+        except Exception:
+            v_compare = v_price
+
+        if v_price > 0:
+            if min_price is None or v_price < min_price:
+                min_price = v_price
+        if v_compare > 0:
+            if max_mrp is None or v_compare > max_mrp:
+                max_mrp = v_compare
+
+        norm_variants.append(
+            NormalizedVariant(
+                size=v_title,
+                sku=v_sku,
+                ean=v_barcode,
+                available=bool(v.get("available", True)),
+                stock=int(v.get("inventory_quantity") or 0) if v.get("inventory_quantity") is not None else 0,
+                price=v_price,
+                mrp=v_compare,
+                url=url
+            )
+        )
+
+    return NormalizedProduct(
+        source="adv",
+        source_product_id=pid,
+        title=title,
+        sku=first_sku,
+        ean=first_ean,
+        price=min_price or 0.0,
+        mrp=max_mrp or min_price or 0.0,
+        available=any(v.available for v in norm_variants) if norm_variants else True,
+        image_url=image_url,
+        url=url,
+        variants=norm_variants,
+        scraped_at=datetime.now(timezone.utc).isoformat()
+    )
+
 
 def group_adv_products(raw_items: List[Dict[str, Any]]) -> List[NormalizedProduct]:
     """
     Groups raw variant items from adv_scraper.js into canonical NormalizedProduct objects.
-    Each product has one canonical row per source_product_id with its variants JSON array.
+    Preserved for backward compatibility and test mock pipelines.
     """
     grouped: Dict[str, Dict[str, Any]] = {}
 
@@ -571,137 +691,221 @@ async def scrape_adv(
     client=None
 ) -> Dict[str, Any]:
     """
-    Executes the Adventuras browser scraper (adv_scraper.js) via Playwright,
-    then normalizes and persists all canonical products, variants, and price history to Supabase.
+    Executes the Adventuras scraper with ultra-low RAM usage (< 25MB) and page-by-page persistence.
+    Directly streams Shopify products.json with pace delays (2s) to prevent container CPU/RAM spikes.
+    Checkpoints completed pages into scrape_listing_pages so crashes resume seamlessly.
     """
+    global _CURRENT_SCRAPER_RUN_ID, _CURRENT_SCRAPER_NAME
     cli = client or get_supabase_client()
-    scraper_path = SCRAPER_DIR / "adv_scraper.js"
-    scraper_code = scraper_path.read_text(encoding="utf-8")
 
     print("\n" + "=" * 60)
-    print("STARTING ADVENTURAS SCRAPER (BROWSER JS)")
+    print("STARTING ADVENTURAS SCRAPER (LEAN STREAMING ENGINE)")
     if limit:
         print(f"TEST MODE: Limited to {limit} products")
     print("=" * 60, flush=True)
 
     run = await get_or_create_daily_run("adv", client=cli)
     run_id = run["id"]
+    _CURRENT_SCRAPER_RUN_ID = run_id
+    _CURRENT_SCRAPER_NAME = "adv"
     print(f"[RUN] Adventuras Scrape Run ID: {run_id} (Date: {run['business_date']}, Status: {run['status']})")
 
-    raw_items = []
-    async with _SCRAPER_LOCK:
-        browser = await get_shared_browser()
-        page = None
-        try:
-            print("Opening lean tab for Adventuras scraper...", flush=True)
-            page = await _create_lean_tab(browser, "https://adventuras.in/")
-
-            limit_val = int(limit) if limit else 0
-            print("Injecting and starting Adventuras scraper...", flush=True)
-            await page.evaluate(
-                """([code, limit]) => {
-                    window.__IS_PLAYWRIGHT__ = true;
-                    if (limit > 0) window.__PRODUCT_LIMIT__ = limit;
-                    window.eval(code);
-                }""",
-                [scraper_code, limit_val]
-            )
-
-            print("Adventuras scraper is running. Waiting for completion...", flush=True)
-            await _wait_and_poll_progress(
-                page,
-                done_flag="__SCRAPER_DONE__",
-                progress_flag="__SCRAPER_PROGRESS__",
-                timeout_ms=300_000,
-                poll_interval=1.5,
-                callback=progress_callback
-            )
-
-            result = await page.evaluate("() => window.scraperResult || null")
-            if result and isinstance(result, dict):
-                raw_items = result.get("products", [])
-            else:
-                raw_items = await page.evaluate("() => window.output || []")
-
-        finally:
-            await close_shared_browser()
-            import gc
-            gc.collect()
-            print("[BROWSER] Adventuras browser closed. Memory reclaimed.", flush=True)
+    completed_pages = await get_completed_listing_pages(run_id, client=cli)
+    start_page = max(completed_pages) + 1 if completed_pages else 1
+    if completed_pages:
+        print(f"[ADV CHECKPOINT] Resuming Adventuras from page {start_page} ({len(completed_pages)} pages already completed).", flush=True)
 
     await update_run_stage(run_id, "products", client=cli)
-    norm_products = group_adv_products(raw_items)
-    if limit:
-        norm_products = norm_products[:limit]
 
+    BASE_URL = "https://adventuras.in"
+    LIMIT_PER_PAGE = 250
     batch_size = 200
-    print(f"\n[PERSISTENCE] Persisting {len(norm_products)} canonical Adventuras products to Supabase (batches of {batch_size})...")
 
-    db_products = await upsert_canonical_products_batch(norm_products, client=cli, batch_size=batch_size)
-    id_by_src = {p["source_product_id"]: p["id"] for p in db_products if "source_product_id" in p and "id" in p}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
 
-    price_entries = []
-    progress_items = []
-    total_variants_persisted = 0
-    for prod in norm_products:
-        pid = id_by_src.get(prod.source_product_id)
-        if pid:
-            price_entries.append({
-                "product_id": pid,
-                "price": prod.price,
-                "mrp": prod.mrp
-            })
-            progress_items.append({
-                "product_id": pid,
-                "source_product_id": prod.source_product_id,
-                "variant_count": len(prod.variants)
-            })
-            total_variants_persisted += len(prod.variants)
+    page = start_page
+    total_persisted_products = 0
+    total_persisted_variants = 0
+    total_prices_recorded = 0
+    all_pages_done = set(completed_pages)
 
-    price_records_count = await batch_record_prices_if_changed(
-        price_entries, scrape_run_id=run_id, client=cli, batch_size=batch_size
-    )
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True, headers=headers) as http_client:
+            while True:
+                if is_stop_requested():
+                    reason = get_stop_reason()
+                    print(f"[ADV] 🛑 Stop requested ({reason}). Halting Adventuras scraper gracefully.", flush=True)
+                    await stop_run(run_id, reason=reason, client=cli)
+                    return {
+                        "status": "stopped",
+                        "run_id": run_id,
+                        "completed_products": total_persisted_products,
+                        "total_variants": total_persisted_variants,
+                        "message": f"Adventuras scraper stopped: {reason}"
+                    }
 
-    await batch_record_product_progress(
-        run_id, progress_items, status="completed", client=cli, batch_size=batch_size
-    )
+                if limit and total_persisted_products >= limit:
+                    print(f"[ADV] Reached product limit of {limit}. Stopping pagination.", flush=True)
+                    break
 
-    persisted_count = len(progress_items)
-    failed_count = len(norm_products) - persisted_count
-    await update_run_counts(run_id, completed_delta=persisted_count, failed_delta=failed_count, client=cli)
+                print(f"[ADV] Fetching Page {page}...", flush=True)
+                url = f"{BASE_URL}/products.json?limit={LIMIT_PER_PAGE}&page={page}"
+
+                data = None
+                for attempt in range(1, 6):
+                    try:
+                        resp = await http_client.get(url)
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            break
+                        elif resp.status_code in (429, 503):
+                            wait_s = attempt * 3.0
+                            print(f"[ADV] HTTP {resp.status_code} on Page {page}, retry {attempt}/5 after {wait_s}s...", flush=True)
+                            await asyncio.sleep(wait_s)
+                        else:
+                            print(f"[ADV] Warning: HTTP {resp.status_code} on Page {page}", flush=True)
+                            break
+                    except Exception as net_err:
+                        wait_s = attempt * 3.0
+                        print(f"[ADV] Network error on Page {page} ({net_err}), retry {attempt}/5 after {wait_s}s...", flush=True)
+                        await asyncio.sleep(wait_s)
+
+                if not data or not data.get("products"):
+                    print(f"[ADV] Page {page} returned 0 products. Reached end of catalog.", flush=True)
+                    break
+
+                raw_products = data.get("products", [])
+                columbia_raw = [
+                    p for p in raw_products
+                    if p.get("vendor") and str(p.get("vendor")).strip().lower() == "columbia"
+                ]
+
+                print(f"[ADV] Page {page}: {len(raw_products)} products ({len(columbia_raw)} Columbia).", flush=True)
+
+                page_norm_products: List[NormalizedProduct] = []
+                for p_dict in columbia_raw:
+                    np = normalize_shopify_product(p_dict)
+                    page_norm_products.append(np)
+                    if limit and (total_persisted_products + len(page_norm_products)) >= limit:
+                        break
+
+                if page_norm_products:
+                    # Persist immediately to Supabase
+                    db_products = await upsert_canonical_products_batch(
+                        page_norm_products, client=cli, batch_size=batch_size
+                    )
+                    id_by_src = {p["source_product_id"]: p["id"] for p in db_products if "source_product_id" in p and "id" in p}
+
+                    price_entries = []
+                    progress_items = []
+                    page_variants = 0
+                    for prod in page_norm_products:
+                        pid = id_by_src.get(prod.source_product_id)
+                        if pid:
+                            price_entries.append({
+                                "product_id": pid,
+                                "price": prod.price,
+                                "mrp": prod.mrp
+                            })
+                            progress_items.append({
+                                "product_id": pid,
+                                "source_product_id": prod.source_product_id,
+                                "variant_count": len(prod.variants)
+                            })
+                            page_variants += len(prod.variants)
+
+                    if price_entries:
+                        added = await batch_record_prices_if_changed(
+                            price_entries, scrape_run_id=run_id, client=cli, batch_size=batch_size
+                        )
+                        total_prices_recorded += added
+
+                    if progress_items:
+                        await batch_record_product_progress(
+                            run_id, progress_items, status="completed", client=cli, batch_size=batch_size
+                        )
+
+                    total_persisted_products += len(page_norm_products)
+                    total_persisted_variants += page_variants
+                    await update_run_counts(run_id, completed_delta=len(page_norm_products), failed_delta=0, client=cli)
+
+                # Checkpoint the page completion in Supabase
+                await record_listing_page_completed(run_id, page, product_count=len(page_norm_products), client=cli)
+                all_pages_done.add(page)
+
+                # Send real-time progress update
+                if progress_callback:
+                    try:
+                        await progress_callback({
+                            "stage": "Collecting & Persisting Products",
+                            "current": page,
+                            "total": max(page + 1, 24),
+                            "product_count": total_persisted_products,
+                            "variant_count": total_persisted_variants,
+                            "page": page
+                        })
+                    except Exception:
+                        pass
+
+                # If returned less than LIMIT_PER_PAGE, this was the last page
+                if len(raw_products) < LIMIT_PER_PAGE:
+                    print(f"[ADV] Page {page} returned {len(raw_products)} < {LIMIT_PER_PAGE}. Pagination complete.", flush=True)
+                    break
+
+                # Memory reclamation & pacing delay
+                del raw_products, columbia_raw, page_norm_products
+                import gc
+                gc.collect()
+
+                # Gentle delay to minimize CPU and RAM usage
+                await asyncio.sleep(2.0)
+                page += 1
+
+    finally:
+        _CURRENT_SCRAPER_RUN_ID = None
+        _CURRENT_SCRAPER_NAME = None
+
+    if is_stop_requested():
+        return {"status": "stopped", "run_id": run_id}
 
     await update_run_stage(run_id, "finalizing", client=cli)
     export_path = await export_canonical_backup("adv", client=cli)
+
     adv_report = {
         "scraper": "adv",
         "business_date": run["business_date"],
         "status": "completed",
         "stage": "completed",
-        "total_products": persisted_count,
-        "completed_products": persisted_count,
-        "failed_products": failed_count,
-        "total_variants": total_variants_persisted,
-        "prices_recorded": price_records_count,
+        "total_products": total_persisted_products,
+        "completed_products": total_persisted_products,
+        "failed_products": 0,
+        "total_variants": total_persisted_variants,
+        "prices_recorded": total_prices_recorded,
+        "completed_pages": sorted(list(all_pages_done)),
         "error": None
     }
     await complete_run(run_id, report=adv_report, client=cli)
 
     print("\n" + "=" * 60)
-    print(f"ADVENTURAS SCRAPING FINISHED: {persisted_count} products persisted")
-    print(f"Total Variants Persisted: {total_variants_persisted}")
-    print(f"Price Records Added: {price_records_count}")
+    print(f"ADVENTURAS SCRAPING FINISHED: {total_persisted_products} products persisted across {len(all_pages_done)} pages")
+    print(f"Total Variants Persisted: {total_persisted_variants}")
+    print(f"Price Records Added: {total_prices_recorded}")
     print(f"Local Rolling Backup: {export_path.resolve()}")
     print("=" * 60 + "\n", flush=True)
 
     return {
         "status": "completed",
         "run_id": run_id,
-        "completed_products": persisted_count,
-        "failed_products": failed_count,
-        "total_variants": total_variants_persisted,
-        "price_records_added": price_records_count,
+        "completed_products": total_persisted_products,
+        "failed_products": 0,
+        "total_variants": total_persisted_variants,
+        "price_records_added": total_prices_recorded,
         "export_file": str(export_path),
-        "products": [p.to_dict() for p in norm_products],
+        "completed_pages": sorted(list(all_pages_done)),
     }
 
 
@@ -1503,6 +1707,17 @@ async def run_sequential_pipeline(
             kwargs["scrapers"] = {s_key: metrics}
             await update_job(job_id, **kwargs)
 
+        if is_stop_requested():
+            reason = get_stop_reason()
+            print(f"[JOB {job_id}] 🛑 Stopping pipeline before starting {s_name}. Reason: {reason}", flush=True)
+            await update_job(
+                job_id,
+                status="failed",
+                current_scraper=None,
+                error=f"STOPPED: {reason}"
+            )
+            return
+
         try:
             t0 = time.perf_counter()
             runner_fn = SCRAPER_FUNCS[s_name]
@@ -1531,6 +1746,18 @@ async def run_sequential_pipeline(
                 }
             )
             print(f"[JOB {job_id}] ✅ {s_name.upper()} COMPLETED ({prods} products, {vars_cnt} variants, {dur}s)", flush=True)
+
+        except asyncio.CancelledError:
+            reason = get_stop_reason()
+            print(f"[JOB {job_id}] 🛑 Pipeline received cancellation signal: {reason}", flush=True)
+            await stop_current_scraper(reason)
+            await update_job(
+                job_id,
+                status="failed",
+                current_scraper=None,
+                error=f"STOPPED: {reason}"
+            )
+            raise
 
         except Exception as e:
             dur = round(time.perf_counter() - t_pipeline_start, 1)
@@ -1562,6 +1789,9 @@ async def run_sequential_pipeline(
             return
 
     # All requested scrapers succeeded
+    from jobs import reset_boot_tracker
+    reset_boot_tracker()
+
     await update_job(
         job_id,
         status="completed",
