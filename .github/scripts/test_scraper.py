@@ -357,6 +357,7 @@ def test_async_job_pipeline(args) -> bool:
     parsed_req = [alias_map.get(s.strip().lower(), s.strip().lower()) for s in raw_scrapers.split(",") if s.strip()]
     canonical_order = ["columbia", "adv", "myntra", "tata"]
     active_scrapers = [s for s in canonical_order if s in parsed_req] or canonical_order
+    scrapers_param = ",".join(active_scrapers)
     params = [f"scrapers={scrapers_param}"]
     if getattr(args, "limit", None):
         params.append(f"limit={args.limit}")
@@ -535,25 +536,29 @@ def test_async_job_pipeline(args) -> bool:
         s_success = False
 
         endpoint_url = f"{service_url}{meta['endpoint']}"
-        try:
-            req_dl = urllib.request.Request(endpoint_url, headers={"Accept": "application/json"})
-            with urllib.request.urlopen(req_dl, timeout=30) as resp_dl:
-                raw_bytes = resp_dl.read()
-                resp_size = len(raw_bytes)
-                loaded_json = json.loads(raw_bytes.decode("utf-8"))
-                prods_list = loaded_json.get("products", [])
-                val_stats = validate_products(prods_list, s_name)
-                val_stats["json_valid"] = True
-                val_stats["schema_valid"] = True
+        for dl_attempt in range(1, 3):
+            try:
+                req_dl = urllib.request.Request(endpoint_url, headers={"Accept": "application/json"})
+                with urllib.request.urlopen(req_dl, timeout=60) as resp_dl:
+                    raw_bytes = resp_dl.read()
+                    resp_size = len(raw_bytes)
+                    loaded_json = json.loads(raw_bytes.decode("utf-8"))
+                    prods_list = loaded_json.get("products", [])
+                    val_stats = validate_products(prods_list, s_name)
+                    val_stats["json_valid"] = True
+                    val_stats["schema_valid"] = True
 
-                s_product_count = val_stats.get("valid_products", 0)
-                if s_product_count >= args.min_products and (s_status == "completed" or (s_status is None and s_product_count > 0)):
-                    s_success = True
-                else:
-                    s_success = False
-        except Exception as e:
-            s_success = False
-            s_info["error"] = f"Failed to download/validate {meta['display_name']} data: {e}"
+                    s_product_count = val_stats.get("valid_products", 0)
+                    if s_product_count >= args.min_products and (s_status == "completed" or (s_status is None and s_product_count > 0)):
+                        s_success = True
+                    else:
+                        s_success = False
+                    break
+            except Exception as e:
+                s_success = False
+                s_info["error"] = f"Failed to download/validate {meta['display_name']} data: {e}"
+                if dl_attempt < 2:
+                    time.sleep(3)
 
         if not s_success:
             all_success = False
@@ -703,11 +708,8 @@ def test_single_scraper(args) -> bool:
         if product_count < args.min_products:
             schema_errors.append(f"Product count ({product_count}) is below minimum threshold ({args.min_products})")
 
-        if "tata" in source_name:
-            val_stats = validate_tata_products(products)
-            variant_count = val_stats.get("total_variants_found", 0)
-        else:
-            val_stats = validate_columbia_products(products)
+        val_stats = validate_products(products, source_name)
+        variant_count = val_stats.get("total_variants_found", 0)
 
         if not schema_errors:
             schema_valid = True

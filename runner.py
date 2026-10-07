@@ -1110,8 +1110,9 @@ async def scrape_myntra(
                     try:
                         probe_data = probe_resp.json()
                         if "products" in probe_data or "results" in probe_data or "searchData" in probe_data:
-                            print(f"[MYNTRA] Verified active session (total catalog: {probe_data.get('totalCount', 'N/A')}).", flush=True)
-                            return True
+                            tot_count = int(probe_data.get("totalCount") or 0)
+                            print(f"[MYNTRA] Verified active session (total catalog: {tot_count}).", flush=True)
+                            return tot_count
                     except Exception:
                         pass
 
@@ -1121,16 +1122,27 @@ async def scrape_myntra(
                     print(f"[MYNTRA] Storefront cookies established ({len(client_http_inst.cookies)} cookies).", flush=True)
                     if DEFAULT_MYNTRA_TOKEN and "at" not in client_http_inst.cookies:
                         client_http_inst.cookies.set("at", DEFAULT_MYNTRA_TOKEN, domain=".myntra.com")
-                    return True
+                    return 0
                 print(f"[MYNTRA] Session attempt {attempt} returned status {home_resp.status_code}, cookies: {len(client_http_inst.cookies)}", flush=True)
             except Exception as e:
                 print(f"[MYNTRA] Session attempt {attempt} error: {e}", flush=True)
             await asyncio.sleep(1.5 * attempt)
-        return False
+        return None
 
     try:
         async with httpx.AsyncClient(http2=False, headers=headers_base, follow_redirects=True, timeout=25.0) as client_http:
-            await ensure_myntra_session(client_http)
+            probe_total = await ensure_myntra_session(client_http)
+            if probe_total and probe_total > 0:
+                known_max_pages = max(1, (probe_total + rows - 1) // rows)
+                if page > known_max_pages:
+                    print(f"[MYNTRA] All {known_max_pages} pages already persisted ({probe_total} items). Skipping pagination.", flush=True)
+                    return {
+                        "scraper": "myntra",
+                        "status": "completed",
+                        "product_count": total_persisted_products,
+                        "variant_count": 0,
+                        "duration_seconds": round(time.perf_counter() - t_start, 1)
+                    }
 
             while True:
                 if is_stop_requested():
@@ -1153,9 +1165,14 @@ async def scrape_myntra(
                     api_headers["pagination-context"] = pagination_ctx
 
                 data = None
+                end_of_catalog = False
                 for attempt in range(1, 5):
                     try:
                         resp = await client_http.get(url, headers=api_headers)
+                        if resp.status_code == 400:
+                            print(f"[MYNTRA] Reached end of catalog (HTTP 400 on page {page}). Halting pagination.", flush=True)
+                            end_of_catalog = True
+                            break
                         if resp.status_code != 200:
                             print(f"[MYNTRA] HTTP {resp.status_code} on page {page} (attempt {attempt}/4)", flush=True)
                             if resp.status_code in (401, 403) or attempt >= 2:
@@ -1189,6 +1206,9 @@ async def scrape_myntra(
                     except (httpx.RequestError, httpx.TimeoutException) as req_err:
                         print(f"[MYNTRA] Network error on page {page} (attempt {attempt}/4): {req_err}", flush=True)
                         await asyncio.sleep(2.0 * attempt)
+
+                if end_of_catalog:
+                    break
 
                 if data is None:
                     print(f"[MYNTRA] Persistent error on page {page} after 4 attempts. Halting pagination cleanly.", flush=True)

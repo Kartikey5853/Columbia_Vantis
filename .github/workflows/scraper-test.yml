@@ -1,4 +1,4 @@
-name: Scraper Deploy Trigger Pipeline
+name: Scraper Continuous Testing Pipeline
 
 on:
   push:
@@ -6,6 +6,14 @@ on:
       - main
   workflow_dispatch:
     inputs:
+      scrapers:
+        description: 'Comma-separated scrapers to test (columbia, adv, myntra, tata)'
+        required: false
+        default: 'columbia,adv,myntra,tata'
+      min_products:
+        description: 'Minimum expected products/SKUs'
+        required: false
+        default: '1'
       force:
         description: 'Force start scraping even if already completed today'
         required: false
@@ -13,24 +21,37 @@ on:
       deploy_wait_seconds:
         description: 'Maximum seconds to wait for Render deployment to become healthy'
         required: false
-        default: '300'
+        default: '600'
+      health_check_interval_seconds:
+        description: 'Seconds between job status polls (default: 30s)'
+        required: false
+        default: '30'
+      scrape_timeout_seconds:
+        description: 'Timeout in seconds for scraper job completion'
+        required: false
+        default: '3900'
 
 env:
   DEFAULT_RENDER_URL: "https://columbia-4-0.onrender.com"
+  SCRAPERS: ${{ inputs.scrapers || 'columbia,adv,myntra,tata' }}
+  MIN_PRODUCTS: ${{ inputs.min_products || '1' }}
   FORCE: ${{ inputs.force || 'false' }}
-  RENDER_DEPLOY_WAIT_SECONDS: ${{ inputs.deploy_wait_seconds || '300' }}
+  RENDER_DEPLOY_WAIT_SECONDS: ${{ inputs.deploy_wait_seconds || '600' }}
+  HEALTH_CHECK_INTERVAL_SECONDS: ${{ inputs.health_check_interval_seconds || '30' }}
+  SCRAPE_TIMEOUT_SECONDS: ${{ inputs.scrape_timeout_seconds || '3900' }}
 
 jobs:
   # =========================================================================
-  # Lightweight Deploy Trigger Pipeline:
-  # 1. Wait for Render deployment to become healthy
-  # 2. Automatically trigger POST /deploy-trigger endpoint
-  # (Testing after deployment removed; reports are stored in database)
+  # Asynchronous Multi-Scraper Pipeline:
+  # 1. Health check & Render readiness
+  # 2. Trigger POST /scrape?scrapers=... (202 Accepted) & poll status
+  # 3. Generate combined CI summary table & step summary
+  # 4. Upload test artifacts (JSON results & job trace)
   # =========================================================================
-  trigger-scrapers:
-    name: Auto Deploy Trigger (Render Wakeup & Queue Trigger)
+  test-scrapers:
+    name: Async Scraper Testing (Columbia -> Adventuras -> Myntra -> Tata CLiQ)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 75
 
     steps:
       - name: Checkout repository
@@ -41,6 +62,14 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install test runner dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install psutil
+
+      - name: Create test results directory
+        run: mkdir -p test-results
+
       - name: 1. Wait for Render deployment to be healthy
         env:
           RENDER_SERVICE_URL: ${{ secrets.RENDER_SERVICE_URL || env.DEFAULT_RENDER_URL }}
@@ -49,22 +78,38 @@ jobs:
             --wait-only \
             --service-url "${RENDER_SERVICE_URL}" \
             --deploy-wait-seconds "${RENDER_DEPLOY_WAIT_SECONDS}" \
-            --health-check-interval 10
+            --health-check-interval 15
 
-      - name: 2. Trigger auto-scraper endpoint on server
+      - name: 2. Trigger async scraper job & poll status until completion (30s interval)
         env:
           RENDER_SERVICE_URL: ${{ secrets.RENDER_SERVICE_URL || env.DEFAULT_RENDER_URL }}
         run: |
-          echo "Triggering deploy hook at ${RENDER_SERVICE_URL}/deploy-trigger (force=${FORCE})..."
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${RENDER_SERVICE_URL}/deploy-trigger?force=${FORCE}" -H "Content-Type: application/json")
-          HTTP_BODY=$(echo "${RESPONSE}" | head -n -1)
-          HTTP_CODE=$(echo "${RESPONSE}" | tail -n 1)
-
-          echo "Response HTTP Status: ${HTTP_CODE}"
-          echo "Response Payload: ${HTTP_BODY}"
-
-          if [ "${HTTP_CODE}" -eq 200 ] || [ "${HTTP_CODE}" -eq 202 ]; then
-            echo "✅ Deploy trigger successfully received by server!"
-          else
-            echo "⚠️ Warning: Received unexpected HTTP code ${HTTP_CODE}"
+          FORCE_FLAG=""
+          if [ "${FORCE}" = "true" ]; then
+            FORCE_FLAG="--force"
           fi
+          python .github/scripts/test_scraper.py \
+            --poll-job \
+            --service-url "${RENDER_SERVICE_URL}" \
+            --scrapers "${SCRAPERS}" \
+            --min-products "${MIN_PRODUCTS}" \
+            --scrape-timeout-seconds "${SCRAPE_TIMEOUT_SECONDS}" \
+            --health-check-interval "${HEALTH_CHECK_INTERVAL_SECONDS}" \
+            --results-dir "test-results" \
+            ${FORCE_FLAG} \
+            --skip-wait
+
+      - name: 3. Generate CI summary and step summary
+        if: always()
+        run: |
+          python .github/scripts/test_scraper.py \
+            --generate-summary \
+            --results-dir "test-results"
+
+      - name: 4. Upload test result artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scraper-test-results
+          path: test-results/
+          retention-days: 30
