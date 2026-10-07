@@ -203,13 +203,22 @@
     // Product Storage
     // --------------------------------------------------
 
+    // --------------------------------------------------
+    // Product Storage & Listing Checkpoint Buffer
+    // --------------------------------------------------
+
     const cleanProducts = [];
     const seenProductIds = new Set();
+    window.__TATA_UNSAVED_LISTINGS__ = window.__TATA_UNSAVED_LISTINGS__ || [];
+    window.drainUnsavedListings = function () {
+        const u = window.__TATA_UNSAVED_LISTINGS__ || [];
+        window.__TATA_UNSAVED_LISTINGS__ = [];
+        return u;
+    };
 
-    function processProducts(products) {
-        if (!Array.isArray(products)) return;
-        const scrapedAt =
-            new Date().toISOString();
+    function processProducts(products, pageNumber = 0) {
+        if (!Array.isArray(products)) return [];
+        const scrapedAt = new Date().toISOString();
 
         const priceValue = value =>
             Number(
@@ -219,6 +228,8 @@
                     value?.formattedValue || ""
                 ).replace(/[^0-9.]/g, "")
             ) || 0;
+
+        const newItemsThisPage = [];
 
         for (const p of products) {
             const pid = String(p.productId || "").trim();
@@ -230,132 +241,120 @@
             }
             seenProductIds.add(pid);
 
-            cleanProducts.push({
+            const item = {
                 source: "tatacliq",
                 product_id: pid,
                 sku: "",
                 ean: "",
-                available:
-                    !!p.inStockFlag,
-                title:
-                    p.productname || "",
-
-                price:
-                    priceValue(
-                        p.price?.sellingPrice
-                    ),
-
-                mrp:
-                    priceValue(
-                        p.price?.mrpPrice
-                    ) ||
-                    priceValue(
-                        p.price?.sellingPrice
-                    ),
-
-                image_url:
-                    p.imageURL
-                        ? (
-                            p.imageURL.startsWith("http")
-                                ? p.imageURL
-                                : "https:" + p.imageURL
-                        )
-                        : "",
-
-                url:
-                    p.webURL
-                        ? "https://www.tatacliq.com" +
-                          p.webURL
-                        : "",
-
+                available: !!p.inStockFlag,
+                title: p.productname || "",
+                price: priceValue(p.price?.sellingPrice),
+                mrp: priceValue(p.price?.mrpPrice) || priceValue(p.price?.sellingPrice),
+                image_url: p.imageURL
+                    ? (p.imageURL.startsWith("http") ? p.imageURL : "https:" + p.imageURL)
+                    : "",
+                url: p.webURL ? "https://www.tatacliq.com" + p.webURL : "",
                 variants: [],
-
                 scraped_at: scrapedAt
+            };
 
-            });
-
+            cleanProducts.push(item);
+            newItemsThisPage.push(item);
         }
 
+        if (newItemsThisPage.length > 0) {
+            window.__TATA_UNSAVED_LISTINGS__.push({
+                page: pageNumber,
+                products: newItemsThisPage
+            });
+            window.__TATA_LAST_LISTING_PAGE__ = pageNumber;
+        }
+
+        return newItemsThisPage;
     }
-        // --------------------------------------------------
-    // Fetch Listing Pages
+
+    // --------------------------------------------------
+    // Fetch Listing Pages (Phase 1)
     // --------------------------------------------------
 
-    console.log("Fetching first page...");
+    const hasInitialProducts = Array.isArray(window.__INITIAL_PRODUCTS__) && window.__INITIAL_PRODUCTS__.length > 0;
 
-    const first = await fetchPage(0);
-
-    const totalPages = first.pagination.totalPages;
-    const totalResults = first.pagination.totalResults;
-
-    console.log(
-        `Found ${totalPages} pages | ${totalResults} products`
-    );
-
-    processProducts(first.searchresult);
-    updateProgress({ stage: "Collecting Products", current: 1, total: totalPages });
-
-    console.log(
-        `Collected ${cleanProducts.length} products`
-    );
-
-
-    for (let page = 1; page < totalPages; page++) {
-        if (typeof window.__PRODUCT_LIMIT__ !== "undefined" && window.__PRODUCT_LIMIT__ > 0 && cleanProducts.length >= window.__PRODUCT_LIMIT__) {
-            console.log(`[TEST MODE] Reached product limit ${window.__PRODUCT_LIMIT__}, stopping listing pagination.`);
-            break;
+    if (hasInitialProducts) {
+        console.log(`[TATA RESUME] Phase 1 already complete: Loaded ${window.__INITIAL_PRODUCTS__.length} listing products from database checkpoint.`);
+        for (const p of window.__INITIAL_PRODUCTS__) {
+            const pid = String(p.product_id || p.productId || "").trim();
+            if (pid && !seenProductIds.has(pid)) {
+                seenProductIds.add(pid);
+                cleanProducts.push({
+                    source: "tatacliq",
+                    product_id: pid,
+                    sku: p.sku || "",
+                    ean: p.ean || "",
+                    available: p.available !== undefined ? Boolean(p.available) : true,
+                    title: p.title || p.productname || "",
+                    price: Number(p.price || 0),
+                    mrp: Number(p.mrp || p.price || 0),
+                    image_url: p.image_url || p.imageURL || "",
+                    url: p.url || (p.webURL ? "https://www.tatacliq.com" + p.webURL : ""),
+                    variants: Array.isArray(p.variants) ? p.variants : [],
+                    scraped_at: p.scraped_at || new Date().toISOString()
+                });
+            }
         }
+        updateProgress({ stage: "Listing Phase Complete", current: cleanProducts.length, total: cleanProducts.length });
+    } else {
+        const startPage = typeof window.__START_PAGE__ !== "undefined" ? Number(window.__START_PAGE__) : 0;
+        console.log(`Fetching listing pages (Starting from page ${startPage})...`);
 
-        let success = false;
-
-        for (let attempt = 1; attempt <= 3; attempt++) {
-
+        let totalPages = 1;
+        if (startPage === 0) {
+            const first = await fetchPage(0);
+            totalPages = first.pagination?.totalPages || 1;
+            const totalResults = first.pagination?.totalResults || 0;
+            console.log(`Found ${totalPages} pages | ${totalResults} products`);
+            processProducts(first.searchresult, 0);
+            updateProgress({ stage: "Collecting Products", current: 1, total: totalPages });
+            console.log(`Collected ${cleanProducts.length} products`);
+        } else {
+            // Probe total pages
             try {
+                const probe = await fetchPage(0);
+                totalPages = probe.pagination?.totalPages || 1;
+            } catch (_) {
+                totalPages = startPage + 20;
+            }
+        }
 
-                console.log(
-                    `Listing Page ${page + 1}/${totalPages} (Attempt ${attempt})`
-                );
-
-                const data = await fetchPage(page);
-
-                processProducts(data.searchresult);
-                updateProgress({ stage: "Collecting Products", current: page + 1, total: totalPages });
-
-                console.log(
-                    `Products Collected: ${cleanProducts.length}`
-                );
-
-                success = true;
-
+        const loopStart = Math.max(1, startPage);
+        for (let page = loopStart; page < totalPages; page++) {
+            if (typeof window.__PRODUCT_LIMIT__ !== "undefined" && window.__PRODUCT_LIMIT__ > 0 && cleanProducts.length >= window.__PRODUCT_LIMIT__) {
+                console.log(`[TEST MODE] Reached product limit ${window.__PRODUCT_LIMIT__}, stopping listing pagination.`);
                 break;
-
             }
 
-            catch (err) {
-
-                console.warn(
-                    `Retry ${attempt} failed`,
-                    err.message
-                );
-
-                await sleep(5000);
-
+            let success = false;
+            for (let attempt = 1; attempt <= 3; attempt++) {
+                try {
+                    console.log(`Listing Page ${page + 1}/${totalPages} (Attempt ${attempt})`);
+                    const data = await fetchPage(page);
+                    processProducts(data.searchresult, page);
+                    updateProgress({ stage: "Collecting Products", current: page + 1, total: totalPages });
+                    console.log(`Products Collected: ${cleanProducts.length}`);
+                    success = true;
+                    break;
+                } catch (err) {
+                    console.warn(`Retry ${attempt} failed`, err.message);
+                    await sleep(5000);
+                }
             }
 
+            if (!success) {
+                console.error(`Skipped page ${page + 1}`);
+            }
+
+            await sleep(randomDelay());
         }
-
-        if (!success) {
-
-            console.error(
-                `Skipped page ${page + 1}`
-            );
-
-        }
-
-        await sleep(randomDelay());
-
     }
-
 
     console.log("----------------------------------------");
     if (typeof window.__PRODUCT_LIMIT__ !== "undefined" && window.__PRODUCT_LIMIT__ > 0) {
@@ -456,6 +455,10 @@
                 total: cleanProducts.length,
                 variant_count: totalVariants
             });
+
+            if (totalVariants > 0 && Math.floor(totalVariants / 200) > Math.floor((totalVariants - product.variants.length) / 200)) {
+                console.log(`[TATA CHECKPOINT] Checkpoint milestone: reached ${totalVariants} variants (${completed}/${cleanProducts.length} products).`);
+            }
 
             if (completed % 25 === 0 || completed === cleanProducts.length) {
                 console.log(

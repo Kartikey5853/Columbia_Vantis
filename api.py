@@ -3,6 +3,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
 
@@ -52,27 +53,32 @@ def _format_product_payload(source: str, raw_products: list) -> dict:
     }
 
 
-from persistence.run_store import get_daily_scrapers_summary, is_scraper_completed_today, get_business_date
+from persistence.run_store import (
+    get_daily_scrapers_summary,
+    is_scraper_completed_today,
+    get_business_date,
+    get_daily_run_report,
+    get_all_daily_reports
+)
 from persistence.exporter import export_canonical_backup
 
 
-@app.on_event("startup")
-async def on_startup():
+async def check_and_trigger_scrapers(force: bool = False) -> Dict[str, Any]:
     """
-    On server boot:
+    Core auto-trigger logic:
     1. Checks today's date in database (Asia/Kolkata timezone).
     2. Inspects status of all scrapers (columbia, adv, myntra, tata).
-    3. If all scrapers are completed with valid data -> NO SCRAPING.
-    4. If any scraper failed, was interrupted, or has not run -> automatically resumes only those incomplete scrapers.
-    5. Ensures local rolling backup files exist (exports missing ones from Supabase).
+    3. If all scrapers are completed with valid data and not force -> returns already_completed.
+    4. If pipeline is already running -> returns already_running with active job.
+    5. If any scraper failed, was interrupted, or has not run -> starts sequential queue scraper in background.
     """
     b_date = get_business_date()
-    print(f"\n[STARTUP] 🔍 Checking database scraper status for business date: {b_date}...", flush=True)
+    print(f"\n[DEPLOY/STARTUP TRIGGER] 🔍 Checking database scraper status for business date: {b_date}...", flush=True)
 
     try:
         summary = await get_daily_scrapers_summary(business_date=b_date)
     except Exception as e:
-        print(f"[STARTUP] Warning: Failed to query daily scrapers summary: {e}", flush=True)
+        print(f"[DEPLOY/STARTUP TRIGGER] Warning: Failed to query daily scrapers summary: {e}", flush=True)
         summary = {}
 
     canonical_order = ["columbia", "adv", "myntra", "tata"]
@@ -85,7 +91,7 @@ async def on_startup():
         prods = s_data.get("completed_products", 0)
 
         backup_path = Path(f"data/{name}/{name}_data.json")
-        if status == "completed" and prods > 0:
+        if not force and status == "completed" and prods > 0:
             completed_scrapers.append(name)
             if not backup_path.exists():
                 try:
@@ -95,24 +101,60 @@ async def on_startup():
         else:
             pending_scrapers.append(name)
 
-    print(f"[STARTUP] Daily status: Completed: {completed_scrapers} | Pending/Incomplete: {pending_scrapers}", flush=True)
+    print(f"[DEPLOY/STARTUP TRIGGER] Daily status: Completed: {completed_scrapers} | Pending/Incomplete: {pending_scrapers}", flush=True)
 
     if not pending_scrapers:
-        print(f"[STARTUP] ✅ All {len(canonical_order)} scrapers for today ({b_date}) are already completed. No scraping needed.\n", flush=True)
-        return
+        msg = f"All {len(canonical_order)} scrapers for today ({b_date}) are already completed. No scraping needed."
+        print(f"[DEPLOY/STARTUP TRIGGER] ✅ {msg}\n", flush=True)
+        return {
+            "status": "already_completed",
+            "business_date": b_date,
+            "message": msg,
+            "completed_scrapers": completed_scrapers,
+            "summary": summary
+        }
 
-    # Check if there is an existing orphaned job
+    if is_pipeline_running():
+        active = await get_active_job()
+        msg = f"Scraper pipeline is already running (Job: {active['job_id'] if active else 'unknown'})."
+        print(f"[DEPLOY/STARTUP TRIGGER] ⚠️ {msg}\n", flush=True)
+        return {
+            "status": "already_running",
+            "business_date": b_date,
+            "message": msg,
+            "active_job": active
+        }
+
     orphaned = find_orphaned_job()
-    job_id = orphaned["job_id"] if orphaned else None
+    job_id = orphaned["job_id"] if (orphaned and not force) else None
 
     if not job_id:
         from jobs import create_job
-        job = await create_job(scrapers=pending_scrapers, force=True)
+        job = await create_job(scrapers=pending_scrapers, force=force)
         job_id = job["job_id"]
 
-    print(f"[STARTUP] 🔄 Auto-resuming incomplete scrapers for today ({b_date}): {pending_scrapers} (Job: {job_id}). Dispatching in background...\n", flush=True)
-    task = asyncio.create_task(run_sequential_pipeline(job_id, selected_scrapers=pending_scrapers))
+    print(f"[DEPLOY/STARTUP TRIGGER] 🔄 Auto-triggering incomplete scrapers for today ({b_date}): {pending_scrapers} (Job: {job_id}). Dispatching in background...\n", flush=True)
+    task = asyncio.create_task(run_sequential_pipeline(job_id, selected_scrapers=pending_scrapers, force=force))
     set_pipeline_task(task)
+
+    return {
+        "status": "triggered",
+        "job_id": job_id,
+        "business_date": b_date,
+        "message": f"Started background queue scraper for: {', '.join(pending_scrapers)}",
+        "pending_scrapers": pending_scrapers,
+        "completed_scrapers": completed_scrapers,
+        "status_url": f"/scrape/status/{job_id}"
+    }
+
+
+@app.on_event("startup")
+async def on_startup():
+    """
+    On server boot:
+    Checks if today's scraping is complete in Supabase; if not, triggers the background queue scraper.
+    """
+    await check_and_trigger_scrapers(force=False)
 
 
 @app.on_event("shutdown")
@@ -132,9 +174,11 @@ async def root():
         "active_job": active["job_id"] if active else None,
         "pipeline_running": is_pipeline_running(),
         "endpoints": {
+            "deploy_trigger": "POST /deploy-trigger (or GET /deploy-trigger)",
             "trigger_job": "POST /scrape?scrapers=columbia,adv,myntra,tata",
             "check_status": "GET /scrape/status/{job_id}",
             "active_status": "GET /scrape/status",
+            "daily_reports": "GET /scrape/report",
             "columbia_products": "GET /scrape (or GET /scrape/columbia)",
             "adv_products": "GET /scrape/adv",
             "myntra_products": "GET /scrape/myntra",
@@ -142,6 +186,43 @@ async def root():
             "db_diagnostics": "GET /db/diagnostics"
         }
     }
+
+
+@app.post("/deploy-trigger")
+@app.get("/deploy-trigger")
+@app.post("/trigger")
+async def deploy_trigger_endpoint(
+    force: bool = Query(False, description="Force run even if already completed today")
+):
+    """
+    Endpoint triggered automatically upon server deployment or wakeup.
+    Checks if today's scraping is complete in the database; if not, triggers the background queue scraper.
+    """
+    res = await check_and_trigger_scrapers(force=force)
+    status_code = 200 if res.get("status") in ("already_completed", "already_running") else 202
+    return JSONResponse(status_code=status_code, content=res)
+
+
+@app.get("/scrape/report")
+async def get_daily_reports_endpoint():
+    """Returns today's comprehensive scrape run reports from Supabase database."""
+    b_date = get_business_date()
+    reports = await get_all_daily_reports(business_date=b_date)
+    return reports
+
+
+@app.get("/scrape/report/{scraper}")
+async def get_scraper_report_endpoint(scraper: str):
+    """Returns the latest JSON report for a specific scraper from Supabase scrape_runs."""
+    alias_map = {"columbiasportswear": "columbia", "adventuras": "adv", "tatacliq": "tata"}
+    norm_name = alias_map.get(scraper.lower(), scraper.lower())
+    rep = await get_daily_run_report(norm_name)
+    if not rep:
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"No report found for scraper '{scraper}'"}
+        )
+    return rep
 
 
 @app.post("/scrape", status_code=202)

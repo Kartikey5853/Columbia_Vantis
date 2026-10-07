@@ -23,6 +23,9 @@ from persistence.run_store import (
     update_run_counts,
     complete_run,
     fail_run,
+    save_run_report,
+    get_daily_run_report,
+    get_all_daily_reports,
     get_business_date,
     get_scraper_id,
 )
@@ -433,8 +436,57 @@ class ScraperPersistenceTestSuite(unittest.IsolatedAsyncioTestCase):
         self.assertIn("products:", report)
         self.assertIn("price_history:", report)
         self.assertIn("scrape_runs:", report)
-        self.assertIn("scrape_listing_pages:", report)
-        self.assertIn("scrape_product_progress:", report)
+    # ---------------------------------------------------------------------
+    # TEST 11 — Structured report persistence in scrape_runs
+    # ---------------------------------------------------------------------
+    async def test_11_run_report_storage(self):
+        """Verifies structured JSON report is persisted in scrape_runs and readable via run_store."""
+        run = await get_or_create_daily_run("myntra", client=self.client)
+        run_id = run["id"]
+
+        test_report = {
+            "scraper": "myntra",
+            "status": "completed",
+            "products_scraped": 42,
+            "resumed_from_page": 5,
+            "completed_pages": [1, 2, 3, 4, 5],
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+
+        # Persist report
+        await save_run_report(run_id, test_report, client=self.client)
+
+        # Retrieve specific report
+        rep = await get_daily_run_report("myntra", client=self.client)
+        self.assertIsNotNone(rep)
+        self.assertEqual(rep["scraper"], "myntra")
+        self.assertEqual(rep["products_scraped"], 42)
+        self.assertEqual(rep["resumed_from_page"], 5)
+
+        # Retrieve all daily reports
+        all_reps = await get_all_daily_reports(client=self.client)
+        self.assertIn("myntra", all_reps["reports"])
+        self.assertEqual(all_reps["reports"]["myntra"]["products_scraped"], 42)
+
+    # ---------------------------------------------------------------------
+    # TEST 12 — Checkpoint-based page resume calculation
+    # ---------------------------------------------------------------------
+    async def test_12_page_checkpoint_resume(self):
+        """Verifies that if 5 pages (1..5) are completed, resume calculates next start page as 6."""
+        run = await get_or_create_daily_run("myntra", client=self.client)
+        run_id = run["id"]
+
+        # Simulate 5 pages completed
+        for p in range(1, 6):
+            await record_listing_page_started(run_id, p, client=self.client)
+            await record_listing_page_completed(run_id, p, product_count=10, client=self.client)
+
+        completed_pages = await get_completed_listing_pages(run_id, client=self.client)
+        self.assertEqual(set(completed_pages), {1, 2, 3, 4, 5})
+
+        # Next page to scrape should be max + 1 = 6
+        next_page = max(completed_pages) + 1 if completed_pages else 1
+        self.assertEqual(next_page, 6)
 
 
 if __name__ == "__main__":

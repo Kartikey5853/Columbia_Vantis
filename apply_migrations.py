@@ -17,11 +17,11 @@ if hasattr(sys.stderr, "reconfigure"):
 
 load_dotenv()
 
-MIGRATION_FILE = Path(__file__).parent / "migrations" / "001_initial_schema.sql"
+MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
 
 def check_tables_via_rest(supabase_url: str, supabase_key: str) -> dict:
-    """Check existence of tables via Supabase PostgREST API."""
+    """Check existence of tables and report column via Supabase PostgREST API."""
     tables = [
         "scrapers",
         "products",
@@ -38,8 +38,16 @@ def check_tables_via_rest(supabase_url: str, supabase_key: str) -> dict:
             try:
                 res = client.get(f"{supabase_url}/rest/v1/{t}?select=count", headers=headers)
                 results[t] = res.status_code != 404
-            except Exception as e:
+            except Exception:
                 results[t] = False
+
+        # Check optional report column on scrape_runs
+        try:
+            res_rep = client.get(f"{supabase_url}/rest/v1/scrape_runs?select=report&limit=1", headers=headers)
+            results["scrape_runs.report"] = res_rep.status_code == 200
+        except Exception:
+            results["scrape_runs.report"] = False
+
     return results
 
 
@@ -56,11 +64,12 @@ def run_migration():
         print("[ERROR] SUPABASE_URL and SUPABASE_KEY/SUPABASE_SECRET_KEY must be set in .env")
         sys.exit(1)
 
-    if not MIGRATION_FILE.exists():
-        print(f"[ERROR] Migration file not found: {MIGRATION_FILE}")
+    migration_files = sorted(MIGRATIONS_DIR.glob("*.sql"))
+    if not migration_files:
+        print(f"[ERROR] No migration files found in: {MIGRATIONS_DIR}")
         sys.exit(1)
 
-    sql_content = MIGRATION_FILE.read_text(encoding="utf-8")
+    combined_sql = "\n\n".join(f.read_text(encoding="utf-8") for f in migration_files)
 
     # If direct DATABASE_URL is provided, attempt direct postgres execution
     if db_url:
@@ -70,9 +79,9 @@ def run_migration():
             conn = psycopg2.connect(db_url)
             conn.autocommit = True
             with conn.cursor() as cursor:
-                cursor.execute(sql_content)
+                cursor.execute(combined_sql)
             conn.close()
-            print("[SUCCESS] Executed migration directly against PostgreSQL database!")
+            print("[SUCCESS] Executed migrations directly against PostgreSQL database!")
         except ImportError:
             print("psycopg2 not installed; attempting via other driver or REST verification...")
         except Exception as e:
@@ -80,24 +89,29 @@ def run_migration():
 
     # Verify tables via REST
     status = check_tables_via_rest(supabase_url, supabase_key)
-    missing = [t for t, exists in status.items() if not exists]
+    missing = [t for t, exists in status.items() if not exists and not t.endswith(".report")]
+
+    print("\nDatabase Schema Status:")
+    for t, exists in status.items():
+        icon = "✓" if exists else ("⚠️ (optional, fallback active)" if t.endswith(".report") else "✗")
+        print(f"   {icon} {t}")
 
     if not missing:
-        print("[SUCCESS] All required tables are present and active in Supabase:")
-        for t in status:
-            print(f"   ✓ {t}")
-        print("\nDatabase is fully migrated and ready!")
+        print("\n[SUCCESS] Core tables are present and active in Supabase!")
+        if not status.get("scrape_runs.report"):
+            print("[NOTE] To enable native JSONB reports, run 002_add_report_to_scrape_runs.sql in Supabase SQL editor.")
+            print("       (Automatic JSON fallback to last_error is currently active and fully supported).")
         return True
     else:
-        print(f"[INFO] Tables not yet detected in Supabase REST API: {', '.join(missing)}")
+        print(f"\n[INFO] Missing core tables in Supabase REST API: {', '.join(missing)}")
         print("\n" + "=" * 60)
-        print("ACTION REQUIRED: Execute the migration in Supabase SQL Editor")
+        print("ACTION REQUIRED: Execute migrations in Supabase SQL Editor")
         print("=" * 60)
         print("1. Open your Supabase Dashboard: https://supabase.com/dashboard/project/_/sql")
         print("2. Navigate to 'SQL Editor'")
-        print(f"3. Copy the contents of: {MIGRATION_FILE.resolve()}")
-        print("4. Paste into the SQL editor and click 'RUN'.")
-        print("5. Re-run this script: python apply_migrations.py")
+        for mf in migration_files:
+            print(f"3. Run contents of: {mf.resolve()}")
+        print("4. Re-run this script: python apply_migrations.py")
         print("=" * 60 + "\n")
         return False
 

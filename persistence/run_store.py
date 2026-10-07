@@ -155,47 +155,112 @@ async def update_run_counts(
         await cli.update("scrape_runs", data, filters={"id": f"eq.{run_id}"})
 
 
-async def complete_run(
+async def save_run_report(
     run_id: str,
+    report: Dict[str, Any],
     client: Optional[SupabaseClient] = None
-) -> Dict[str, Any]:
-    """Marks a scrape run as successfully completed."""
+) -> None:
+    """
+    Persists a comprehensive JSON report to the 'scrape_runs' table.
+    Attempts writing to the 'report' column; if not yet migrated, serializes to 'last_error'.
+    """
     cli = client or get_supabase_client()
     now_iso = now_utc_iso()
-    res = await cli.update(
-        "scrape_runs",
-        {
-            "status": "completed",
-            "stage": "finalizing",
-            "completed_at": now_iso,
-            "updated_at": now_iso,
-            "last_error": None
-        },
-        filters={"id": f"eq.{run_id}"},
-        return_representation=True
-    )
-    return res[0] if res else {}
+    try:
+        await cli.update(
+            "scrape_runs",
+            {"report": report, "updated_at": now_iso},
+            filters={"id": f"eq.{run_id}"}
+        )
+    except Exception:
+        # Fallback if report column does not exist in Supabase schema yet
+        try:
+            import json
+            await cli.update(
+                "scrape_runs",
+                {"last_error": json.dumps(report), "updated_at": now_iso},
+                filters={"id": f"eq.{run_id}"}
+            )
+        except Exception as e:
+            print(f"[RUN_STORE] Warning: failed to persist report for run {run_id}: {e}", flush=True)
+
+
+async def complete_run(
+    run_id: str,
+    report: Optional[Dict[str, Any]] = None,
+    client: Optional[SupabaseClient] = None
+) -> Dict[str, Any]:
+    """Marks a scrape run as successfully completed and persists the run report."""
+    cli = client or get_supabase_client()
+    now_iso = now_utc_iso()
+    update_data: Dict[str, Any] = {
+        "status": "completed",
+        "stage": "finalizing",
+        "completed_at": now_iso,
+        "updated_at": now_iso,
+        "last_error": None
+    }
+    if report:
+        update_data["report"] = report
+
+    try:
+        res = await cli.update(
+            "scrape_runs",
+            update_data,
+            filters={"id": f"eq.{run_id}"},
+            return_representation=True
+        )
+        return res[0] if res else {}
+    except Exception:
+        # If report column fails, update standard fields and call fallback
+        update_data.pop("report", None)
+        res = await cli.update(
+            "scrape_runs",
+            update_data,
+            filters={"id": f"eq.{run_id}"},
+            return_representation=True
+        )
+        if report:
+            await save_run_report(run_id, report, cli)
+        return res[0] if res else {}
 
 
 async def fail_run(
     run_id: str,
     error: str,
+    report: Optional[Dict[str, Any]] = None,
     client: Optional[SupabaseClient] = None
 ) -> Dict[str, Any]:
-    """Marks a scrape run as failed with error context."""
+    """Marks a scrape run as failed with error context and persists the failure report."""
     cli = client or get_supabase_client()
     now_iso = now_utc_iso()
-    res = await cli.update(
-        "scrape_runs",
-        {
-            "status": "failed",
-            "updated_at": now_iso,
-            "last_error": str(error)[:1000]
-        },
-        filters={"id": f"eq.{run_id}"},
-        return_representation=True
-    )
-    return res[0] if res else {}
+    update_data: Dict[str, Any] = {
+        "status": "failed",
+        "updated_at": now_iso,
+        "last_error": str(error)[:1000]
+    }
+    if report:
+        update_data["report"] = report
+
+    try:
+        res = await cli.update(
+            "scrape_runs",
+            update_data,
+            filters={"id": f"eq.{run_id}"},
+            return_representation=True
+        )
+        return res[0] if res else {}
+    except Exception:
+        update_data.pop("report", None)
+        res = await cli.update(
+            "scrape_runs",
+            update_data,
+            filters={"id": f"eq.{run_id}"},
+            return_representation=True
+        )
+        if report:
+            await save_run_report(run_id, report, cli)
+        return res[0] if res else {}
 
 
 async def get_daily_scrapers_summary(
@@ -288,4 +353,119 @@ async def is_scraper_completed_today(
     if runs and len(runs) > 0:
         return (runs[0].get("completed_products") or 0) > 0
     return False
+
+
+def _extract_report_from_run(r: Dict[str, Any], scraper_name: str) -> Dict[str, Any]:
+    """Helper to extract or synthesize a report dictionary from a scrape_runs row."""
+    import json
+    rep = r.get("report")
+    if isinstance(rep, dict) and rep:
+        return rep
+    elif isinstance(rep, str) and rep.strip():
+        try:
+            parsed = json.loads(rep)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+
+    # Try last_error fallback
+    le = r.get("last_error")
+    if le and isinstance(le, str) and le.strip().startswith("{") and le.strip().endswith("}"):
+        try:
+            parsed = json.loads(le)
+            if isinstance(parsed, dict) and "scraper" in parsed:
+                return parsed
+        except Exception:
+            pass
+
+    # Synthesize fallback report from row fields
+    dur = 0.0
+    if r.get("started_at") and r.get("completed_at"):
+        try:
+            t_start = datetime.fromisoformat(r["started_at"].replace("Z", "+00:00"))
+            t_end = datetime.fromisoformat(r["completed_at"].replace("Z", "+00:00"))
+            dur = round((t_end - t_start).total_seconds(), 1)
+        except Exception:
+            pass
+
+    return {
+        "scraper": scraper_name,
+        "run_id": r.get("id"),
+        "business_date": r.get("business_date"),
+        "status": r.get("status"),
+        "stage": r.get("stage"),
+        "total_products": r.get("total_products") or 0,
+        "completed_products": r.get("completed_products") or 0,
+        "failed_products": r.get("failed_products") or 0,
+        "started_at": r.get("started_at"),
+        "completed_at": r.get("completed_at"),
+        "duration_seconds": dur,
+        "error": r.get("last_error") if r.get("status") == "failed" else None
+    }
+
+
+async def get_daily_run_report(
+    scraper_name: str,
+    business_date: Optional[str] = None,
+    client: Optional[SupabaseClient] = None
+) -> Optional[Dict[str, Any]]:
+    """Retrieves the latest JSON report for a scraper from Supabase scrape_runs."""
+    cli = client or get_supabase_client()
+    b_date = business_date or get_business_date()
+    s_id = await get_scraper_id(scraper_name, cli)
+
+    try:
+        runs = await cli.select(
+            "scrape_runs",
+            filters={"scraper_id": f"eq.{s_id}", "business_date": f"eq.{b_date}"},
+            order="started_at.desc",
+            limit=1
+        )
+        if runs and len(runs) > 0:
+            return _extract_report_from_run(runs[0], scraper_name)
+    except Exception as e:
+        print(f"[RUN_STORE] Error fetching run report for {scraper_name}: {e}", flush=True)
+
+    return None
+
+
+async def get_all_daily_reports(
+    business_date: Optional[str] = None,
+    client: Optional[SupabaseClient] = None
+) -> Dict[str, Any]:
+    """Retrieves JSON reports for all canonical scrapers for today from Supabase scrape_runs."""
+    cli = client or get_supabase_client()
+    b_date = business_date or get_business_date()
+    canonical_names = ["columbia", "adv", "myntra", "tata"]
+
+    reports = {}
+    total_prods = 0
+    all_completed = True
+
+    for name in canonical_names:
+        rep = await get_daily_run_report(name, business_date=b_date, client=cli)
+        if rep:
+            reports[name] = rep
+            total_prods += rep.get("completed_products", 0)
+            if rep.get("status") != "completed":
+                all_completed = False
+        else:
+            all_completed = False
+            reports[name] = {
+                "scraper": name,
+                "business_date": b_date,
+                "status": "pending",
+                "completed_products": 0,
+                "message": "No run recorded yet today"
+            }
+
+    return {
+        "business_date": b_date,
+        "all_completed": all_completed,
+        "total_completed_products": total_prods,
+        "scrapers": reports,
+        "reports": reports
+    }
+
 

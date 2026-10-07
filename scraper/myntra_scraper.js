@@ -12,12 +12,20 @@
 
     const ROWS = 50;
 
-    let page = 1;
+    let page = typeof window.__START_PAGE__ !== "undefined" && Number(window.__START_PAGE__) > 0
+        ? Number(window.__START_PAGE__)
+        : 1;
     const productLimit = window.__PRODUCT_LIMIT__ ? Number(window.__PRODUCT_LIMIT__) : 0;
 
     let paginationContext = null;
 
     const allProducts = [];
+    window.__MYNTRA_UNSAVED__ = window.__MYNTRA_UNSAVED__ || [];
+    window.drainUnsavedProducts = function () {
+        const u = window.__MYNTRA_UNSAVED__ || [];
+        window.__MYNTRA_UNSAVED__ = [];
+        return u;
+    };
     const progressStartedAt = Date.now();
     window.updateProgress = function (progress) {
         const current = Number(progress.current || 0);
@@ -266,9 +274,9 @@
         const scrapedAt =
             new Date().toISOString();
 
+        const pageItems = [];
 
         for (const product of products) {
-
 
             const productId =
                 String(
@@ -277,76 +285,35 @@
                     ""
                 );
 
-
             if (!productId) {
-
                 continue;
-
             }
-
 
             const sizeEntries = Array.isArray(product.inventoryInfo) && product.inventoryInfo.length
                 ? product.inventoryInfo
                 : String(product.sizes || "").split(",").map(label => ({ label: label.trim(), skuId: "" })).filter(x => x.label);
             for (const sizeEntry of (sizeEntries.length ? sizeEntries : [{ label: "", skuId: "" }])) {
-            allProducts.push({
-
-                product_id:
-                    productId,
-
-
-                source:
-                    "myntra",
-
-
-                sku:
-                    "",
-
-                ean:
-                    "",
-
-                size: sizeEntry.label || product.size || product.sizeName || product.variantSize || "",
-                color: product.primaryColour || product.color || product.colorName || product.variantColor || "",
-                variant_id: String(sizeEntry.skuId || product.buyButtonWinnerSkuId || product.variantId || product.variant_id || product.sku || ""),
-
-                title:
-                    product.productName ||
-                    product.name ||
-                    "",
-
-
-                price: (Number(product.discountedPrice ?? product.price ?? product.mrp ?? 0)) || 0,
-                mrp: (Number(product.mrp ?? product.price ?? product.discountedPrice ?? 0)) || 0,
-
-
-                url:
-
-                    product.landingPageUrl
-
-                        ? `https://www.myntra.com/${
-                            product.landingPageUrl
-                                .replace(/^\/+/, "")
-                          }`
-
+                const item = {
+                    product_id: productId,
+                    source: "myntra",
+                    sku: "",
+                    ean: "",
+                    size: sizeEntry.label || product.size || product.sizeName || product.variantSize || "",
+                    color: product.primaryColour || product.color || product.colorName || product.variantColor || "",
+                    variant_id: String(sizeEntry.skuId || product.buyButtonWinnerSkuId || product.variantId || product.variant_id || product.sku || ""),
+                    title: product.productName || product.name || "",
+                    price: (Number(product.discountedPrice ?? product.price ?? product.mrp ?? 0)) || 0,
+                    mrp: (Number(product.mrp ?? product.price ?? product.discountedPrice ?? 0)) || 0,
+                    url: product.landingPageUrl
+                        ? `https://www.myntra.com/${product.landingPageUrl.replace(/^\/+/, "")}`
                         : "",
+                    image_url: product.searchImage || product.image || "",
+                    available: true,
+                    scraped_at: scrapedAt
+                };
+                pageItems.push(item);
+                allProducts.push(item);
 
-
-                image_url:
-
-                    product.searchImage ||
-
-                    product.image ||
-
-                    "",
-
-
-                available:
-                    null,
-
-
-                scraped_at: scrapedAt
-
-            });
                 if (productLimit > 0 && allProducts.length >= productLimit) {
                     break;
                 }
@@ -354,8 +321,19 @@
             if (productLimit > 0 && allProducts.length >= productLimit) {
                 break;
             }
-
         }
+
+        // Push page checkpoint to unsaved buffer for database persistence
+        window.__MYNTRA_UNSAVED__.push({
+            page: page,
+            products: pageItems
+        });
+        window.__MYNTRA_LAST_PAGE__ = page;
+        try {
+            if (typeof window.localStorage !== "undefined") {
+                window.localStorage.setItem("myntra_last_page", String(page));
+            }
+        } catch (_) {}
 
         if (productLimit > 0 && allProducts.length >= productLimit) {
             console.log(`Product limit ${productLimit} reached. Stopping Myntra pagination.`);
