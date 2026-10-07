@@ -8,7 +8,7 @@
         new Promise(resolve => setTimeout(resolve, ms));
 
     const randomDelay = () =>
-        1500 + Math.floor(Math.random() * 2000);
+        500 + Math.floor(Math.random() * 600);
 
     const ROWS = 50;
 
@@ -125,6 +125,11 @@
                     }
                 }
 
+                if (response.status === 400) {
+                    console.log(`HTTP 400 on Page ${page} (end of catalog reached). Halting.`);
+                    return null;
+                }
+
                 if (!response.ok) {
                     throw new Error(
                         `HTTP ${response.status} on Page ${page}`
@@ -177,6 +182,11 @@
 
     while (true) {
 
+        if (window.__STOP_REQUESTED__) {
+            console.log("Stop requested. Halting pagination cleanly.");
+            break;
+        }
+
         let result;
 
 
@@ -218,6 +228,11 @@
 
             break;
 
+        }
+
+        if (!result) {
+            console.log("No further data returned. Halting pagination.");
+            break;
         }
 
 

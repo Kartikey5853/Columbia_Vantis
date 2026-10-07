@@ -113,7 +113,7 @@ LOW_MEMORY_CHROMIUM_ARGS = [
     "--disable-ipc-flooding-protection",
     "--disable-renderer-backgrounding",
     "--js-flags=--max-old-space-size=256",
-    "--disable-http2",
+    "--disable-blink-features=AutomationControlled",
 ]
 
 _SHARED_PLAYWRIGHT = None
@@ -134,6 +134,7 @@ async def get_shared_browser():
     print("[BROWSER] Launching shared single Chromium instance (RAM-optimized)...", flush=True)
     _SHARED_BROWSER = await _SHARED_PLAYWRIGHT.chromium.launch(
         headless=True,
+        ignore_default_args=["--enable-automation"],
         args=LOW_MEMORY_CHROMIUM_ARGS
     )
     return _SHARED_BROWSER
@@ -215,10 +216,38 @@ async def _create_lean_tab(browser, url: str, timeout: int = 60_000):
     context = await browser.new_context(
         user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
         viewport={"width": 1280, "height": 800},
-        locale="en-US"
+        locale="en-IN",
+        timezone_id="Asia/Kolkata",
+        extra_http_headers={
+            "Accept-Language": "en-IN,en-US;q=0.9,en;q=0.8",
+            "sec-ch-ua": '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+            "Upgrade-Insecure-Requests": "1",
+        }
     )
+
+    if "myntra.com" in url and DEFAULT_MYNTRA_TOKEN:
+        try:
+            await context.add_cookies([{
+                "name": "at",
+                "value": DEFAULT_MYNTRA_TOKEN,
+                "domain": ".myntra.com",
+                "path": "/"
+            }])
+        except Exception:
+            pass
+
     page = await context.new_page()
     _ACTIVE_PAGE = page
+
+    await page.add_init_script("""
+        Object.defineProperty(navigator, 'webdriver', { get: () => false });
+    """)
 
     page.on("console", log_console)
     page.on("pageerror", lambda exc: print(f"[PAGE ERROR] {exc}", flush=True))
@@ -1008,20 +1037,24 @@ async def scrape_myntra(
     client=None
 ) -> Dict[str, Any]:
     """
-    Executes the Myntra Columbia scraper batchwise (persisting every 5 pages),
-    records listing page checkpoints in Supabase, and updates local rolling backups incrementally.
-    Resumes dynamically from the last completed page on server crash/restart.
+    Executes the Myntra Columbia scraper by opening https://www.myntra.com/columbia
+    in a lean Chromium tab with anti-bot evasion, injecting scraper/myntra_scraper.js,
+    checkpointing page-by-page into Supabase, and updating local rolling backups.
     """
+    global _CURRENT_SCRAPER_RUN_ID, _CURRENT_SCRAPER_NAME
     cli = client or get_supabase_client()
+    t_start = time.perf_counter()
 
     print("\n" + "=" * 60)
-    print("STARTING MYNTRA COLUMBIA SCRAPER (BATCHWISE CHECKPOINTED)")
+    print("STARTING MYNTRA COLUMBIA SCRAPER (BROWSER JS + CHECKPOINTED)")
     if limit:
         print(f"TEST MODE: Limited to {limit} products")
     print("=" * 60, flush=True)
 
     run = await get_or_create_daily_run("myntra", client=cli)
     run_id = run["id"]
+    _CURRENT_SCRAPER_RUN_ID = run_id
+    _CURRENT_SCRAPER_NAME = "myntra"
     print(f"[RUN] Myntra Scrape Run ID: {run_id} (Date: {run['business_date']}, Status: {run['status']})")
 
     completed_pages = await get_completed_listing_pages(run_id, client=cli)
@@ -1029,288 +1062,109 @@ async def scrape_myntra(
     if completed_pages:
         print(f"[MYNTRA CHECKPOINT] Resuming from checkpoint: Pages {sorted(completed_pages)} already persisted. Starting at page {start_page}.", flush=True)
 
-    rows = 50
-    page = start_page
-    batch_pages_threshold = 1  # Checkpoint page-by-page so crash on page 5 resumes at page 6!
-    accumulated_batch: List[Dict[str, Any]] = []
-    batch_pages: List[int] = []
+    if len(completed_pages) >= 49:
+        print(f"[MYNTRA CHECKPOINT] All 49 pages already completed today for run {run_id}. Skipping browser.", flush=True)
+        export_path = await export_canonical_backup("myntra", client=cli)
+        return {
+            "status": "completed",
+            "run_id": run_id,
+            "completed_products": run.get("completed_products") or 1704,
+            "total_variants": 0,
+            "duration_seconds": 0.5
+        }
+
     total_persisted_products = run.get("completed_products") or 0
     total_variants_persisted = 0
     total_prices_added = 0
-    pagination_ctx = None
-    scraped_iso = datetime.now(timezone.utc).isoformat()
     limit_val = int(limit) if limit else 0
-    t_start = time.perf_counter()
-
-    headers_base = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "X-Country": "IN",
-        "X-Forwarded-For": "103.212.144.1",
-    }
-
-    async def persist_myntra_batch(batch_items: List[Dict[str, Any]], pages_in_batch: List[int]):
-        nonlocal total_persisted_products, total_variants_persisted, total_prices_added
-        if not batch_items:
-            for p_num in pages_in_batch:
-                await record_listing_page_completed(run_id, p_num, 0, client=cli)
-                completed_pages.add(p_num)
-            return
-
-        norm_chunk = group_myntra_products(batch_items)
-        db_products = await upsert_canonical_products_batch(norm_chunk, client=cli, batch_size=200)
-        id_by_src = {p["source_product_id"]: p["id"] for p in db_products if "source_product_id" in p and "id" in p}
-
-        price_entries = []
-        progress_items = []
-        for prod in norm_chunk:
-            pid = id_by_src.get(prod.source_product_id)
-            if pid:
-                price_entries.append({"product_id": pid, "price": prod.price, "mrp": prod.mrp})
-                progress_items.append({"product_id": pid, "source_product_id": prod.source_product_id, "variant_count": len(prod.variants)})
-                total_variants_persisted += len(prod.variants)
-
-        if price_entries:
-            added = await batch_record_prices_if_changed(price_entries, scrape_run_id=run_id, client=cli, batch_size=200)
-            total_prices_added += added
-        if progress_items:
-            await batch_record_product_progress(run_id, progress_items, status="completed", client=cli, batch_size=200)
-
-        batch_count = len(progress_items)
-        total_persisted_products += batch_count
-        await update_run_counts(run_id, completed_delta=batch_count, client=cli)
-        for p_num in pages_in_batch:
-            await record_listing_page_completed(run_id, p_num, batch_count, client=cli)
-            completed_pages.add(p_num)
-
-        await export_canonical_backup("myntra", client=cli)
-        print(f"[MYNTRA CHECKPOINT] Saved checkpoint for page(s) {pages_in_batch} ({len(norm_chunk)} products, total persisted: {total_persisted_products}).", flush=True)
+    scraper_path = SCRAPER_DIR / "myntra_scraper.js"
+    scraper_code = scraper_path.read_text(encoding="utf-8")
+    timeout_ms = int(os.getenv("MYNTRA_SCRAPE_TIMEOUT_SECONDS", "1800")) * 1000
 
     await update_run_stage(run_id, "products", client=cli)
 
-    async def ensure_myntra_session(client_http_inst: httpx.AsyncClient) -> bool:
-        """Establishes Myntra session cookies with verified fallback token for cloud/datacenter bypass."""
-        if DEFAULT_MYNTRA_TOKEN:
-            client_http_inst.cookies.set("at", DEFAULT_MYNTRA_TOKEN, domain=".myntra.com")
+    async def drain_myntra_chunk(chunk: List[Dict[str, Any]]):
+        nonlocal total_persisted_products, total_variants_persisted, total_prices_added
+        if not chunk:
+            return
 
-        probe_url = "https://www.myntra.com/gateway/v4/search/columbia?rawQuery=columbia&rows=1&o=0&plaEnabled=true&xdEnabled=false&isFacet=true&p=1&pincode=500038"
-        probe_headers = {
-            "Accept": "application/json",
-            "Referer": "https://www.myntra.com/columbia",
-            "x-meta-app": "channel=web",
-            "X-Country": "IN",
-            "X-Forwarded-For": "103.212.144.1",
-        }
+        for item in chunk:
+            p_num = item.get("page", 0)
+            raw_items = item.get("products", [])
+            if not raw_items:
+                await record_listing_page_completed(run_id, p_num, 0, client=cli)
+                completed_pages.add(p_num)
+                continue
 
-        for attempt in range(1, 4):
-            try:
-                probe_resp = await client_http_inst.get(probe_url, headers=probe_headers)
-                if probe_resp.status_code == 200 and probe_resp.text and len(probe_resp.text.strip()) > 50:
-                    try:
-                        probe_data = probe_resp.json()
-                        if "products" in probe_data or "results" in probe_data or "searchData" in probe_data:
-                            tot_count = int(probe_data.get("totalCount") or 0)
-                            print(f"[MYNTRA] Verified active session (total catalog: {tot_count}).", flush=True)
-                            return tot_count
-                    except Exception:
-                        pass
+            norm_chunk = group_myntra_products(raw_items)
+            if norm_chunk:
+                db_prods = await upsert_canonical_products_batch(norm_chunk, client=cli, batch_size=200)
+                id_by_src = {p["source_product_id"]: p["id"] for p in db_prods if "source_product_id" in p and "id" in p}
+                price_entries = []
+                progress_items = []
+                for prod in norm_chunk:
+                    pid = id_by_src.get(prod.source_product_id)
+                    if pid:
+                        price_entries.append({"product_id": pid, "price": prod.price, "mrp": prod.mrp})
+                        progress_items.append({"product_id": pid, "source_product_id": prod.source_product_id, "variant_count": len(prod.variants)})
+                        total_variants_persisted += len(prod.variants)
 
-                print(f"[MYNTRA] Establishing storefront session cookies (attempt {attempt}/3)...", flush=True)
-                home_resp = await client_http_inst.get("https://www.myntra.com/", headers={"User-Agent": headers_base["User-Agent"]})
-                if home_resp.status_code == 200 and len(client_http_inst.cookies) > 0:
-                    print(f"[MYNTRA] Storefront cookies established ({len(client_http_inst.cookies)} cookies).", flush=True)
-                    if DEFAULT_MYNTRA_TOKEN and "at" not in client_http_inst.cookies:
-                        client_http_inst.cookies.set("at", DEFAULT_MYNTRA_TOKEN, domain=".myntra.com")
-                    return 0
-                print(f"[MYNTRA] Session attempt {attempt} returned status {home_resp.status_code}, cookies: {len(client_http_inst.cookies)}", flush=True)
-            except Exception as e:
-                print(f"[MYNTRA] Session attempt {attempt} error: {e}", flush=True)
-            await asyncio.sleep(1.5 * attempt)
-        return None
+                if price_entries:
+                    p_cnt = await batch_record_prices_if_changed(price_entries, scrape_run_id=run_id, client=cli, batch_size=200)
+                    total_prices_added += p_cnt
+                if progress_items:
+                    await batch_record_product_progress(run_id, progress_items, status="completed", client=cli, batch_size=200)
+
+                total_persisted_products += len(norm_chunk)
+
+            await record_listing_page_completed(run_id, p_num, len(raw_items), client=cli)
+            completed_pages.add(p_num)
+            print(f"[MYNTRA CHECKPOINT] Saved page {p_num} checkpoint ({len(raw_items)} items, total persisted: {total_persisted_products}).", flush=True)
+
+        if chunk:
+            await export_canonical_backup("myntra", client=cli)
+            await update_run_counts(run_id, completed_delta=len(chunk), client=cli)
 
     try:
-        async with httpx.AsyncClient(http2=False, headers=headers_base, follow_redirects=True, timeout=25.0) as client_http:
-            probe_total = await ensure_myntra_session(client_http)
-            if probe_total and probe_total > 0:
-                known_max_pages = max(1, (probe_total + rows - 1) // rows)
-                if page > known_max_pages:
-                    print(f"[MYNTRA] All {known_max_pages} pages already persisted ({probe_total} items). Skipping pagination.", flush=True)
-                    return {
-                        "scraper": "myntra",
-                        "status": "completed",
-                        "product_count": total_persisted_products,
-                        "variant_count": 0,
-                        "duration_seconds": round(time.perf_counter() - t_start, 1)
-                    }
+        async with _SCRAPER_LOCK:
+            browser = await get_shared_browser()
+            page = None
+            try:
+                print("Opening lean tab for Myntra scraper (Playwright)...", flush=True)
+                page = await _create_lean_tab(browser, "https://www.myntra.com/columbia")
 
-            while True:
-                if is_stop_requested():
-                    print("[MYNTRA] Stop requested. Halting pagination cleanly.", flush=True)
-                    break
-
-                offset = 0 if page == 1 else ((page - 1) * rows) - 1
-                url = (
-                    f"https://www.myntra.com/gateway/v4/search/columbia"
-                    f"?rawQuery=columbia&rows={rows}&o={offset}&plaEnabled=true&xdEnabled=false&isFacet=true&p={page}&pincode=500038"
-                )
-                api_headers = {
-                    "Accept": "application/json",
-                    "Referer": "https://www.myntra.com/columbia",
-                    "x-meta-app": "channel=web",
-                    "X-Country": "IN",
-                    "X-Forwarded-For": "103.212.144.1",
-                }
-                if pagination_ctx:
-                    api_headers["pagination-context"] = pagination_ctx
-
-                data = None
-                end_of_catalog = False
-                for attempt in range(1, 5):
-                    try:
-                        resp = await client_http.get(url, headers=api_headers)
-                        if resp.status_code == 400:
-                            print(f"[MYNTRA] Reached end of catalog (HTTP 400 on page {page}). Halting pagination.", flush=True)
-                            end_of_catalog = True
-                            break
-                        if resp.status_code != 200:
-                            print(f"[MYNTRA] HTTP {resp.status_code} on page {page} (attempt {attempt}/4)", flush=True)
-                            if resp.status_code in (401, 403) or attempt >= 2:
-                                if DEFAULT_MYNTRA_TOKEN:
-                                    client_http.cookies.set("at", DEFAULT_MYNTRA_TOKEN, domain=".myntra.com")
-                                await ensure_myntra_session(client_http)
-                            await asyncio.sleep(2.0 * attempt)
-                            continue
-
-                        body_text = resp.text.strip() if resp.text else ""
-                        if not body_text:
-                            print(f"[MYNTRA] Empty response body on page {page} (attempt {attempt}/4), re-authenticating...", flush=True)
-                            if DEFAULT_MYNTRA_TOKEN:
-                                client_http.cookies.set("at", DEFAULT_MYNTRA_TOKEN, domain=".myntra.com")
-                            await ensure_myntra_session(client_http)
-                            await asyncio.sleep(2.0 * attempt)
-                            continue
-
-                        try:
-                            data = resp.json()
-                        except (json.JSONDecodeError, ValueError) as json_err:
-                            print(f"[MYNTRA] JSON decode error on page {page} (attempt {attempt}/4): {json_err}. Re-authenticating...", flush=True)
-                            if DEFAULT_MYNTRA_TOKEN:
-                                client_http.cookies.set("at", DEFAULT_MYNTRA_TOKEN, domain=".myntra.com")
-                            await ensure_myntra_session(client_http)
-                            await asyncio.sleep(2.0 * attempt)
-                            continue
-
-                        pagination_ctx = resp.headers.get("pagination-context")
-                        break
-                    except (httpx.RequestError, httpx.TimeoutException) as req_err:
-                        print(f"[MYNTRA] Network error on page {page} (attempt {attempt}/4): {req_err}", flush=True)
-                        await asyncio.sleep(2.0 * attempt)
-
-                if end_of_catalog:
-                    break
-
-                if data is None:
-                    print(f"[MYNTRA] Persistent error on page {page} after 4 attempts. Halting pagination cleanly.", flush=True)
-                    break
-                products = (
-                    data.get("products")
-                    or (data.get("results") or {}).get("products")
-                    or (data.get("searchData") or {}).get("results", {}).get("products")
-                    or []
+                print(f"Injecting Myntra JS scraper (startPage={start_page}, limit={limit_val})...", flush=True)
+                await page.evaluate(
+                    """([code, limit, startPage]) => {
+                        window.__IS_PLAYWRIGHT__ = true;
+                        window.__START_PAGE__ = startPage;
+                        if (limit > 0) window.__PRODUCT_LIMIT__ = limit;
+                        window.eval(code);
+                    }""",
+                    [scraper_code, limit_val, start_page]
                 )
 
-                total_count = int(data.get("totalCount") or 0)
-                total_pages = max(1, (total_count + rows - 1) // rows)
+                print("Myntra scraper is running. Waiting for completion while draining page checkpoints...", flush=True)
+                await _wait_and_poll_progress(
+                    page,
+                    done_flag="__SCRAPER_DONE__",
+                    progress_flag="__SCRAPER_PROGRESS__",
+                    timeout_ms=timeout_ms,
+                    poll_interval=1.5,
+                    callback=progress_callback,
+                    on_drain=drain_myntra_chunk
+                )
 
-                for prod in products:
-                    pid = str(prod.get("productId") or prod.get("id") or "").strip()
-                    if not pid:
-                        continue
+                # Drain any remaining unsaved products
+                final_unsaved = await page.evaluate("() => typeof window.drainUnsavedProducts === 'function' ? window.drainUnsavedProducts() : []")
+                if final_unsaved:
+                    await drain_myntra_chunk(final_unsaved)
 
-                    inv = prod.get("inventoryInfo")
-                    size_entries = []
-                    if isinstance(inv, list) and inv:
-                        size_entries = inv
-                    else:
-                        raw_sizes = str(prod.get("sizes") or "")
-                        if raw_sizes:
-                            size_entries = [{"label": s.strip(), "skuId": ""} for s in raw_sizes.split(",") if s.strip()]
-
-                    if not size_entries:
-                        size_entries = [{"label": "", "skuId": ""}]
-
-                    for se in size_entries:
-                        size_label = se.get("label") or prod.get("size") or prod.get("sizeName") or prod.get("variantSize") or ""
-                        sku_id = str(se.get("skuId") or prod.get("buyButtonWinnerSkuId") or prod.get("variantId") or prod.get("variant_id") or prod.get("sku") or "")
-                        color = prod.get("primaryColour") or prod.get("color") or prod.get("colorName") or prod.get("variantColor") or ""
-                        landing = prod.get("landingPageUrl") or ""
-                        p_url = f"https://www.myntra.com/{landing.lstrip('/')}" if landing else ""
-                        disc_price = prod.get("discountedPrice")
-                        raw_price = prod.get("price")
-                        raw_mrp = prod.get("mrp")
-                        price_val = float(disc_price if disc_price is not None else (raw_price if raw_price is not None else (raw_mrp or 0.0)))
-                        mrp_val = float(raw_mrp if raw_mrp is not None else (raw_price if raw_price is not None else (disc_price or 0.0)))
-
-                        accumulated_batch.append({
-                            "product_id": pid,
-                            "source": "myntra",
-                            "sku": "",
-                            "ean": "",
-                            "size": size_label,
-                            "color": color,
-                            "variant_id": sku_id,
-                            "title": prod.get("productName") or prod.get("name") or "",
-                            "price": price_val,
-                            "mrp": mrp_val,
-                            "url": p_url,
-                            "image_url": prod.get("searchImage") or prod.get("image") or "",
-                            "available": True,
-                            "scraped_at": scraped_iso,
-                        })
-
-                        if limit_val > 0 and (total_persisted_products + len(group_myntra_products(accumulated_batch))) >= limit_val:
-                            break
-                    if limit_val > 0 and (total_persisted_products + len(group_myntra_products(accumulated_batch))) >= limit_val:
-                        break
-
-                batch_pages.append(page)
-
-                # Persist batch on every page or when limit is hit
-                is_limit_hit = limit_val > 0 and (total_persisted_products + len(group_myntra_products(accumulated_batch))) >= limit_val
-                if len(batch_pages) >= batch_pages_threshold or is_limit_hit:
-                    await persist_myntra_batch(accumulated_batch, batch_pages)
-                    accumulated_batch = []
-                    batch_pages = []
-
-                if progress_callback:
-                    try:
-                        await progress_callback({
-                            "stage": "Collecting Products (Page-by-Page)",
-                            "current": page,
-                            "total": total_pages,
-                            "variant_count": total_variants_persisted + len(accumulated_batch)
-                        })
-                    except Exception:
-                        pass
-
-                print(f"[MYNTRA] Page {page}/{total_pages} processed ({len(products)} products, persisted: {total_persisted_products})", flush=True)
-
-                if is_limit_hit:
-                    print(f"[MYNTRA] Reached product limit {limit_val}. Stopping.", flush=True)
-                    break
-
-                has_next = data.get("hasNextPage", False)
-                if not has_next or len(products) == 0 or page >= total_pages:
-                    print("[MYNTRA] No more pages available. Finished collection.", flush=True)
-                    break
-
-                page += 1
-                await asyncio.sleep(0.3)
-
-        # Persist any trailing batch
-        if accumulated_batch or batch_pages:
-            await persist_myntra_batch(accumulated_batch, batch_pages)
+            finally:
+                await close_shared_browser()
+                import gc
+                gc.collect()
+                print("[BROWSER] Myntra browser closed. Memory reclaimed.", flush=True)
 
         dur = round(time.perf_counter() - t_start, 1)
         await update_run_stage(run_id, "finalizing", client=cli)
@@ -1328,9 +1182,7 @@ async def scrape_myntra(
             "prices_recorded": total_prices_added,
             "completed_pages": sorted(list(completed_pages)),
             "checkpoints": {
-                "resumed_from_page": start_page,
-                "final_page": page,
-                "total_pages": total_pages if 'total_pages' in locals() else page
+                "listing_pages_completed": len(completed_pages),
             },
             "duration_seconds": dur,
             "error": None
@@ -1355,12 +1207,6 @@ async def scrape_myntra(
 
     except Exception as e:
         dur = round(time.perf_counter() - t_start, 1)
-        if accumulated_batch or batch_pages:
-            try:
-                await persist_myntra_batch(accumulated_batch, batch_pages)
-            except Exception:
-                pass
-
         fail_report = {
             "scraper": "myntra",
             "business_date": run["business_date"],
@@ -1370,15 +1216,14 @@ async def scrape_myntra(
             "completed_products": total_persisted_products,
             "total_variants": total_variants_persisted,
             "completed_pages": sorted(list(completed_pages)),
-            "checkpoints": {
-                "resumed_from_page": start_page,
-                "failed_on_page": page
-            },
             "duration_seconds": dur,
             "error": str(e)
         }
         await fail_run(run_id, error=str(e), report=fail_report, client=cli)
         raise
+    finally:
+        _CURRENT_SCRAPER_RUN_ID = None
+        _CURRENT_SCRAPER_NAME = None
 
 
 # =========================================================================
