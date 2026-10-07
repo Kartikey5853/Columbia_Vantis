@@ -144,19 +144,69 @@ async def get_incomplete_products(
 ) -> List[Dict[str, Any]]:
     """
     Returns all product progress items for this run that are NOT completed.
-    This includes 'pending', 'in_progress', and 'failed' products to enable resume.
+    Paginates using offset to support arbitrarily large product catalogs (> 1000 items).
     """
     cli = client or get_supabase_client()
-    rows = await cli.select(
-        "scrape_product_progress",
-        columns="id,scrape_run_id,product_id,source_product_id,status,attempts,last_error,variant_count",
-        filters={
-            "scrape_run_id": f"eq.{run_id}",
-            "status": "neq.completed"
-        },
-        order="attempts.asc,started_at.asc"
-    )
-    return rows or []
+    all_incomplete = []
+    chunk_size = 1000
+    offset = 0
+
+    while True:
+        rows = await cli.select(
+            "scrape_product_progress",
+            columns="id,scrape_run_id,product_id,source_product_id,status,attempts,last_error,variant_count",
+            filters={
+                "scrape_run_id": f"eq.{run_id}",
+                "status": "neq.completed"
+            },
+            order="id.asc",
+            limit=chunk_size,
+            offset=offset
+        )
+        if not rows:
+            break
+        all_incomplete.extend(rows)
+        if len(rows) < chunk_size:
+            break
+        offset += len(rows)
+
+    return all_incomplete
+
+
+async def get_completed_product_ids(
+    run_id: str,
+    client: Optional[SupabaseClient] = None
+) -> Set[str]:
+    """
+    Returns the set of source_product_ids already successfully completed for this run.
+    Paginates to support catalogs > 1000 items.
+    """
+    cli = client or get_supabase_client()
+    completed: Set[str] = set()
+    offset = 0
+    chunk_size = 1000
+
+    while True:
+        rows = await cli.select(
+            "scrape_product_progress",
+            columns="source_product_id",
+            filters={
+                "scrape_run_id": f"eq.{run_id}",
+                "status": "eq.completed"
+            },
+            limit=chunk_size,
+            offset=offset
+        )
+        if not rows:
+            break
+        for r in rows:
+            if "source_product_id" in r and r["source_product_id"]:
+                completed.add(str(r["source_product_id"]).strip())
+        if len(rows) < chunk_size:
+            break
+        offset += len(rows)
+
+    return completed
 
 
 async def mark_product_in_progress(

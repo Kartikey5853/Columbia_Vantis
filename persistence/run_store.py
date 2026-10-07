@@ -432,13 +432,13 @@ async def is_scraper_completed_today(
     business_date: Optional[str] = None,
     client: Optional[SupabaseClient] = None
 ) -> bool:
-    """Returns True if the scraper has a successful completed run today with >= 1 product."""
+    """Returns True if the scraper has a successful completed run today with >= 1 product (and variants for Tata)."""
     cli = client or get_supabase_client()
     b_date = business_date or get_business_date()
     s_id = await get_scraper_id(scraper_name, cli)
     runs = await cli.select(
         "scrape_runs",
-        columns="id,status,completed_products",
+        columns="id,status,completed_products,report",
         filters={
             "scraper_id": f"eq.{s_id}",
             "business_date": f"eq.{b_date}",
@@ -447,7 +447,18 @@ async def is_scraper_completed_today(
         limit=1
     )
     if runs and len(runs) > 0:
-        return (runs[0].get("completed_products") or 0) > 0
+        prods = runs[0].get("completed_products") or 0
+        if scraper_name == "tata":
+            rep = runs[0].get("report") or {}
+            if isinstance(rep, str):
+                import json
+                try:
+                    rep = json.loads(rep)
+                except Exception:
+                    rep = {}
+            vars_cnt = rep.get("total_variants", 0) if isinstance(rep, dict) else 0
+            return prods > 0 and vars_cnt > 100
+        return prods > 0
     return False
 
 

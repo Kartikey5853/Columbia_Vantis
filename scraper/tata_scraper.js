@@ -21,7 +21,7 @@
     const CONCURRENCY =
         typeof window.__CONCURRENCY__ !== "undefined"
             ? window.__CONCURRENCY__
-            : 7;
+            : 3;
     const progressStartedAt = Date.now();
     window.updateProgress = function (progress) {
         const current = Number(progress.current || 0), total = Number(progress.total || 0);
@@ -365,6 +365,15 @@
         `Finished product listing (${cleanProducts.length} products)`
     );
     console.log("----------------------------------------");
+
+    // If running in listings_only phase, exit cleanly after completing Phase 1
+    if (window.__PHASE__ === "listings_only") {
+        console.log(`[TATA LISTINGS] Phase 1 listings complete (${cleanProducts.length} products). Stopping before Phase 2.`);
+        updateProgress({ stage: "Listings Complete", current: cleanProducts.length, total: cleanProducts.length });
+        window.__LISTINGS_DONE__ = true;
+        window.__SCRAPER_DONE__ = true;
+        return;
+    }
 
 
     // --------------------------------------------------

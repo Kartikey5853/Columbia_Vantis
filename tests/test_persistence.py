@@ -69,7 +69,7 @@ class MockSupabaseClient(SupabaseClient):
             "scrape_product_progress": [],
         }
 
-    async def select(self, table: str, columns: str = "*", filters=None, order=None, limit=None, single=False):
+    async def select(self, table: str, columns: str = "*", filters=None, order=None, limit=None, offset=None, single=False):
         rows = list(self.tables.get(table, []))
         if filters:
             for k, fval in filters.items():
@@ -88,6 +88,9 @@ class MockSupabaseClient(SupabaseClient):
             col = parts[0]
             desc = len(parts) > 1 and parts[1].lower() == "desc"
             rows.sort(key=lambda r: str(r.get(col, "")), reverse=desc)
+
+        if offset is not None:
+            rows = rows[int(offset):]
 
         if limit is not None:
             rows = rows[: int(limit)]

@@ -111,6 +111,7 @@ class SupabaseClient:
         filters: Optional[Dict[str, str]] = None,
         order: Optional[str] = None,
         limit: Optional[int] = None,
+        offset: Optional[int] = None,
         single: bool = False
     ) -> Union[List[Dict[str, Any]], Dict[str, Any], None]:
         """
@@ -124,6 +125,8 @@ class SupabaseClient:
             params["order"] = order
         if limit is not None:
             params["limit"] = str(limit)
+        if offset is not None:
+            params["offset"] = str(offset)
 
         headers = {}
         if single:

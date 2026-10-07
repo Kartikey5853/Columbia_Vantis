@@ -142,12 +142,15 @@ async def check_and_trigger_scrapers(force: bool = False) -> Dict[str, Any]:
 
         backup_path = Path(f"data/{name}/{name}_data.json")
         if not force and status == "completed" and prods > 0:
-            completed_scrapers.append(name)
-            if not backup_path.exists():
-                try:
-                    await export_canonical_backup(name)
-                except Exception:
-                    pass
+            if name == "tata" and (s_data.get("total_variants", 0) or 0) < 100:
+                pending_scrapers.append(name)
+            else:
+                completed_scrapers.append(name)
+                if not backup_path.exists():
+                    try:
+                        await export_canonical_backup(name)
+                    except Exception:
+                        pass
         else:
             pending_scrapers.append(name)
 
