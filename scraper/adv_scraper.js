@@ -42,6 +42,7 @@
     let page = window.__START_PAGE__ ? Number(window.__START_PAGE__) : 1;
     const limit = window.__PRODUCT_LIMIT__ ? Number(window.__PRODUCT_LIMIT__) : 0;
     let totalItemsEmitted = 0;
+    let pagesInCurrentBatchCount = 0;
 
     while (true) {
         if (window.__STOP_REQUESTED__ === true) {
@@ -114,6 +115,7 @@
                     product_id: String(product.id),
                     sku: variant.sku || "",
                     ean: variant.barcode || "",
+                    size: variant.title || "",
                     title: product.title,
                     price: Number(variant.price),
                     mrp:
@@ -125,7 +127,9 @@
                     url:
                         `${BASE_URL}/products/${product.handle}`
                 };
-                window.output.push(item);
+                if (typeof window.__IS_PLAYWRIGHT__ === "undefined") {
+                    window.output.push(item);
+                }
                 window.__ADVENTURAS_UNSAVED__.push(item);
                 totalItemsEmitted++;
 
@@ -138,6 +142,16 @@
                 break;
             }
         }
+
+        window.__PAGES_IN_CURRENT_BATCH__ = window.__PAGES_IN_CURRENT_BATCH__ || [];
+        window.__PAGES_IN_CURRENT_BATCH__.push(page);
+        pagesInCurrentBatchCount++;
+
+        window.drainCompletedPages = function () {
+            const p = window.__PAGES_IN_CURRENT_BATCH__ || [];
+            window.__PAGES_IN_CURRENT_BATCH__ = [];
+            return p;
+        };
 
         console.log(
             `Page ${page}: ${data.products.length} products (${pageColumbiaCount} Columbia). Total SKUs so far: ${totalItemsEmitted}`
@@ -153,6 +167,20 @@
             break;
         }
 
+        // Check if current batch of pages reached threshold (e.g. 3 pages) for database sync
+        const batchPageSize = window.__BATCH_PAGE_SIZE__ ? Number(window.__BATCH_PAGE_SIZE__) : 3;
+        if (typeof window.__IS_PLAYWRIGHT__ !== "undefined" && pagesInCurrentBatchCount >= batchPageSize) {
+            console.log(`[ADV] Batch of ${pagesInCurrentBatchCount} pages reached (${(window.__ADVENTURAS_UNSAVED__ || []).length} items). Syncing to database before next page...`);
+            window.__BATCH_READY__ = true;
+            window.__BATCH_SAVED__ = false;
+            while (!window.__BATCH_SAVED__ && !window.__STOP_REQUESTED__) {
+                await sleep(200);
+            }
+            window.__BATCH_READY__ = false;
+            pagesInCurrentBatchCount = 0;
+            console.log(`[ADV] Database updated successfully. Proceeding to Page ${page + 1}...`);
+        }
+
         page++;
         await sleep(randomDelay());
     }
@@ -166,24 +194,22 @@
     console.log("SCRAPING COMPLETE");
     console.log("--------------------------------");
    
-    console.log("Total SKUs :", window.output.length);
+    console.log("Total SKUs :", totalItemsEmitted);
   
     console.log("--------------------------------");
     window.updateProgress({ stage: "Completed", current: totalPages, total: totalPages });
 
-    const output = {
-        schema_version: 1,
-        source: "adventuras",
-        scrape_date: new Date().toISOString().slice(0, 10),
-        scraped_at: new Date().toISOString(),
-        products: window.output,
-        total_products: window.output.length
-    };
-
-    window.scraperResult = output;
-    window.__SCRAPER_DONE__ = true;
-
     if (typeof window.__IS_PLAYWRIGHT__ === "undefined") {
+        const output = {
+            schema_version: 1,
+            source: "adventuras",
+            scrape_date: new Date().toISOString().slice(0, 10),
+            scraped_at: new Date().toISOString(),
+            products: window.output,
+            total_products: totalItemsEmitted
+        };
+        window.scraperResult = output;
+        window.__SCRAPER_DONE__ = true;
         const blob = new Blob([JSON.stringify(output, null, 2)], { type: "application/json" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
@@ -196,7 +222,9 @@
         console.log("Download Complete!");
         setTimeout(() => { try { window.close(); } catch (_) {} }, 1500);
     } else {
-        console.log("Playwright detected: result stored on window.scraperResult");
+        window.scraperResult = { total_products: totalItemsEmitted, total_pages: totalPages };
+        window.__SCRAPER_DONE__ = true;
+        console.log("Playwright streaming mode complete. Total items emitted:", totalItemsEmitted);
     }
 
 })();

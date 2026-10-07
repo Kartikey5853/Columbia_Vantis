@@ -29,6 +29,7 @@ from persistence.models import NormalizedProduct, NormalizedVariant
 from persistence.supabase_client import get_supabase_client
 from persistence.run_store import (
     get_or_create_daily_run,
+    get_scraper_id,
     update_run_stage,
     update_run_counts,
     complete_run,
@@ -269,7 +270,9 @@ async def _wait_and_poll_progress(
     poll_interval: float = 2.0,
     callback=None,
     on_drain: Optional[Callable[[List[Any]], Any]] = None,
-    on_drain_listings: Optional[Callable[[List[Any]], Any]] = None
+    on_drain_listings: Optional[Callable[[List[Any]], Any]] = None,
+    on_drain_variants: Optional[Callable[[List[Any]], Any]] = None,
+    on_batch_sync: Optional[Callable[[Any], Any]] = None,
 ) -> bool:
     """Wait for completion while periodically streaming progress to callback and draining chunks."""
     start_t = time.perf_counter()
@@ -294,6 +297,14 @@ async def _wait_and_poll_progress(
                 except Exception as e:
                     print(f"[PROGRESS] Listings drain error: {e}", flush=True)
 
+        if on_drain_variants:
+            variants_chunk = await page.evaluate("() => typeof window.drainUnsavedVariants === 'function' ? window.drainUnsavedVariants() : []")
+            if variants_chunk and len(variants_chunk) > 0:
+                try:
+                    await on_drain_variants(variants_chunk)
+                except Exception as e:
+                    print(f"[PROGRESS] Variants drain error: {e}", flush=True)
+
         if on_drain:
             chunk = await page.evaluate("() => typeof window.drainUnsavedProducts === 'function' ? window.drainUnsavedProducts() : []")
             if chunk and len(chunk) > 0:
@@ -301,6 +312,18 @@ async def _wait_and_poll_progress(
                     await on_drain(chunk)
                 except Exception as e:
                     print(f"[PROGRESS] Chunk drain error: {e}", flush=True)
+
+        if on_batch_sync:
+            batch_ready = await page.evaluate("() => window.__BATCH_READY__ === true")
+            if batch_ready:
+                try:
+                    await on_batch_sync(page)
+                except Exception as e:
+                    print(f"[PROGRESS] Batch sync error: {e}", flush=True)
+                    try:
+                        await page.evaluate("() => { window.__BATCH_SAVED__ = true; }")
+                    except Exception:
+                        pass
 
         if is_done:
             if on_drain_listings:
@@ -310,6 +333,13 @@ async def _wait_and_poll_progress(
                         await on_drain_listings(listings_chunk)
                     except Exception:
                         pass
+            if on_drain_variants:
+                variants_chunk = await page.evaluate("() => typeof window.drainUnsavedVariants === 'function' ? window.drainUnsavedVariants() : []")
+                if variants_chunk and len(variants_chunk) > 0:
+                    try:
+                        await on_drain_variants(variants_chunk)
+                    except Exception:
+                        pass
             if on_drain:
                 chunk = await page.evaluate("() => typeof window.drainUnsavedProducts === 'function' ? window.drainUnsavedProducts() : []")
                 if chunk and len(chunk) > 0:
@@ -317,6 +347,11 @@ async def _wait_and_poll_progress(
                         await on_drain(chunk)
                     except Exception:
                         pass
+            if on_batch_sync:
+                try:
+                    await on_batch_sync(page)
+                except Exception:
+                    pass
             return True
 
         if callback:
@@ -691,15 +726,15 @@ async def scrape_adv(
     client=None
 ) -> Dict[str, Any]:
     """
-    Executes the Adventuras scraper with ultra-low RAM usage (< 25MB) and page-by-page persistence.
-    Directly streams Shopify products.json with pace delays (2s) to prevent container CPU/RAM spikes.
-    Checkpoints completed pages into scrape_listing_pages so crashes resume seamlessly.
+    Executes Adventuras scraper via Playwright tab running adv_scraper.js.
+    Batches database updates in 3-4 pages, draining the browser window buffer
+    to prevent memory spikes, and resumes seamlessly from scrape_listing_pages checkpoints.
     """
     global _CURRENT_SCRAPER_RUN_ID, _CURRENT_SCRAPER_NAME
     cli = client or get_supabase_client()
 
     print("\n" + "=" * 60)
-    print("STARTING ADVENTURAS SCRAPER (LEAN STREAMING ENGINE)")
+    print("STARTING ADVENTURAS SCRAPER (3-4 PAGE BATCH PLAYWRIGHT ENGINE)")
     if limit:
         print(f"TEST MODE: Limited to {limit} products")
     print("=" * 60, flush=True)
@@ -713,165 +748,131 @@ async def scrape_adv(
     completed_pages = await get_completed_listing_pages(run_id, client=cli)
     start_page = max(completed_pages) + 1 if completed_pages else 1
     if completed_pages:
-        print(f"[ADV CHECKPOINT] Resuming Adventuras from page {start_page} ({len(completed_pages)} pages already completed).", flush=True)
+        print(f"[ADV CHECKPOINT] Resuming Adventuras from page {start_page} ({len(completed_pages)} pages already completed in DB).", flush=True)
 
     await update_run_stage(run_id, "products", client=cli)
 
-    BASE_URL = "https://adventuras.in"
-    LIMIT_PER_PAGE = 250
-    batch_size = 200
+    scraper_path = SCRAPER_DIR / "adv_scraper.js"
+    scraper_code = scraper_path.read_text(encoding="utf-8")
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
-
-    page = start_page
-    total_persisted_products = 0
+    total_persisted_products = run.get("completed_products") or 0
     total_persisted_variants = 0
     total_prices_recorded = 0
     all_pages_done = set(completed_pages)
+    t_start = time.perf_counter()
+
+    async def handle_adv_batch(page_obj):
+        nonlocal total_persisted_products, total_persisted_variants, total_prices_recorded
+        raw_items = await page_obj.evaluate("() => typeof window.drainUnsavedProducts === 'function' ? window.drainUnsavedProducts() : []")
+        pages_chunk = await page_obj.evaluate("() => typeof window.drainCompletedPages === 'function' ? window.drainCompletedPages() : []")
+
+        if raw_items:
+            norm_products = group_adv_products(raw_items)
+            db_products = await upsert_canonical_products_batch(norm_products, client=cli, batch_size=200)
+            id_by_src = {p["source_product_id"]: p["id"] for p in db_products if "source_product_id" in p and "id" in p}
+
+            price_entries = []
+            progress_items = []
+            chunk_variants = 0
+            for prod in norm_products:
+                pid = id_by_src.get(prod.source_product_id)
+                if pid:
+                    price_entries.append({
+                        "product_id": pid,
+                        "price": prod.price,
+                        "mrp": prod.mrp
+                    })
+                    progress_items.append({
+                        "product_id": pid,
+                        "source_product_id": prod.source_product_id,
+                        "variant_count": len(prod.variants)
+                    })
+                    chunk_variants += len(prod.variants)
+
+            if price_entries:
+                added = await batch_record_prices_if_changed(
+                    price_entries, scrape_run_id=run_id, client=cli, batch_size=200
+                )
+                total_prices_recorded += added
+
+            if progress_items:
+                await batch_record_product_progress(
+                    run_id, progress_items, status="completed", client=cli, batch_size=200
+                )
+
+            total_persisted_products += len(norm_products)
+            total_persisted_variants += chunk_variants
+            await update_run_counts(run_id, completed_delta=len(norm_products), failed_delta=0, client=cli)
+
+        for p_num in pages_chunk:
+            await record_listing_page_completed(run_id, p_num, product_count=len(raw_items) if len(pages_chunk) == 1 else 0, client=cli)
+            all_pages_done.add(p_num)
+
+        if raw_items or pages_chunk:
+            await export_canonical_backup("adv", client=cli)
+            print(f"[ADV BATCH] Persisted batch of {len(pages_chunk)} pages ({len(raw_items)} raw items, total persisted: {total_persisted_products}). Browser memory cleared.", flush=True)
+
+        import gc
+        gc.collect()
+
+        # Acknowledge to JS scraper so it advances to next page
+        try:
+            await page_obj.evaluate("() => { window.__BATCH_SAVED__ = true; }")
+        except Exception:
+            pass
 
     try:
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True, headers=headers) as http_client:
-            while True:
-                if is_stop_requested():
-                    reason = get_stop_reason()
-                    print(f"[ADV] 🛑 Stop requested ({reason}). Halting Adventuras scraper gracefully.", flush=True)
-                    await stop_run(run_id, reason=reason, client=cli)
-                    return {
-                        "status": "stopped",
-                        "run_id": run_id,
-                        "completed_products": total_persisted_products,
-                        "total_variants": total_persisted_variants,
-                        "message": f"Adventuras scraper stopped: {reason}"
-                    }
+        async with _SCRAPER_LOCK:
+            browser = await get_shared_browser()
+            page = None
+            try:
+                print("Opening lean tab for Adventuras scraper (Playwright)...", flush=True)
+                page = await _create_lean_tab(browser, "https://adventuras.in/")
 
-                if limit and total_persisted_products >= limit:
-                    print(f"[ADV] Reached product limit of {limit}. Stopping pagination.", flush=True)
-                    break
+                limit_val = int(limit) if limit else 0
+                batch_page_size = 3  # 3 pages per batch as requested by user
+                print(f"Injecting Adventuras JS scraper (startPage={start_page}, batchPageSize={batch_page_size}, limit={limit_val})...", flush=True)
+                await page.evaluate(
+                    """([code, limit, startPage, batchSize]) => {
+                        window.__IS_PLAYWRIGHT__ = true;
+                        window.__START_PAGE__ = startPage;
+                        window.__BATCH_PAGE_SIZE__ = batchSize;
+                        if (limit > 0) window.__PRODUCT_LIMIT__ = limit;
+                        window.eval(code);
+                    }""",
+                    [scraper_code, limit_val, start_page, batch_page_size]
+                )
 
-                print(f"[ADV] Fetching Page {page}...", flush=True)
-                url = f"{BASE_URL}/products.json?limit={LIMIT_PER_PAGE}&page={page}"
+                print("Adventuras scraper is running. Waiting for completion while syncing 3-4 page batches...", flush=True)
+                await _wait_and_poll_progress(
+                    page,
+                    done_flag="__SCRAPER_DONE__",
+                    progress_flag="__SCRAPER_PROGRESS__",
+                    timeout_ms=1800_000,
+                    poll_interval=1.5,
+                    callback=progress_callback,
+                    on_batch_sync=handle_adv_batch
+                )
 
-                data = None
-                for attempt in range(1, 6):
-                    try:
-                        resp = await http_client.get(url)
-                        if resp.status_code == 200:
-                            data = resp.json()
-                            break
-                        elif resp.status_code in (429, 503):
-                            wait_s = attempt * 3.0
-                            print(f"[ADV] HTTP {resp.status_code} on Page {page}, retry {attempt}/5 after {wait_s}s...", flush=True)
-                            await asyncio.sleep(wait_s)
-                        else:
-                            print(f"[ADV] Warning: HTTP {resp.status_code} on Page {page}", flush=True)
-                            break
-                    except Exception as net_err:
-                        wait_s = attempt * 3.0
-                        print(f"[ADV] Network error on Page {page} ({net_err}), retry {attempt}/5 after {wait_s}s...", flush=True)
-                        await asyncio.sleep(wait_s)
+                # Final flush of any pending batch
+                await handle_adv_batch(page)
 
-                if not data or not data.get("products"):
-                    print(f"[ADV] Page {page} returned 0 products. Reached end of catalog.", flush=True)
-                    break
-
-                raw_products = data.get("products", [])
-                columbia_raw = [
-                    p for p in raw_products
-                    if p.get("vendor") and str(p.get("vendor")).strip().lower() == "columbia"
-                ]
-
-                print(f"[ADV] Page {page}: {len(raw_products)} products ({len(columbia_raw)} Columbia).", flush=True)
-
-                page_norm_products: List[NormalizedProduct] = []
-                for p_dict in columbia_raw:
-                    np = normalize_shopify_product(p_dict)
-                    page_norm_products.append(np)
-                    if limit and (total_persisted_products + len(page_norm_products)) >= limit:
-                        break
-
-                if page_norm_products:
-                    # Persist immediately to Supabase
-                    db_products = await upsert_canonical_products_batch(
-                        page_norm_products, client=cli, batch_size=batch_size
-                    )
-                    id_by_src = {p["source_product_id"]: p["id"] for p in db_products if "source_product_id" in p and "id" in p}
-
-                    price_entries = []
-                    progress_items = []
-                    page_variants = 0
-                    for prod in page_norm_products:
-                        pid = id_by_src.get(prod.source_product_id)
-                        if pid:
-                            price_entries.append({
-                                "product_id": pid,
-                                "price": prod.price,
-                                "mrp": prod.mrp
-                            })
-                            progress_items.append({
-                                "product_id": pid,
-                                "source_product_id": prod.source_product_id,
-                                "variant_count": len(prod.variants)
-                            })
-                            page_variants += len(prod.variants)
-
-                    if price_entries:
-                        added = await batch_record_prices_if_changed(
-                            price_entries, scrape_run_id=run_id, client=cli, batch_size=batch_size
-                        )
-                        total_prices_recorded += added
-
-                    if progress_items:
-                        await batch_record_product_progress(
-                            run_id, progress_items, status="completed", client=cli, batch_size=batch_size
-                        )
-
-                    total_persisted_products += len(page_norm_products)
-                    total_persisted_variants += page_variants
-                    await update_run_counts(run_id, completed_delta=len(page_norm_products), failed_delta=0, client=cli)
-
-                # Checkpoint the page completion in Supabase
-                await record_listing_page_completed(run_id, page, product_count=len(page_norm_products), client=cli)
-                all_pages_done.add(page)
-
-                # Send real-time progress update
-                if progress_callback:
-                    try:
-                        await progress_callback({
-                            "stage": "Collecting & Persisting Products",
-                            "current": page,
-                            "total": max(page + 1, 24),
-                            "product_count": total_persisted_products,
-                            "variant_count": total_persisted_variants,
-                            "page": page
-                        })
-                    except Exception:
-                        pass
-
-                # If returned less than LIMIT_PER_PAGE, this was the last page
-                if len(raw_products) < LIMIT_PER_PAGE:
-                    print(f"[ADV] Page {page} returned {len(raw_products)} < {LIMIT_PER_PAGE}. Pagination complete.", flush=True)
-                    break
-
-                # Memory reclamation & pacing delay
-                del raw_products, columbia_raw, page_norm_products
+            finally:
+                await close_shared_browser()
                 import gc
                 gc.collect()
-
-                # Gentle delay to minimize CPU and RAM usage
-                await asyncio.sleep(2.0)
-                page += 1
+                print("[BROWSER] Adventuras browser closed. Memory reclaimed.", flush=True)
 
     finally:
         _CURRENT_SCRAPER_RUN_ID = None
         _CURRENT_SCRAPER_NAME = None
 
     if is_stop_requested():
+        reason = get_stop_reason()
+        await stop_run(run_id, reason=reason, client=cli)
         return {"status": "stopped", "run_id": run_id}
 
+    dur = round(time.perf_counter() - t_start, 1)
     await update_run_stage(run_id, "finalizing", client=cli)
     export_path = await export_canonical_backup("adv", client=cli)
 
@@ -886,7 +887,27 @@ async def scrape_adv(
         "total_variants": total_persisted_variants,
         "prices_recorded": total_prices_recorded,
         "completed_pages": sorted(list(all_pages_done)),
+        "duration_seconds": dur,
         "error": None
+    }
+    await complete_run(run_id, report=adv_report, client=cli)
+
+    print("\n" + "=" * 60)
+    print(f"ADVENTURAS SCRAPING FINISHED: {total_persisted_products} products persisted across {len(all_pages_done)} pages")
+    print(f"Total Variants Persisted: {total_persisted_variants}")
+    print(f"Price Records Added: {total_prices_recorded}")
+    print(f"Local Rolling Backup: {export_path.resolve()}")
+    print("=" * 60 + "\n", flush=True)
+
+    return {
+        "status": "completed",
+        "run_id": run_id,
+        "completed_products": total_persisted_products,
+        "failed_products": 0,
+        "total_variants": total_persisted_variants,
+        "price_records_added": total_prices_recorded,
+        "export_file": str(export_path),
+        "completed_pages": sorted(list(all_pages_done)),
     }
     await complete_run(run_id, report=adv_report, client=cli)
 
@@ -1060,13 +1081,24 @@ async def scrape_myntra(
 
     await update_run_stage(run_id, "products", client=cli)
 
-    try:
-        async with httpx.AsyncClient(http2=False, headers=headers_base, follow_redirects=True, timeout=20.0) as client_http:
-            print("[MYNTRA] Initializing storefront session cookies...", flush=True)
+    async def ensure_myntra_session(client_http_inst: httpx.AsyncClient) -> bool:
+        """Visits Myntra storefront to obtain valid session cookies (at, _abck, bm_sz)."""
+        for attempt in range(1, 4):
             try:
-                await client_http.get("https://www.myntra.com/")
+                print(f"[MYNTRA] Establishing storefront session cookies (attempt {attempt}/3)...", flush=True)
+                home_resp = await client_http_inst.get("https://www.myntra.com/")
+                if home_resp.status_code == 200 and len(client_http_inst.cookies) > 0:
+                    print(f"[MYNTRA] Session established with {len(client_http_inst.cookies)} cookies.", flush=True)
+                    return True
+                print(f"[MYNTRA] Session attempt {attempt} returned status {home_resp.status_code}, cookies: {len(client_http_inst.cookies)}", flush=True)
             except Exception as e:
-                print(f"[MYNTRA] Note: Homepage visit: {e}", flush=True)
+                print(f"[MYNTRA] Session attempt {attempt} error: {e}", flush=True)
+            await asyncio.sleep(1.5 * attempt)
+        return False
+
+    try:
+        async with httpx.AsyncClient(http2=False, headers=headers_base, follow_redirects=True, timeout=25.0) as client_http:
+            await ensure_myntra_session(client_http)
 
             while True:
                 offset = 0 if page == 1 else ((page - 1) * rows) - 1
@@ -1082,18 +1114,41 @@ async def scrape_myntra(
                 if pagination_ctx:
                     api_headers["pagination-context"] = pagination_ctx
 
-                try:
-                    resp = await client_http.get(url, headers=api_headers)
-                except Exception as e:
-                    print(f"[MYNTRA] Request failed on page {page}: {e}", flush=True)
-                    break
+                data = None
+                for attempt in range(1, 5):
+                    try:
+                        resp = await client_http.get(url, headers=api_headers)
+                        if resp.status_code != 200:
+                            print(f"[MYNTRA] HTTP {resp.status_code} on page {page} (attempt {attempt}/4)", flush=True)
+                            if resp.status_code in (401, 403) or attempt >= 2:
+                                await ensure_myntra_session(client_http)
+                            await asyncio.sleep(2.0 * attempt)
+                            continue
 
-                if resp.status_code != 200:
-                    print(f"[MYNTRA] Non-200 HTTP status {resp.status_code} on page {page}", flush=True)
-                    break
+                        body_text = resp.text.strip() if resp.text else ""
+                        if not body_text:
+                            print(f"[MYNTRA] Empty response body on page {page} (attempt {attempt}/4), re-authenticating...", flush=True)
+                            await ensure_myntra_session(client_http)
+                            await asyncio.sleep(2.0 * attempt)
+                            continue
 
-                pagination_ctx = resp.headers.get("pagination-context")
-                data = resp.json()
+                        try:
+                            data = resp.json()
+                        except (json.JSONDecodeError, ValueError) as json_err:
+                            print(f"[MYNTRA] JSON decode error on page {page} (attempt {attempt}/4): {json_err}. Re-authenticating...", flush=True)
+                            await ensure_myntra_session(client_http)
+                            await asyncio.sleep(2.0 * attempt)
+                            continue
+
+                        pagination_ctx = resp.headers.get("pagination-context")
+                        break
+                    except (httpx.RequestError, httpx.TimeoutException) as req_err:
+                        print(f"[MYNTRA] Network error on page {page} (attempt {attempt}/4): {req_err}", flush=True)
+                        await asyncio.sleep(2.0 * attempt)
+
+                if data is None:
+                    print(f"[MYNTRA] Persistent error on page {page} after 4 attempts. Halting pagination cleanly.", flush=True)
+                    break
                 products = (
                     data.get("products")
                     or (data.get("results") or {}).get("products")
@@ -1340,7 +1395,7 @@ async def scrape_tata(
     # Check if we have pre-existing canonical products to skip Phase 1
     existing_canonical = await cli.select(
         "products",
-        columns="id,source_product_id,title,price,mrp,available,image_url,url,variants",
+        columns="id,source_product_id,title,current_price,current_mrp,available,image_url,url,variants",
         filters={"scraper_id": f"eq.{await get_scraper_id('tata', cli)}"}
     )
     initial_products_for_js = []
@@ -1424,6 +1479,73 @@ async def scrape_tata(
         else:
             print(f"[TATA BATCH] Persisted batch of {len(norm_chunk)} products ({total_variants_persisted} total variants).", flush=True)
 
+    async def drain_tata_variants(variant_chunk: List[Dict[str, Any]]):
+        """Phase 2: Persist variant updates directly to Supabase canonical products."""
+        nonlocal total_variants_persisted, total_prices_added, total_products_persisted, last_checkpoint_variants
+        if not variant_chunk:
+            return
+
+        chunk_pids = [str(item.get("product_id") or "").strip() for item in variant_chunk if item.get("product_id")]
+        if not chunk_pids:
+            return
+
+        scraper_id = await get_scraper_id("tata", cli)
+        rows = await cli.select(
+            "products",
+            columns="id,source_product_id,current_price,current_mrp",
+            filters={"scraper_id": f"eq.{scraper_id}", "source_product_id": f"in.({','.join(chunk_pids)})"}
+        )
+        id_by_src = {r["source_product_id"]: r["id"] for r in (rows or []) if "source_product_id" in r}
+
+        progress_items = []
+        for item in variant_chunk:
+            src_pid = str(item.get("product_id") or "").strip()
+            raw_vars = item.get("variants") or []
+            db_id = id_by_src.get(src_pid)
+            if not db_id:
+                continue
+
+            norm_vars = [
+                NormalizedVariant(
+                    size=str(v.get("size") or ""),
+                    sku=v.get("sku"),
+                    available=bool(v.get("available")),
+                    stock=int(v.get("stock") or 0),
+                    url=v.get("url"),
+                )
+                for v in raw_vars
+            ]
+
+            try:
+                await cli.update(
+                    "products",
+                    {"variants": [v.to_dict() for v in norm_vars], "updated_at": datetime.now(timezone.utc).isoformat()},
+                    filters={"id": f"eq.{db_id}"}
+                )
+            except Exception as up_err:
+                print(f"[TATA] Warning updating variants for {src_pid}: {up_err}", flush=True)
+
+            total_variants_persisted += len(norm_vars)
+            persisted_product_ids.add(src_pid)
+            progress_items.append({
+                "product_id": db_id,
+                "source_product_id": src_pid,
+                "variant_count": len(norm_vars)
+            })
+
+        if progress_items:
+            await batch_record_product_progress(run_id, progress_items, status="completed", client=cli, batch_size=200)
+
+        total_products_persisted += len(progress_items)
+        await update_run_counts(run_id, completed_delta=len(progress_items), client=cli)
+        await export_canonical_backup("tata", client=cli)
+
+        if total_variants_persisted - last_checkpoint_variants >= 200 or total_variants_persisted < 200:
+            last_checkpoint_variants = total_variants_persisted
+            print(f"[TATA CHECKPOINT] Saved 200-variant milestone: {total_variants_persisted} total variants in DB ({total_products_persisted} products).", flush=True)
+        else:
+            print(f"[TATA BATCH] Persisted batch of {len(progress_items)} products ({total_variants_persisted} total variants).", flush=True)
+
     await update_run_stage(run_id, "variants" if initial_products_for_js else "listings", client=cli)
 
     try:
@@ -1461,13 +1583,18 @@ async def scrape_tata(
                     poll_interval=2.0,
                     callback=progress_callback,
                     on_drain=drain_tata_chunk,
-                    on_drain_listings=drain_tata_listings
+                    on_drain_listings=drain_tata_listings,
+                    on_drain_variants=drain_tata_variants,
                 )
 
-                # Drain any remaining buffered listings or products
+                # Drain any remaining buffered listings, variants, or products
                 final_listings = await page.evaluate("() => typeof window.drainUnsavedListings === 'function' ? window.drainUnsavedListings() : []")
                 if final_listings:
                     await drain_tata_listings(final_listings)
+
+                final_variants = await page.evaluate("() => typeof window.drainUnsavedVariants === 'function' ? window.drainUnsavedVariants() : []")
+                if final_variants:
+                    await drain_tata_variants(final_variants)
 
                 final_unsaved = await page.evaluate("() => typeof window.drainUnsavedProducts === 'function' ? window.drainUnsavedProducts() : []")
                 if final_unsaved:

@@ -80,7 +80,8 @@ from persistence.run_store import (
     is_scraper_completed_today,
     get_business_date,
     get_daily_run_report,
-    get_all_daily_reports
+    get_all_daily_reports,
+    reset_daily_scrapers
 )
 from persistence.exporter import export_canonical_backup
 
@@ -225,6 +226,7 @@ async def root():
         "endpoints": {
             "deploy_trigger": "POST /deploy-trigger (or GET /deploy-trigger)",
             "stop_pipeline": "POST /scrape/stop (or GET /scrape/stop)",
+            "reset_scrapers": "POST /scrape/reset (or GET /scrape/reset)",
             "trigger_job": "POST /scrape?scrapers=columbia,adv,myntra,tata",
             "check_status": "GET /scrape/status/{job_id}",
             "active_status": "GET /scrape/status",
@@ -253,6 +255,38 @@ async def stop_pipeline_endpoint(
     await stop_current_scraper(reason=reason)
     res = await stop_active_pipeline(reason=reason)
     return JSONResponse(status_code=200, content=res)
+
+
+@app.post("/scrape/reset", tags=["Scraper Pipeline"])
+@app.get("/scrape/reset", tags=["Scraper Pipeline"])
+async def reset_scrapers_endpoint(
+    scrapers: str = Query("all", description="Comma-separated scrapers to reset e.g. 'all' or 'columbia,adv,myntra,tata'"),
+    business_date: Optional[str] = Query(None, description="Business date to reset (YYYY-MM-DD), defaults to today")
+):
+    """
+    🔄 DAILY RESET SWITCH:
+    Resets all or selected scrapers for the specified business date.
+    Clears page checkpoints in scrape_listing_pages and progress in scrape_product_progress,
+    resets scrape_runs to queued, clears stop flags and crash guards,
+    allowing a completely fresh scrape from page 1.
+    """
+    b_date = business_date or get_business_date()
+    target_list = [s.strip() for s in (scrapers or "all").split(",") if s.strip()]
+
+    # Clear stop flags and reboot guards
+    clear_stop_flag()
+    reset_boot_tracker()
+
+    res = await reset_daily_scrapers(scrapers=target_list, business_date=b_date)
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "reset_completed",
+            "business_date": b_date,
+            "message": f"Successfully reset scrapers for {b_date}. All checkpoints cleared. Ready to scrape again from page 1.",
+            "details": res
+        }
+    )
 
 
 @app.post("/deploy-trigger")

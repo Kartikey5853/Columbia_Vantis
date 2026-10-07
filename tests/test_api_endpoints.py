@@ -119,5 +119,31 @@ class TestApiEndpoints(unittest.TestCase):
         data = res.json()
         self.assertEqual(data["status"], "stopped")
 
+    @patch("api.reset_daily_scrapers", new_callable=AsyncMock)
+    def test_reset_scrapers_post(self, mock_reset):
+        mock_reset.return_value = {
+            "business_date": "2026-10-07",
+            "reset_scrapers": ["columbia", "adv", "myntra", "tata"],
+            "details": []
+        }
+        res = self.client.post("/scrape/reset?scrapers=all")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["status"], "reset_completed")
+        self.assertIn("Successfully reset scrapers", data["message"])
+        mock_reset.assert_called_once()
+
+    @patch("api.reset_daily_scrapers", new_callable=AsyncMock)
+    def test_reset_scrapers_get(self, mock_reset):
+        mock_reset.return_value = {
+            "business_date": "2026-10-07",
+            "reset_scrapers": ["myntra"],
+            "details": []
+        }
+        res = self.client.get("/scrape/reset?scrapers=myntra")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["status"], "reset_completed")
+
 if __name__ == "__main__":
     unittest.main()

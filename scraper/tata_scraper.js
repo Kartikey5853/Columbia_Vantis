@@ -387,6 +387,14 @@
         window.__TATA_UNSAVED__ = [];
         return u;
     };
+
+    window.__TATA_UNSAVED_VARIANTS__ = window.__TATA_UNSAVED_VARIANTS__ || [];
+    window.drainUnsavedVariants = function () {
+        const u = window.__TATA_UNSAVED_VARIANTS__ || [];
+        window.__TATA_UNSAVED_VARIANTS__ = [];
+        return u;
+    };
+
     const alreadyCompletedSet = new Set(
         Array.isArray(window.__ALREADY_COMPLETED_IDS__) ? window.__ALREADY_COMPLETED_IDS__ : []
     );
@@ -425,28 +433,35 @@
                 continue;
             }
 
+            let fetchedVariants = [];
             try {
-
-                product.variants =
+                fetchedVariants =
                     await fetchVariants(
                         product.product_id
                     );
 
                 totalVariants +=
-                    product.variants.length;
+                    fetchedVariants.length;
 
             }
 
             catch (err) {
 
                 failedVariants++;
-
-                product.variants = [];
+                fetchedVariants = [];
 
             }
 
-            // Queue for streaming persistence
-            window.__TATA_UNSAVED__.push(product);
+            // In Playwright mode, stream directly to unsaved buffer and DO NOT retain 2,400 variants in V8 memory!
+            if (typeof window.__IS_PLAYWRIGHT__ !== "undefined") {
+                window.__TATA_UNSAVED_VARIANTS__.push({
+                    product_id: product.product_id,
+                    variants: fetchedVariants
+                });
+            } else {
+                product.variants = fetchedVariants;
+                window.__TATA_UNSAVED__.push(product);
+            }
 
             completed++;
             updateProgress({
@@ -631,34 +646,30 @@
     // Final Output & Playwright Signal
     // --------------------------------------------------
 
-    const output = {
-        schema_version: 1,
-        source: "tatacliq",
-        scrape_date: new Date().toISOString().slice(0, 10),
-        scraped_at: new Date().toISOString(),
-        total_products: cleanProducts.length,
-        total_variants: totalVariants,
-        average_variants_per_product: Number(
-            (
-                totalVariants /
-                Math.max(cleanProducts.length, 1)
-            ).toFixed(2)
-        ),
-        products: cleanProducts
-    };
-
-    window.output = cleanProducts;
-    window.scraperResult = output;
-    if (typeof window.updateProgress === "function") {
-        window.updateProgress({ stage: "Completed", current: cleanProducts.length, total: cleanProducts.length });
-    }
-    window.__SCRAPER_DONE__ = true;
-
-    // --------------------------------------------------
-    // Download (Standalone Browser Only)
-    // --------------------------------------------------
-
     if (typeof window.__IS_PLAYWRIGHT__ === "undefined") {
+        const output = {
+            schema_version: 1,
+            source: "tatacliq",
+            scrape_date: new Date().toISOString().slice(0, 10),
+            scraped_at: new Date().toISOString(),
+            total_products: cleanProducts.length,
+            total_variants: totalVariants,
+            average_variants_per_product: Number(
+                (
+                    totalVariants /
+                    Math.max(cleanProducts.length, 1)
+                ).toFixed(2)
+            ),
+            products: cleanProducts
+        };
+
+        window.output = cleanProducts;
+        window.scraperResult = output;
+        if (typeof window.updateProgress === "function") {
+            window.updateProgress({ stage: "Completed", current: cleanProducts.length, total: cleanProducts.length });
+        }
+        window.__SCRAPER_DONE__ = true;
+
         downloadJSON(
             cleanProducts,
             "tatacliq_columbia_products.json"
@@ -675,8 +686,17 @@
             } catch (_) {}
         }, 2000);
     } else {
+        window.output = [];
+        window.scraperResult = {
+            total_products: cleanProducts.length,
+            total_variants: totalVariants
+        };
+        if (typeof window.updateProgress === "function") {
+            window.updateProgress({ stage: "Completed", current: cleanProducts.length, total: cleanProducts.length });
+        }
+        window.__SCRAPER_DONE__ = true;
         console.log(
-            "[SCRAPER] Playwright execution: results stored in window.scraperResult and window.__SCRAPER_DONE__ = true"
+            "[SCRAPER] Playwright streaming complete: variants streamed directly to database. Browser memory clear."
         );
     }
 

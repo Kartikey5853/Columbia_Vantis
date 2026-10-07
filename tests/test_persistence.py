@@ -149,6 +149,20 @@ class MockSupabaseClient(SupabaseClient):
                 matched.append(row)
         return matched if return_representation else []
 
+    async def delete(self, table: str, filters):
+        kept = []
+        for row in self.tables.get(table, []):
+            match = True
+            for k, fval in filters.items():
+                if fval.startswith("eq."):
+                    if str(row.get(k)) != str(fval[3:]):
+                        match = False
+                        break
+            if not match:
+                kept.append(row)
+        self.tables[table] = kept
+        return True
+
     async def rpc(self, func_name: str, params=None):
         if func_name == "get_database_size_stats":
             stats = []

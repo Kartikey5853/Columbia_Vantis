@@ -135,7 +135,12 @@ class SupabaseClient:
         if res.status_code >= 400:
             raise RuntimeError(f"Supabase select error on {table} ({res.status_code}): {res.text}")
 
-        data = res.json()
+        if not res.text or not res.text.strip():
+            return None if single else []
+        try:
+            data = res.json()
+        except Exception:
+            return None if single else []
         return data
 
     async def insert(
@@ -224,7 +229,12 @@ class SupabaseClient:
         res = await self._request_with_retry("POST", f"rpc/{func_name}", json_data=params or {})
         if res.status_code >= 400:
             raise RuntimeError(f"Supabase RPC error on {func_name} ({res.status_code}): {res.text}")
-        return res.json()
+        if not res.text or not res.text.strip():
+            return None
+        try:
+            return res.json()
+        except Exception:
+            return None
 
 
 # Singleton factory for global reuse

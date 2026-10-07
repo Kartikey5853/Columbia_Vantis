@@ -1,5 +1,5 @@
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 from persistence.supabase_client import get_supabase_client, SupabaseClient
 
 KOLKATA_TZ = timezone(timedelta(hours=5, minutes=30))
@@ -271,6 +271,92 @@ async def stop_run(
 ) -> Dict[str, Any]:
     """Marks a scrape run as stopped/paused in Supabase."""
     return await fail_run(run_id, error=f"STOPPED: {reason}", report=report, client=client)
+
+
+async def reset_daily_scrapers(
+    scrapers: Optional[List[str]] = None,
+    business_date: Optional[str] = None,
+    client: Optional[SupabaseClient] = None
+) -> Dict[str, Any]:
+    """
+    Resets scrape_runs, listing page checkpoints, and product progress for a business date
+    so scrapers can start fresh from page 1 without leftover checkpoints.
+    """
+    cli = client or get_supabase_client()
+    b_date = business_date or get_business_date()
+    canonical = ["columbia", "adv", "myntra", "tata"]
+
+    alias_map = {"columbiasportswear": "columbia", "adventuras": "adv", "tatacliq": "tata"}
+    if scrapers:
+        target_names = [alias_map.get(s.strip().lower(), s.strip().lower()) for s in scrapers if s.strip()]
+        if "all" in target_names or "pipeline" in target_names:
+            target_names = canonical
+    else:
+        target_names = canonical
+
+    # Deduplicate while preserving canonical order
+    target_names = [s for s in canonical if s in target_names] or canonical
+
+    reset_details = []
+    now_iso = now_utc_iso()
+
+    for name in target_names:
+        try:
+            s_id = await get_scraper_id(name, cli)
+            runs = await cli.select(
+                "scrape_runs",
+                columns="id",
+                filters={"scraper_id": f"eq.{s_id}", "business_date": f"eq.{b_date}"}
+            )
+            for r in (runs or []):
+                rid = r["id"]
+                # 1. Clear page checkpoints
+                try:
+                    await cli.delete("scrape_listing_pages", filters={"scrape_run_id": f"eq.{rid}"})
+                except Exception as e:
+                    print(f"[RUN_STORE] Warning: clear scrape_listing_pages for {name}: {e}", flush=True)
+
+                # 2. Clear product progress checkpoints
+                try:
+                    await cli.delete("scrape_product_progress", filters={"scrape_run_id": f"eq.{rid}"})
+                except Exception as e:
+                    print(f"[RUN_STORE] Warning: clear scrape_product_progress for {name}: {e}", flush=True)
+
+                # 3. Reset scrape_runs row to queued
+                update_fields = {
+                    "status": "queued",
+                    "stage": "listings",
+                    "total_products": 0,
+                    "completed_products": 0,
+                    "failed_products": 0,
+                    "updated_at": now_iso,
+                    "started_at": now_iso,
+                    "completed_at": None,
+                    "last_error": None,
+                }
+                try:
+                    await cli.update(
+                        "scrape_runs",
+                        {**update_fields, "report": {}},
+                        filters={"id": f"eq.{rid}"}
+                    )
+                except Exception:
+                    await cli.update(
+                        "scrape_runs",
+                        update_fields,
+                        filters={"id": f"eq.{rid}"}
+                    )
+
+                reset_details.append({"scraper": name, "run_id": rid, "status": "reset"})
+        except Exception as err:
+            print(f"[RUN_STORE] Error resetting scraper {name}: {err}", flush=True)
+
+    return {
+        "business_date": b_date,
+        "reset_scrapers": target_names,
+        "details": reset_details,
+        "timestamp": now_iso
+    }
 
 
 async def get_daily_scrapers_summary(
