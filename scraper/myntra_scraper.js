@@ -85,7 +85,11 @@
 
         // Build headers
         const headers = {
-            "accept": "application/json"
+            "accept": "application/json",
+            "x-meta-app": "channel=web",
+            "sec-fetch-dest": "empty",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-site": "same-origin"
         };
 
 
@@ -153,24 +157,30 @@
         }
 
 
-        // Read pagination context BEFORE parsing JSON
+        // Read pagination context BEFORE parsing
         const nextPaginationContext =
             response.headers.get(
                 "pagination-context"
             );
 
-
-        const data =
-            await response.json();
-
+        const rawText = await response.text();
+        let data;
+        try {
+            data = JSON.parse(rawText);
+        } catch (jsonErr) {
+            console.warn(`Response was not valid JSON (received ${rawText.slice(0, 60)}...). Checking window.__myx...`);
+            if (typeof window.__myx !== "undefined" && window.__myx?.searchData) {
+                data = window.__myx.searchData;
+                console.log(`Successfully recovered data from window.__myx!`);
+            } else {
+                throw new Error(`Failed to parse response as JSON. Body preview: ${rawText.slice(0, 150)}`);
+            }
+        }
 
         return {
-
             data,
-
             paginationContext:
                 nextPaginationContext
-
         };
 
     }
