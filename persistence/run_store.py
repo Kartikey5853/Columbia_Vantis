@@ -436,16 +436,30 @@ async def is_scraper_completed_today(
     cli = client or get_supabase_client()
     b_date = business_date or get_business_date()
     s_id = await get_scraper_id(scraper_name, cli)
-    runs = await cli.select(
-        "scrape_runs",
-        columns="id,status,completed_products,report",
-        filters={
-            "scraper_id": f"eq.{s_id}",
-            "business_date": f"eq.{b_date}",
-            "status": "eq.completed"
-        },
-        limit=1
-    )
+    # Try selecting with report column, fallback to standard columns if column doesn't exist
+    try:
+        runs = await cli.select(
+            "scrape_runs",
+            columns="id,status,completed_products,report",
+            filters={
+                "scraper_id": f"eq.{s_id}",
+                "business_date": f"eq.{b_date}",
+                "status": "eq.completed"
+            },
+            limit=1
+        )
+    except Exception:
+        runs = await cli.select(
+            "scrape_runs",
+            columns="id,status,completed_products",
+            filters={
+                "scraper_id": f"eq.{s_id}",
+                "business_date": f"eq.{b_date}",
+                "status": "eq.completed"
+            },
+            limit=1
+        )
+
     if runs and len(runs) > 0:
         prods = runs[0].get("completed_products") or 0
         if scraper_name == "tata":
