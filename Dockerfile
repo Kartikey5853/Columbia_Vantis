@@ -15,4 +15,6 @@ RUN playwright install --with-deps chromium
 
 COPY . .
 
-CMD ["xvfb-run", "-a", "-s", "-screen 0 1024x768x16", "uvicorn", "api:app", "--host", "0.0.0.0", "--port", "10000", "--timeout-graceful-shutdown", "120"]
+ENV PORT=10000
+
+CMD ["sh", "-c", "xvfb-run -a -s '-screen 0 1024x768x16' uvicorn api:app --host 0.0.0.0 --port ${PORT:-10000} --timeout-graceful-shutdown 120"]
