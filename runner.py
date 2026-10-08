@@ -671,6 +671,7 @@ async def scrape_columbia(
 
     persisted_count = len(progress_items)
     failed_count = len(norm_products) - persisted_count
+    total_variants = sum(len(p.variants) for p in norm_products)
     await update_run_counts(run_id, completed_delta=persisted_count, failed_delta=failed_count, client=cli)
 
     # 3. Finalize run and export local rolling backup
@@ -683,6 +684,7 @@ async def scrape_columbia(
         "stage": "completed",
         "total_products": persisted_count,
         "completed_products": persisted_count,
+        "total_variants": total_variants,
         "failed_products": failed_count,
         "prices_recorded": price_records_count,
         "error": None
@@ -691,6 +693,7 @@ async def scrape_columbia(
 
     print("\n" + "=" * 60)
     print(f"COLUMBIA SCRAPING FINISHED: {persisted_count} products persisted")
+    print(f"Total Variants Persisted: {total_variants}")
     print(f"Price Records Added: {price_records_count}")
     print(f"Local Rolling Backup: {export_path.resolve()}")
     print("=" * 60 + "\n", flush=True)
@@ -699,6 +702,7 @@ async def scrape_columbia(
         "status": "completed",
         "run_id": run_id,
         "completed_products": persisted_count,
+        "total_variants": total_variants,
         "failed_products": failed_count,
         "price_records_added": price_records_count,
         "export_file": str(export_path),
@@ -1257,6 +1261,28 @@ async def scrape_myntra(
                 if final_unsaved:
                     await drain_myntra_chunk(final_unsaved)
 
+                # Capture rich session diagnostics
+                try:
+                    diag_title = await page.title()
+                except Exception:
+                    diag_title = "unknown"
+                try:
+                    diag_url = page.url
+                except Exception:
+                    diag_url = "unknown"
+                try:
+                    diag_cookies = len(await page.context.cookies())
+                except Exception:
+                    diag_cookies = 0
+                try:
+                    diag_error = await page.evaluate("() => window.__SCRAPER_ERROR__ || null")
+                except Exception:
+                    diag_error = None
+                try:
+                    diag_details = await page.evaluate("() => window.__MYNTRA_DIAGNOSTICS__ || {}")
+                except Exception:
+                    diag_details = {}
+
             finally:
                 await close_shared_browser()
                 import gc
@@ -1267,14 +1293,23 @@ async def scrape_myntra(
         await update_run_stage(run_id, "finalizing", client=cli)
         export_path = await export_canonical_backup("myntra", client=cli)
 
+        err_msg = None
+        if total_persisted_products == 0:
+            http_st = diag_details.get("http_status", "unknown")
+            body_prev = str(diag_details.get("body_preview") or "").strip().replace("\n", " ")[:120]
+            err_msg = f"0 products collected. Error: {diag_error or 'Akamai/bot challenge page returned instead of JSON'}. (HTTP {http_st}, Title: '{diag_title}', Cookies: {diag_cookies}, Preview: '{body_prev}')"
+            print(f"\n[MYNTRA DIAGNOSTICS] ⚠️ {err_msg}\n", flush=True)
+
+        myntra_status = "failed" if total_persisted_products == 0 else "completed"
+
         report = {
             "scraper": "myntra",
             "business_date": run["business_date"],
-            "status": "completed",
+            "status": myntra_status,
             "stage": "completed",
             "total_products": total_persisted_products,
             "completed_products": total_persisted_products,
-            "failed_products": 0,
+            "failed_products": 0 if total_persisted_products > 0 else 1,
             "total_variants": total_variants_persisted,
             "prices_recorded": total_prices_added,
             "completed_pages": sorted(list(completed_pages)),
@@ -1282,12 +1317,21 @@ async def scrape_myntra(
                 "listing_pages_completed": len(completed_pages),
             },
             "duration_seconds": dur,
-            "error": None
+            "error": err_msg,
+            "diagnostics": {
+                "page_title": diag_title,
+                "current_url": diag_url,
+                "cookies_injected": diag_cookies,
+                "js_error": diag_error,
+                "api_details": diag_details,
+            }
         }
         await complete_run(run_id, report=report, client=cli)
 
         print("\n" + "=" * 60)
-        print(f"MYNTRA SCRAPING FINISHED: {total_persisted_products} products persisted")
+        print(f"MYNTRA SCRAPING FINISHED: {total_persisted_products} products persisted (Status: {myntra_status})")
+        if err_msg:
+            print(f"Diagnostics: {err_msg}")
         print(f"Total Variants Persisted: {total_variants_persisted}")
         print(f"Price Records Added: {total_prices_added}")
         print(f"Local Rolling Backup: {export_path.resolve()}")
@@ -1295,10 +1339,12 @@ async def scrape_myntra(
         print("=" * 60 + "\n", flush=True)
 
         return {
-            "status": "completed",
+            "status": myntra_status,
             "run_id": run_id,
             "completed_products": total_persisted_products,
             "total_variants": total_variants_persisted,
+            "error": err_msg,
+            "diagnostics": report["diagnostics"],
             "report": report
         }
 
@@ -1390,18 +1436,18 @@ async def scrape_tata(
     # =========================================================================
     completed_listing_pages = await get_completed_listing_pages(run_id, client=cli)
 
-    # Check if catalog is already present in DB
+    # Check if full catalog is already present in DB
     existing_catalog_sample = await cli.select(
         "products",
         columns="id",
         filters={"scraper_id": f"eq.{scraper_id}"},
-        limit=10
+        limit=1500
     )
-    has_existing_catalog = bool(existing_catalog_sample and len(existing_catalog_sample) > 0)
-    phase1_needed = not (len(completed_listing_pages) >= 54 or (has_existing_catalog and not limit))
+    has_full_catalog = bool(existing_catalog_sample and len(existing_catalog_sample) >= 1500)
+    phase1_needed = not (len(completed_listing_pages) >= 50 or (has_full_catalog and not limit))
 
     if not phase1_needed:
-        print(f"[TATA CHECKPOINT] Phase 1 already complete ({len(completed_listing_pages)} pages in DB, existing catalog detected). Skipping listing browser.", flush=True)
+        print(f"[TATA CHECKPOINT] Phase 1 already complete ({len(completed_listing_pages)} pages in DB, full catalog detected). Skipping listing browser.", flush=True)
     else:
         print(f"[TATA PHASE 1] Starting listing page collection (starting from page {len(completed_listing_pages)})...", flush=True)
         await update_run_stage(run_id, "listings", client=cli)
@@ -1990,18 +2036,18 @@ async def scrape_tata_lux(
     # =========================================================================
     completed_listing_pages = await get_completed_listing_pages(run_id, client=cli)
 
-    # Check if catalog is already present in DB
+    # Check if full catalog is already present in DB
     existing_catalog_sample = await cli.select(
         "products",
         columns="id",
         filters={"scraper_id": f"eq.{scraper_id}"},
-        limit=10
+        limit=1500
     )
-    has_existing_catalog = bool(existing_catalog_sample and len(existing_catalog_sample) > 0)
-    phase1_needed = not (len(completed_listing_pages) >= 95 or (has_existing_catalog and not limit))
+    has_full_catalog = bool(existing_catalog_sample and len(existing_catalog_sample) >= 1500)
+    phase1_needed = not (len(completed_listing_pages) >= 90 or (has_full_catalog and not limit))
 
     if not phase1_needed:
-        print(f"[TATA LUX CHECKPOINT] Phase 1 already complete ({len(completed_listing_pages)} pages in DB, existing catalog detected). Skipping listing browser.", flush=True)
+        print(f"[TATA LUX CHECKPOINT] Phase 1 already complete ({len(completed_listing_pages)} pages in DB, full catalog detected). Skipping listing browser.", flush=True)
     else:
         print(f"[TATA LUX PHASE 1] Starting listing page collection (starting from page {len(completed_listing_pages)})...", flush=True)
         await update_run_stage(run_id, "listings", client=cli)
@@ -2347,6 +2393,7 @@ SCRAPER_KEY_MAP = {
     "myntra": "myntra",
     "tata": "tatacliq",
     "tata_lux": "tata_lux",
+    "lux": "tata_lux",
 }
 
 SCRAPER_FUNCS = {
@@ -2377,6 +2424,7 @@ def normalize_scraper_names(scrapers: Optional[List[str]]) -> List[str]:
         "tata_lux": "tata_lux",
         "tatalux": "tata_lux",
         "tatacliq_luxury": "tata_lux",
+        "lux": "tata_lux",
     }
 
     requested = set()
@@ -2532,6 +2580,8 @@ async def run_sequential_pipeline(
             cumulative_variants += vars_cnt
 
             completed_pct = round((idx + 1) * weight_per_scraper, 1)
+            s_status = res.get("status", "completed")
+            s_error = res.get("error")
             await update_job(
                 job_id,
                 product_count=cumulative_products,
@@ -2539,15 +2589,16 @@ async def run_sequential_pipeline(
                 progress_percentage=min(100.0, completed_pct),
                 scrapers={
                     s_key: {
-                        "status": "completed",
+                        "status": s_status,
                         "product_count": prods,
                         "variant_count": vars_cnt,
                         "duration_seconds": dur,
-                        "error": None
+                        "error": s_error
                     }
                 }
             )
-            print(f"[JOB {job_id}] ✅ {s_name.upper()} COMPLETED ({prods} products, {vars_cnt} variants, {dur}s)", flush=True)
+            icon = "✅" if s_status == "completed" else "⚠️"
+            print(f"[JOB {job_id}] {icon} {s_name.upper()} {s_status.upper()} ({prods} products, {vars_cnt} variants, {dur}s)", flush=True)
 
         except asyncio.CancelledError:
             reason = get_stop_reason()
@@ -2667,7 +2718,7 @@ async def _run_cli():
                 from jobs import create_job
                 job = await create_job(force=args.force)
                 await run_sequential_pipeline(job["job_id"], limit=args.limit, force=args.force)
-            elif target in ("tata_lux", "tatalux", "tatacliq_luxury"):
+            elif target in ("tata_lux", "tatalux", "tatacliq_luxury", "lux"):
                 await scrape_tata_lux(limit=args.limit)
             elif target in ("tata", "tatacliq"):
                 await scrape_tata(limit=args.limit)

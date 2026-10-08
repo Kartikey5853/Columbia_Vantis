@@ -37,6 +37,7 @@ async def get_scraper_id(scraper_name: str, client: Optional[SupabaseClient] = N
     source_map = {
         "tata": "tatacliq",
         "tata_lux": "tatacliq_luxury",
+        "lux": "tatacliq_luxury",
         "columbia": "columbia_sportswear_india",
         "adv": "adventuras",
         "myntra": "myntra"
@@ -293,6 +294,7 @@ async def reset_daily_scrapers(
         "tatacliq": "tata",
         "tatalux": "tata_lux",
         "tatacliq_luxury": "tata_lux",
+        "lux": "tata_lux",
     }
     if scrapers:
         target_names = [alias_map.get(s.strip().lower(), s.strip().lower()) for s in scrapers if s.strip()]
@@ -383,12 +385,20 @@ async def get_daily_scrapers_summary(
         s_id = await get_scraper_id(name, cli)
         id_to_name[s_id] = name
 
-    runs = await cli.select(
-        "scrape_runs",
-        columns="id,scraper_id,business_date,status,stage,total_products,completed_products,failed_products,started_at,completed_at,updated_at,last_error",
-        filters={"business_date": f"eq.{b_date}"},
-        order="started_at.desc"
-    )
+    try:
+        runs = await cli.select(
+            "scrape_runs",
+            columns="id,scraper_id,business_date,status,stage,total_products,completed_products,failed_products,started_at,completed_at,updated_at,last_error,report",
+            filters={"business_date": f"eq.{b_date}"},
+            order="started_at.desc"
+        )
+    except Exception:
+        runs = await cli.select(
+            "scrape_runs",
+            columns="id,scraper_id,business_date,status,stage,total_products,completed_products,failed_products,started_at,completed_at,updated_at,last_error",
+            filters={"business_date": f"eq.{b_date}"},
+            order="started_at.desc"
+        )
 
     summary: Dict[str, Dict[str, Any]] = {}
     for name in canonical_names:
@@ -396,6 +406,7 @@ async def get_daily_scrapers_summary(
             "status": "pending",
             "run_id": None,
             "completed_products": 0,
+            "total_variants": 0,
             "failed_products": 0,
             "started_at": None,
             "completed_at": None,
@@ -420,10 +431,21 @@ async def get_daily_scrapers_summary(
                     dur = round((t_end - t_start).total_seconds(), 1)
                 except Exception:
                     pass
+
+            rep = r.get("report") or {}
+            if isinstance(rep, str):
+                import json
+                try:
+                    rep = json.loads(rep)
+                except Exception:
+                    rep = {}
+            vars_cnt = rep.get("total_variants", 0) if isinstance(rep, dict) else 0
+
             summary[s_name] = {
                 "status": r_status,
                 "run_id": r.get("id"),
                 "completed_products": r.get("completed_products") or 0,
+                "total_variants": vars_cnt,
                 "failed_products": r.get("failed_products") or 0,
                 "started_at": r.get("started_at"),
                 "completed_at": r.get("completed_at"),

@@ -241,6 +241,7 @@ SCRAPER_KEY_MAP = {
     "tata_lux": "tata_lux",
     "tatalux": "tata_lux",
     "tatacliq_luxury": "tata_lux",
+    "lux": "tata_lux",
 }
 
 
@@ -287,7 +288,7 @@ async def _reconstruct_job_from_supabase(job_id: str) -> Optional[Dict[str, Any]
             scrapers_dict[k] = {
                 "status": s_status,
                 "product_count": p_cnt,
-                "variant_count": p_cnt if s_name in ("tata", "tata_lux", "adv", "myntra") else 0,
+                "variant_count": data.get("total_variants") or (p_cnt if s_name in ("tata", "tata_lux", "adv", "myntra", "columbia") else 0),
                 "duration_seconds": data.get("duration_seconds", 0.0),
                 "error": data.get("error")
             }

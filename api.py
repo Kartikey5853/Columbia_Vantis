@@ -324,6 +324,7 @@ async def get_scraper_report_endpoint(scraper: str):
         "tatacliq": "tata",
         "tatalux": "tata_lux",
         "tatacliq_luxury": "tata_lux",
+        "lux": "tata_lux",
     }
     norm_name = alias_map.get(scraper.lower(), scraper.lower())
     rep = await get_daily_run_report(norm_name)
@@ -359,6 +360,7 @@ async def trigger_scrape_job(
         "tatacliq": "tata",
         "tatalux": "tata_lux",
         "tatacliq_luxury": "tata_lux",
+        "lux": "tata_lux",
     }
     selected = [alias_map.get(s.lower(), s.lower()) for s in selected]
     canonical_order = ["columbia", "adv", "myntra", "tata", "tata_lux"]
@@ -596,6 +598,7 @@ async def get_tata_data():
 
 @app.get("/scrape/tata_lux")
 @app.get("/scrape/tatalux")
+@app.get("/scrape/lux")
 async def get_tata_lux_data():
     """
     Returns canonical Tata CLiQ Luxury products from Supabase, or from rolling backup.

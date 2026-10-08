@@ -378,6 +378,7 @@ def test_async_job_pipeline(args) -> bool:
         "tatacliq": "tata",
         "tatalux": "tata_lux",
         "tatacliq_luxury": "tata_lux",
+        "lux": "tata_lux",
     }
     parsed_req = [alias_map.get(s.strip().lower(), s.strip().lower()) for s in raw_scrapers.split(",") if s.strip()]
     canonical_order = ["columbia", "adv", "myntra", "tata", "tata_lux"]

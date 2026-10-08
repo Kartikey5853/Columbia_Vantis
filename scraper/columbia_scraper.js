@@ -8,9 +8,7 @@ const ENDPOINT =
 const QUERY = `
 query GetProducts($first:Int!, $after:String){
 
-  search(
-    query:"tag:*"
-    types:PRODUCT
+  products(
     first:$first
     after:$after
   ){
@@ -21,34 +19,30 @@ query GetProducts($first:Int!, $after:String){
 
       node{
 
-        ... on Product{
+        id
+        title
 
-          id
-          title
+        handle
+        featuredImage{
+          url
+        }
 
-            handle
-            featuredImage{
-            url
-            }
+        variants(first:100){
 
-          variants(first:100){
+          edges{
 
-            edges{
+            node{
 
-              node{
+              sku
+              barcode
+              availableForSale
+              
+              price{
+                amount
+              }
 
-                sku
-                barcode
-                availableForSale
-                
-                price{
-                  amount
-                }
-
-                compareAtPrice{
-                  amount
-                }
-
+              compareAtPrice{
+                amount
               }
 
             }
@@ -169,8 +163,8 @@ while (hasNextPage) {
         break;
     }
 
-    const search = json.data?.search;
-    const edges = search?.edges || [];
+    const prodsData = json.data?.products || json.data?.search;
+    const edges = prodsData?.edges || [];
     let limitReached = false;
     for (const edge of edges) {
         const product = edge.node;
@@ -200,14 +194,20 @@ while (hasNextPage) {
     }
 
     console.log(`Page ${page}: fetched ${edges.length} products. Total SKUs so far: ${window.output.length}`);
+    window.updateProgress({
+        stage: "Collecting Products",
+        current: page,
+        total: page + 1,
+        variant_count: window.output.length
+    });
 
     if (limitReached) {
         console.log(`Product limit ${limit} reached. Stopping Columbia pagination.`);
         break;
     }
 
-    hasNextPage = Boolean(search?.pageInfo?.hasNextPage) && edges.length > 0;
-    cursor = search?.pageInfo?.endCursor || (edges.length > 0 ? edges[edges.length - 1].cursor : null);
+    hasNextPage = Boolean(prodsData?.pageInfo?.hasNextPage) && edges.length > 0;
+    cursor = prodsData?.pageInfo?.endCursor || (edges.length > 0 ? edges[edges.length - 1].cursor : null);
     page++;
 
     if (hasNextPage) {

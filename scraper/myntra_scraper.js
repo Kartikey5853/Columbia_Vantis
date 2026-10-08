@@ -169,6 +169,14 @@
             data = JSON.parse(rawText);
         } catch (jsonErr) {
             console.warn(`Response was not valid JSON (received ${rawText.slice(0, 60)}...). Checking window.__myx...`);
+            window.__MYNTRA_DIAGNOSTICS__ = {
+                http_status: response.status,
+                content_type: response.headers.get("content-type") || "unknown",
+                body_preview: rawText.slice(0, 300),
+                is_html: rawText.trim().startsWith("<"),
+                page_url: typeof window !== "undefined" ? window.location.href : "",
+                document_title: typeof document !== "undefined" ? document.title : ""
+            };
             if (typeof window.__myx !== "undefined" && window.__myx?.searchData) {
                 data = window.__myx.searchData;
                 console.log(`Successfully recovered data from window.__myx!`);
@@ -214,6 +222,12 @@
                 `FAILED ON PAGE ${page}`,
                 error
             );
+            window.__SCRAPER_ERROR__ = error.message;
+            if (!window.__MYNTRA_DIAGNOSTICS__) {
+                window.__MYNTRA_DIAGNOSTICS__ = {};
+            }
+            window.__MYNTRA_DIAGNOSTICS__.error = error.message;
+            window.__MYNTRA_DIAGNOSTICS__.page = page;
 
 
             console.log(
