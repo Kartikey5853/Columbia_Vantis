@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       scrapers:
-        description: 'Comma-separated scrapers to test (columbia, adv, myntra, tata)'
+        description: 'Comma-separated scrapers to test (columbia, adv, myntra, tata, tata_lux)'
         required: false
-        default: 'columbia,adv,myntra,tata'
+        default: 'columbia,adv,myntra,tata,tata_lux'
       min_products:
         description: 'Minimum expected products/SKUs'
         required: false
@@ -33,7 +33,7 @@ on:
 
 env:
   DEFAULT_RENDER_URL: "https://columbia-4-0.onrender.com"
-  SCRAPERS: ${{ inputs.scrapers || 'columbia,adv,myntra,tata' }}
+  SCRAPERS: ${{ inputs.scrapers || 'columbia,adv,myntra,tata,tata_lux' }}
   MIN_PRODUCTS: ${{ inputs.min_products || '1' }}
   FORCE: ${{ inputs.force || 'false' }}
   RENDER_DEPLOY_WAIT_SECONDS: ${{ inputs.deploy_wait_seconds || '600' }}
@@ -49,7 +49,7 @@ jobs:
   # 4. Upload test artifacts (JSON results & job trace)
   # =========================================================================
   test-scrapers:
-    name: Async Scraper Testing (Columbia -> Adventuras -> Myntra -> Tata CLiQ)
+    name: Async Scraper Testing (Columbia -> Adventuras -> Myntra -> Tata CLiQ -> Tata CLiQ Luxury)
     runs-on: ubuntu-latest
     timeout-minutes: 75
 

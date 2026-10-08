@@ -36,6 +36,7 @@ async def get_scraper_id(scraper_name: str, client: Optional[SupabaseClient] = N
     # Create if missing
     source_map = {
         "tata": "tatacliq",
+        "tata_lux": "tatacliq_luxury",
         "columbia": "columbia_sportswear_india",
         "adv": "adventuras",
         "myntra": "myntra"
@@ -284,9 +285,15 @@ async def reset_daily_scrapers(
     """
     cli = client or get_supabase_client()
     b_date = business_date or get_business_date()
-    canonical = ["columbia", "adv", "myntra", "tata"]
+    canonical = ["columbia", "adv", "myntra", "tata", "tata_lux"]
 
-    alias_map = {"columbiasportswear": "columbia", "adventuras": "adv", "tatacliq": "tata"}
+    alias_map = {
+        "columbiasportswear": "columbia",
+        "adventuras": "adv",
+        "tatacliq": "tata",
+        "tatalux": "tata_lux",
+        "tatacliq_luxury": "tata_lux",
+    }
     if scrapers:
         target_names = [alias_map.get(s.strip().lower(), s.strip().lower()) for s in scrapers if s.strip()]
         if "all" in target_names or "pipeline" in target_names:
@@ -370,7 +377,7 @@ async def get_daily_scrapers_summary(
     cli = client or get_supabase_client()
     b_date = business_date or get_business_date()
 
-    canonical_names = ["columbia", "adv", "myntra", "tata"]
+    canonical_names = ["columbia", "adv", "myntra", "tata", "tata_lux"]
     id_to_name = {}
     for name in canonical_names:
         s_id = await get_scraper_id(name, cli)
@@ -462,7 +469,7 @@ async def is_scraper_completed_today(
 
     if runs and len(runs) > 0:
         prods = runs[0].get("completed_products") or 0
-        if scraper_name == "tata":
+        if scraper_name in ("tata", "tata_lux"):
             rep = runs[0].get("report") or {}
             if isinstance(rep, str):
                 import json
@@ -558,7 +565,7 @@ async def get_all_daily_reports(
     """Retrieves JSON reports for all canonical scrapers for today from Supabase scrape_runs."""
     cli = client or get_supabase_client()
     b_date = business_date or get_business_date()
-    canonical_names = ["columbia", "adv", "myntra", "tata"]
+    canonical_names = ["columbia", "adv", "myntra", "tata", "tata_lux"]
 
     reports = {}
     total_prods = 0

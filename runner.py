@@ -4,9 +4,10 @@ import json
 import os
 import sys
 import time
+import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 import httpx
 from dotenv import load_dotenv
 from playwright.async_api import async_playwright
@@ -1732,16 +1733,620 @@ async def scrape_tata(
 
 
 # =========================================================================
-# Sequential Pipeline Coordinator (Columbia -> Adventuras -> Myntra -> Tata CLiQ)
+# Tata CLiQ Luxury Scraper (Browser JS Listings + Python PDP Checkpoints)
 # =========================================================================
 
-ORDERED_SCRAPERS = ["columbia", "adv", "myntra", "tata"]
+def normalize_tata_lux_js_product(raw_p: Dict[str, Any]) -> NormalizedProduct:
+    pid = str(raw_p.get("product_id") or "").strip()
+    raw_vars = raw_p.get("variants") or []
+    norm_vars = [
+        NormalizedVariant(
+            size=str(v.get("size") or ""),
+            sku=v.get("sku"),
+            available=bool(v.get("available")),
+            stock=int(v.get("stock") or 0),
+            url=v.get("url"),
+        )
+        for v in raw_vars
+    ]
+
+    return NormalizedProduct(
+        source="tata_lux",
+        source_product_id=pid,
+        title=str(raw_p.get("title") or "").strip(),
+        sku=None,
+        ean=None,
+        price=float(raw_p.get("price") or 0.0),
+        mrp=float(raw_p.get("mrp") or 0.0) if raw_p.get("mrp") else None,
+        available=bool(raw_p.get("available")),
+        image_url=raw_p.get("image_url"),
+        url=raw_p.get("url"),
+        variants=norm_vars,
+        scraped_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+def _extract_tata_lux_pdp_variants_and_price(
+    html: str,
+    fallback_price: float = 0.0,
+    fallback_mrp: float = 0.0
+) -> Tuple[List[NormalizedVariant], float, float]:
+    """
+    Parses variantOptions / variantGroup and JSON-LD / HTML prices from Tata Luxury PDP HTML.
+    Mirrors the logic in scraper/tata_lux_scraper.js.
+    """
+    variants: List[NormalizedVariant] = []
+    price = 0.0
+    mrp = 0.0
+
+    # 1. Variant extraction from variantOptions
+    marker = '"variantOptions":['
+    idx = html.find(marker)
+    if idx != -1:
+        start = idx + len('"variantOptions":')
+        depth = 0
+        in_str = False
+        escaped = False
+        for i in range(start, len(html)):
+            c = html[i]
+            if in_str:
+                if escaped:
+                    escaped = False
+                elif c == '\\':
+                    escaped = True
+                elif c == '"':
+                    in_str = False
+                continue
+            if c == '"':
+                in_str = True
+                continue
+            if c == '[':
+                depth += 1
+            elif c == ']':
+                depth -= 1
+                if depth == 0:
+                    try:
+                        raw_vars = json.loads(html[start:i+1])
+                        for v in raw_vars:
+                            sl = v.get("sizelink") or v.get("sizeLink") or v or {}
+                            sku = str(sl.get("productCode") or "")
+                            size = str(sl.get("size") or sl.get("brandSize") or "")
+                            url_part = str(sl.get("url") or "")
+                            if not sku and not size and not url_part:
+                                continue
+                            if url_part and not url_part.startswith("http"):
+                                url_part = "https://luxury.tatacliq.com" + ("" if url_part.startswith("/") else "/") + url_part
+                            stock_cnt = 0
+                            try:
+                                stock_cnt = int(sl.get("stockCount") or 0)
+                            except Exception:
+                                pass
+                            variants.append(
+                                NormalizedVariant(
+                                    size=size,
+                                    sku=sku or None,
+                                    available=bool(sl.get("isAvailable")),
+                                    stock=stock_cnt,
+                                    url=url_part or None
+                                )
+                            )
+                    except Exception:
+                        pass
+                    break
+
+    # 1b. Fallback to variantGroup if variantOptions was empty
+    if not variants and '"variantGroup"' in html:
+        vg_marker = '"variantGroup":['
+        vg_idx = html.find(vg_marker)
+        if vg_idx != -1:
+            vg_start = vg_idx + len('"variantGroup":')
+            vg_depth = 0
+            vg_in_str = False
+            vg_escaped = False
+            for i in range(vg_start, len(html)):
+                c = html[i]
+                if vg_in_str:
+                    if vg_escaped:
+                        vg_escaped = False
+                    elif c == '\\':
+                        vg_escaped = True
+                    elif c == '"':
+                        vg_in_str = False
+                    continue
+                if c == '"':
+                    vg_in_str = True
+                    continue
+                if c == '[':
+                    vg_depth += 1
+                elif c == ']':
+                    vg_depth -= 1
+                    if vg_depth == 0:
+                        try:
+                            raw_groups = json.loads(html[vg_start:i+1])
+                            for grp in raw_groups:
+                                color_link = grp.get("colorLink") or grp.get("colorlink") or {}
+                                size_opts = grp.get("sizeOptions") or []
+                                for sz in size_opts:
+                                    sku = str(sz.get("productCode") or "")
+                                    size = str(sz.get("size") or sz.get("brandSize") or "")
+                                    url_part = str(sz.get("url") or color_link.get("colorurl") or "")
+                                    if not sku and not size and not url_part:
+                                        continue
+                                    if url_part and not url_part.startswith("http"):
+                                        url_part = "https://luxury.tatacliq.com" + ("" if url_part.startswith("/") else "/") + url_part
+                                    variants.append(
+                                        NormalizedVariant(
+                                            size=size,
+                                            sku=sku or None,
+                                            available=bool(sz.get("isAvailable")),
+                                            stock=int(sz.get("stockCount") or 0) if sz.get("stockCount") is not None else 0,
+                                            url=url_part or None
+                                        )
+                                    )
+                        except Exception:
+                            pass
+                        break
+
+    # Deduplicate variants by SKU, then size|url
+    seen_vars = set()
+    deduped_variants = []
+    for v in variants:
+        k = v.sku or f"{v.size}|{v.url}"
+        if k not in seen_vars:
+            seen_vars.add(k)
+            deduped_variants.append(v)
+
+    # 2. Price extraction
+    # Method A: JSON-LD
+    json_ld_matches = re.findall(r'<script[^>]*type=[\'"]application/ld\+json[\'"][^>]*>(.*?)</script>', html, re.DOTALL)
+    for block in json_ld_matches:
+        try:
+            parsed = json.loads(block.strip())
+            nodes = parsed if isinstance(parsed, list) else [parsed]
+            for node in nodes:
+                if not isinstance(node, dict):
+                    continue
+                offers = node.get("offers")
+                if not offers:
+                    continue
+                offer_list = offers if isinstance(offers, list) else [offers]
+                for off in offer_list:
+                    if not isinstance(off, dict):
+                        continue
+                    p_val = off.get("price") or off.get("lowPrice")
+                    if p_val:
+                        try:
+                            clean_p = float(str(p_val).replace(",", "").strip())
+                            if clean_p > 0:
+                                price = clean_p
+                                mrp_val = off.get("highPrice") or off.get("price")
+                                if mrp_val:
+                                    mrp = float(str(mrp_val).replace(",", "").strip())
+                                break
+                        except Exception:
+                            pass
+                if price > 0:
+                    break
+        except Exception:
+            pass
+        if price > 0:
+            break
+
+    # Method B: Regex fallback
+    if price == 0.0:
+        sp_m = re.search(r'"(?:sellingPrice|salePrice|discountedPrice|offerPrice|finalPrice|currentPrice)"\s*:\s*"?([0-9]+(?:\.[0-9]+)?)"?', html, re.I)
+        if sp_m:
+            try:
+                price = float(sp_m.group(1))
+            except Exception:
+                pass
+
+    if mrp == 0.0:
+        mrp_m = re.search(r'"(?:mrpPrice|mrp|listPrice|originalPrice)"\s*:\s*"?([0-9]+(?:\.[0-9]+)?)"?', html, re.I)
+        if mrp_m:
+            try:
+                mrp = float(mrp_m.group(1))
+            except Exception:
+                pass
+
+    if price == 0.0:
+        price = fallback_price
+    if mrp == 0.0:
+        mrp = fallback_mrp or price
+
+    return deduped_variants, price, mrp
+
+
+async def scrape_tata_lux(
+    limit: Optional[int] = None,
+    progress_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
+    client=None
+) -> Dict[str, Any]:
+    """
+    Executes the Tata CLiQ Luxury scraper with decoupled two-phase architecture:
+    Phase 1: Collects listing pages and seeds catalog into Supabase & progress tracker.
+             Browser is closed immediately after listings to free all RAM.
+    Phase 2: Ultra-low-memory Python async variant extraction (concurrency=3)
+             fetching only incomplete products, checkpointing milestones every ~200 variants,
+             and dynamically resuming from the middle across server restarts/crashes.
+    """
+    import gc
+    cli = client or get_supabase_client()
+    t_start = time.perf_counter()
+
+    print("\n" + "=" * 60)
+    print("STARTING TATA CLIQ LUXURY SCRAPER (ZERO-LEAK TWO-PHASE CHECKPOINTED)")
+    if limit:
+        print(f"TEST MODE: Limited to {limit} products")
+    print("=" * 60, flush=True)
+
+    run = await get_or_create_daily_run("tata_lux", client=cli)
+    run_id = run["id"]
+    scraper_id = await get_scraper_id("tata_lux", cli)
+    print(f"[RUN] Tata Luxury Scrape Run ID: {run_id} (Date: {run['business_date']}, Status: {run['status']})")
+
+    # =========================================================================
+    # Phase 1: Listing Pages & Base Products
+    # =========================================================================
+    completed_listing_pages = await get_completed_listing_pages(run_id, client=cli)
+
+    # Check if catalog is already present in DB
+    existing_catalog_sample = await cli.select(
+        "products",
+        columns="id",
+        filters={"scraper_id": f"eq.{scraper_id}"},
+        limit=10
+    )
+    has_existing_catalog = bool(existing_catalog_sample and len(existing_catalog_sample) > 0)
+    phase1_needed = not (len(completed_listing_pages) >= 95 or (has_existing_catalog and not limit))
+
+    if not phase1_needed:
+        print(f"[TATA LUX CHECKPOINT] Phase 1 already complete ({len(completed_listing_pages)} pages in DB, existing catalog detected). Skipping listing browser.", flush=True)
+    else:
+        print(f"[TATA LUX PHASE 1] Starting listing page collection (starting from page {len(completed_listing_pages)})...", flush=True)
+        await update_run_stage(run_id, "listings", client=cli)
+        scraper_path = SCRAPER_DIR / "tata_lux_scraper.js"
+        scraper_code = scraper_path.read_text(encoding="utf-8")
+        timeout_ms = int(os.getenv("TATA_LUX_SCRAPE_TIMEOUT_SECONDS", "3600")) * 1000
+
+        async def drain_tata_lux_listings(listings_chunk: List[Dict[str, Any]]):
+            """Phase 1: Persist listing page checkpoints and base product records."""
+            for item in listings_chunk:
+                p_num = item.get("page", 0)
+                raw_prods = item.get("products", [])
+                if not raw_prods:
+                    await record_listing_page_completed(run_id, p_num, 0, client=cli)
+                    continue
+
+                norm_prods = [normalize_tata_lux_js_product(p) for p in raw_prods]
+                db_prods = await upsert_canonical_products_batch(norm_prods, client=cli, batch_size=200)
+                id_by_src = {p["source_product_id"]: p["id"] for p in db_prods if "source_product_id" in p and "id" in p}
+
+                progress_items = []
+                for prod in norm_prods:
+                    pid = id_by_src.get(prod.source_product_id)
+                    if pid:
+                        progress_items.append({
+                            "product_id": pid,
+                            "source_product_id": prod.source_product_id,
+                            "variant_count": 0
+                        })
+                if progress_items:
+                    await batch_record_product_progress(run_id, progress_items, status="pending", client=cli, batch_size=200)
+
+                await record_listing_page_completed(run_id, p_num, len(raw_prods), client=cli)
+                completed_listing_pages.add(p_num)
+                await export_canonical_backup("tata_lux", client=cli)
+                print(f"[TATA LUX CHECKPOINT] Listing Page {p_num + 1} persisted ({len(raw_prods)} products).", flush=True)
+
+        async with _SCRAPER_LOCK:
+            await close_shared_browser()
+            browser = await get_shared_browser(headless=True)
+            try:
+                page = await _create_lean_tab(browser, "https://luxury.tatacliq.com/")
+                start_p = (max(completed_listing_pages) + 1) if completed_listing_pages else 0
+                limit_val = int(limit) if limit else 0
+                await page.evaluate(
+                    """([code, limit, startPage]) => {
+                        window.__IS_PLAYWRIGHT__ = true;
+                        window.__PHASE__ = "listings_only";
+                        window.__PRODUCT_LIMIT__ = limit > 0 ? limit : undefined;
+                        window.__START_PAGE__ = startPage;
+                        window.eval(code);
+                    }""",
+                    [scraper_code, limit_val, start_p]
+                )
+
+                await _wait_and_poll_progress(
+                    page,
+                    done_flag="__SCRAPER_DONE__",
+                    progress_flag="__SCRAPER_PROGRESS__",
+                    timeout_ms=timeout_ms,
+                    poll_interval=2.0,
+                    callback=progress_callback,
+                    on_drain_listings=drain_tata_lux_listings,
+                )
+
+                final_listings = await page.evaluate("() => typeof window.drainUnsavedListings === 'function' ? window.drainUnsavedListings() : []")
+                if final_listings:
+                    await drain_tata_lux_listings(final_listings)
+            finally:
+                await close_shared_browser()
+                gc.collect()
+                print("[BROWSER] Tata Lux Phase 1 browser closed. All RAM freed.", flush=True)
+
+    # =========================================================================
+    # Phase 2: Middle Resumption & Concurrency=3 Python Variant Fetcher
+    # =========================================================================
+    await update_run_stage(run_id, "variants", client=cli)
+
+    pending_items = await get_incomplete_products(run_id, client=cli)
+
+    if not pending_items:
+        any_prog = await cli.select("scrape_product_progress", columns="id", filters={"scrape_run_id": f"eq.{run_id}"}, limit=1)
+        if not any_prog:
+            print("[TATA LUX CHECKPOINT] Initializing product progress tracking from catalog in database...", flush=True)
+            all_prods = []
+            off = 0
+            while True:
+                chunk = await cli.select(
+                    "products",
+                    columns="id,source_product_id,variants",
+                    filters={"scraper_id": f"eq.{scraper_id}"},
+                    order="id.asc",
+                    limit=1000,
+                    offset=off
+                )
+                if not chunk:
+                    break
+                all_prods.extend(chunk)
+                if len(chunk) < 1000:
+                    break
+                off += len(chunk)
+
+            seed_items = []
+            for p in all_prods:
+                cur_vars = p.get("variants") or []
+                seed_items.append({
+                    "product_id": p["id"],
+                    "source_product_id": p["source_product_id"],
+                    "variant_count": len(cur_vars)
+                })
+            if seed_items:
+                await batch_record_product_progress(run_id, seed_items, status="pending", client=cli, batch_size=500)
+            pending_items = await get_incomplete_products(run_id, client=cli)
+
+    completed_product_ids = await get_completed_product_ids(run_id, client=cli)
+    total_catalog_count = len(completed_product_ids) + len(pending_items)
+
+    print(f"\n[TATA LUX RESUME] Catalog: {total_catalog_count} products. Already completed: {len(completed_product_ids)}. Pending: {len(pending_items)}.")
+    if completed_product_ids:
+        print(f"[TATA LUX RESUME] Resuming from product {len(completed_product_ids) + 1}/{total_catalog_count} (middle checkpoint)!", flush=True)
+
+    if limit:
+        limit_val = int(limit)
+        pending_items = pending_items[:limit_val]
+        print(f"[TEST MODE] Limited variant fetching to {len(pending_items)} pending products.")
+
+    total_variants_persisted = 0
+    total_products_persisted = len(completed_product_ids)
+    last_checkpoint_variants = 0
+    total_prices_added = 0
+
+    try:
+        if not pending_items:
+            print("[TATA LUX] All products already have completed variant checkpoints today! Nothing pending.", flush=True)
+        else:
+            concurrency = int(os.getenv("TATA_LUX_CONCURRENCY", "3"))
+            print(f"[TATA LUX PHASE 2] Starting variant extraction in Python with CONCURRENCY={concurrency} (Browser: CLOSED, RAM: <30MB)...", flush=True)
+
+            queue: asyncio.Queue = asyncio.Queue()
+            for item in pending_items:
+                queue.put_nowait(item)
+
+            batch_buffer: List[Dict[str, Any]] = []
+            buffer_lock = asyncio.Lock()
+
+            async def flush_variant_batch():
+                nonlocal total_variants_persisted, total_products_persisted, last_checkpoint_variants, total_prices_added
+                async with buffer_lock:
+                    if not batch_buffer:
+                        return
+                    chunk = list(batch_buffer)
+                    batch_buffer.clear()
+
+                now_iso = datetime.now(timezone.utc).isoformat()
+                # 1. Update products table with variants and prices concurrently
+                update_tasks = []
+                for it in chunk:
+                    up_data: Dict[str, Any] = {
+                        "variants": [v.to_dict() for v in it["variants"]],
+                        "updated_at": now_iso
+                    }
+                    if it.get("price") and it["price"] > 0:
+                        up_data["current_price"] = it["price"]
+                    if it.get("mrp") and it["mrp"] > 0:
+                        up_data["current_mrp"] = it["mrp"]
+
+                    update_tasks.append(
+                        cli.update(
+                            "products",
+                            up_data,
+                            filters={"id": f"eq.{it['product_id']}"}
+                        )
+                    )
+                await asyncio.gather(*update_tasks, return_exceptions=True)
+
+                # 2. Batch record completed progress
+                progress_items = [
+                    {
+                        "product_id": it["product_id"],
+                        "source_product_id": it["source_product_id"],
+                        "variant_count": len(it["variants"])
+                    }
+                    for it in chunk
+                ]
+                await batch_record_product_progress(run_id, progress_items, status="completed", client=cli, batch_size=200)
+
+                batch_variants = sum(len(it["variants"]) for it in chunk)
+                total_variants_persisted += batch_variants
+                total_products_persisted += len(chunk)
+
+                await update_run_counts(run_id, completed_delta=len(chunk), client=cli)
+                await export_canonical_backup("tata_lux", client=cli)
+
+                # Milestone checkpoint every 200 variants
+                if (total_variants_persisted - last_checkpoint_variants >= 200) or (last_checkpoint_variants == 0 and total_variants_persisted > 0):
+                    last_checkpoint_variants = total_variants_persisted
+                    print(f"[TATA LUX CHECKPOINT] Saved 200-variant milestone: {total_variants_persisted} total variants in DB ({total_products_persisted}/{total_catalog_count} products).", flush=True)
+                else:
+                    print(f"[TATA LUX BATCH] Persisted batch of {len(chunk)} products ({total_variants_persisted} total variants in DB).", flush=True)
+
+                gc.collect()
+
+            async def worker(worker_id: int):
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+                    "Accept": "text/html,application/xhtml+xml",
+                }
+                async with httpx.AsyncClient(headers=headers, timeout=20.0, follow_redirects=True) as http_client:
+                    while not queue.empty():
+                        if is_stop_requested():
+                            break
+                        try:
+                            item = queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+
+                        src_id = str(item.get("source_product_id") or "").strip()
+                        db_id = item.get("product_id")
+                        if not src_id:
+                            queue.task_done()
+                            continue
+
+                        url = f"https://luxury.tatacliq.com/p-{src_id.lower()}"
+                        variants: List[NormalizedVariant] = []
+                        pdp_price = 0.0
+                        pdp_mrp = 0.0
+
+                        for attempt in range(1, 3):
+                            try:
+                                resp = await http_client.get(url)
+                                if resp.status_code == 200 and resp.text:
+                                    variants, pdp_price, pdp_mrp = _extract_tata_lux_pdp_variants_and_price(resp.text)
+                                    break
+                            except Exception as ex:
+                                if attempt == 2:
+                                    print(f"[TATA LUX] Worker {worker_id}: Variant fetch error for {src_id}: {ex}", flush=True)
+                                await asyncio.sleep(0.4)
+
+                        should_flush = False
+                        async with buffer_lock:
+                            batch_buffer.append({
+                                "product_id": db_id,
+                                "source_product_id": src_id,
+                                "variants": variants,
+                                "price": pdp_price,
+                                "mrp": pdp_mrp
+                            })
+                            if len(batch_buffer) >= 25:
+                                should_flush = True
+
+                        if should_flush:
+                            await flush_variant_batch()
+
+                        if progress_callback:
+                            try:
+                                await progress_callback({
+                                    "stage": "Collecting Variants",
+                                    "current": total_products_persisted,
+                                    "total": total_catalog_count,
+                                    "variant_count": total_variants_persisted
+                                })
+                            except Exception:
+                                pass
+
+                        queue.task_done()
+                        await asyncio.sleep(0.05)
+
+            workers = [asyncio.create_task(worker(w_idx + 1)) for w_idx in range(concurrency)]
+            await asyncio.gather(*workers)
+
+            # Flush any remaining items in buffer
+            await flush_variant_batch()
+
+        dur = round(time.perf_counter() - t_start, 1)
+        await update_run_stage(run_id, "finalizing", client=cli)
+        export_path = await export_canonical_backup("tata_lux", client=cli)
+
+        report = {
+            "scraper": "tata_lux",
+            "business_date": run["business_date"],
+            "status": "completed",
+            "stage": "completed",
+            "total_products": total_products_persisted,
+            "completed_products": total_products_persisted,
+            "failed_products": 0,
+            "total_variants": total_variants_persisted,
+            "prices_recorded": total_prices_added,
+            "duration_seconds": dur,
+            "checkpoints": {
+                "listing_pages_completed": len(completed_listing_pages),
+            },
+            "error": None
+        }
+        await complete_run(run_id, report=report, client=cli)
+
+        print("\n" + "=" * 60)
+        print(f"TATA CLIQ LUXURY SCRAPING FINISHED: {total_products_persisted} products persisted")
+        print(f"Total Variants Persisted: {total_variants_persisted}")
+        print(f"Price Records Added: {total_prices_added}")
+        print(f"Local Rolling Backup: {export_path.resolve()}")
+        print(f"Database Report Saved to scrape_runs (ID: {run_id})")
+        print("=" * 60, flush=True)
+
+        return {
+            "source": "tata_lux",
+            "status": "completed",
+            "total_products": total_products_persisted,
+            "completed_products": total_products_persisted,
+            "total_variants": total_variants_persisted,
+            "report": report
+        }
+
+    except Exception as e:
+        dur = round(time.perf_counter() - t_start, 1)
+        fail_report = {
+            "scraper": "tata_lux",
+            "business_date": run["business_date"],
+            "status": "failed",
+            "stage": "variants",
+            "total_products": total_products_persisted,
+            "completed_products": total_products_persisted,
+            "total_variants": total_variants_persisted,
+            "prices_recorded": total_prices_added,
+            "duration_seconds": dur,
+            "error": str(e)
+        }
+        await fail_run(run_id, error=str(e), report=fail_report, client=cli)
+        raise
+    finally:
+        _CURRENT_SCRAPER_RUN_ID = None
+        _CURRENT_SCRAPER_NAME = None
+
+
+# =========================================================================
+# Sequential Pipeline Coordinator (Columbia -> Adventuras -> Myntra -> Tata CLiQ -> Tata CLiQ Luxury)
+# =========================================================================
+
+ORDERED_SCRAPERS = ["columbia", "adv", "myntra", "tata", "tata_lux"]
 
 SCRAPER_KEY_MAP = {
     "columbia": "columbia",
     "adv": "adv",
     "myntra": "myntra",
     "tata": "tatacliq",
+    "tata_lux": "tata_lux",
 }
 
 SCRAPER_FUNCS = {
@@ -1749,13 +2354,14 @@ SCRAPER_FUNCS = {
     "adv": scrape_adv,
     "myntra": scrape_myntra,
     "tata": scrape_tata,
+    "tata_lux": scrape_tata_lux,
 }
 
 
 def normalize_scraper_names(scrapers: Optional[List[str]]) -> List[str]:
     """
     Normalizes scraper aliases and strictly enforces canonical sequential execution order:
-    columbia -> adv -> myntra -> tata.
+    columbia -> adv -> myntra -> tata -> tata_lux.
     """
     if not scrapers:
         return list(ORDERED_SCRAPERS)
@@ -1767,7 +2373,10 @@ def normalize_scraper_names(scrapers: Optional[List[str]]) -> List[str]:
         "adventuras": "adv",
         "myntra": "myntra",
         "tata": "tata",
-        "tatacliq": "tata"
+        "tatacliq": "tata",
+        "tata_lux": "tata_lux",
+        "tatalux": "tata_lux",
+        "tatacliq_luxury": "tata_lux",
     }
 
     requested = set()
@@ -1994,7 +2603,38 @@ async def run_sequential_pipeline(
         variant_count=cumulative_variants,
         error=None,
     )
-    print(f"\n[JOB {job_id}] 🎉 ALL REQUESTED SCRAPERS ({', '.join(active_scrapers)}) COMPLETED SUCCESSFULLY!", flush=True)
+    # Print final summary of all scrapers
+    t_pipeline_total = round(time.perf_counter() - t_pipeline_start, 1)
+    await _print_pipeline_summary(job_id, active_scrapers, t_pipeline_total, cumulative_products, cumulative_variants)
+
+
+async def _print_pipeline_summary(
+    job_id: str,
+    active_scrapers: List[str],
+    t_total: float,
+    cumulative_products: int,
+    cumulative_variants: int
+):
+    from jobs import get_job
+    job_snapshot = await get_job(job_id)
+    job_scrapers = job_snapshot.get("scrapers", {}) if job_snapshot else {}
+    print("\n" + "=" * 80)
+    print(f"               PIPELINE EXECUTION SUMMARY (Job: {job_id})")
+    print(f"Total Duration: {t_total:.1f}s | Total Products: {cumulative_products:,} | Total Variants: {cumulative_variants:,}")
+    print("-" * 80)
+    print(f"{'Scraper':<16} {'Status':<12} {'Products':<10} {'Variants':<10} {'Duration':<12} {'Error'}")
+    print("-" * 80)
+    for s_name in active_scrapers:
+        s_key = SCRAPER_KEY_MAP.get(s_name, s_name)
+        s_data = job_scrapers.get(s_key, {})
+        st = str(s_data.get("status", "unknown")).upper()
+        p_c = f"{s_data.get('product_count', 0):,}"
+        v_c = f"{s_data.get('variant_count', 0):,}"
+        dur_val = s_data.get("duration_seconds", 0.0)
+        d_s = f"{dur_val:.1f}s" if dur_val else "-"
+        err = s_data.get("error") or "-"
+        print(f"{s_name:<16} {st:<12} {p_c:<10} {v_c:<10} {d_s:<12} {err}")
+    print("=" * 80 + "\n", flush=True)
 
 
 main = scrape_columbia
@@ -2002,9 +2642,9 @@ main = scrape_columbia
 
 async def _run_cli():
     parser = argparse.ArgumentParser(description="Unified Columbia Scrapers Pipeline")
-    parser.add_argument("target", nargs="?", default=None, help="Target scraper: 'columbia', 'adv', 'myntra', 'tata', or 'pipeline'")
-    parser.add_argument("--scraper", type=str, default=None, help="Scraper name: 'columbia', 'adv', 'myntra', 'tata', or 'pipeline'")
-    parser.add_argument("--scrapers", type=str, default=None, help="Comma-separated scrapers e.g. 'columbia,adv' or 'all'")
+    parser.add_argument("target", nargs="?", default=None, help="Target scraper: 'columbia', 'adv', 'myntra', 'tata', 'tata_lux', or 'pipeline'")
+    parser.add_argument("--scraper", type=str, default=None, help="Scraper name: 'columbia', 'adv', 'myntra', 'tata', 'tata_lux', or 'pipeline'")
+    parser.add_argument("--scrapers", type=str, default=None, help="Comma-separated scrapers e.g. 'columbia,adv,tata_lux' or 'all'")
     parser.add_argument("--limit", type=int, default=None, help="Product limit for test mode")
     parser.add_argument("--force", action="store_true", default=False, help="Force re-run even if already completed today")
     args = parser.parse_args()
@@ -2027,6 +2667,8 @@ async def _run_cli():
                 from jobs import create_job
                 job = await create_job(force=args.force)
                 await run_sequential_pipeline(job["job_id"], limit=args.limit, force=args.force)
+            elif target in ("tata_lux", "tatalux", "tatacliq_luxury"):
+                await scrape_tata_lux(limit=args.limit)
             elif target in ("tata", "tatacliq"):
                 await scrape_tata(limit=args.limit)
             elif target in ("adv", "adventuras"):

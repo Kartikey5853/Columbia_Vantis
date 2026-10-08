@@ -238,6 +238,9 @@ SCRAPER_KEY_MAP = {
     "myntra": "myntra",
     "tata": "tatacliq",
     "tatacliq": "tatacliq",
+    "tata_lux": "tata_lux",
+    "tatalux": "tata_lux",
+    "tatacliq_luxury": "tata_lux",
 }
 
 
@@ -264,6 +267,7 @@ async def _reconstruct_job_from_supabase(job_id: str) -> Optional[Dict[str, Any]
             "adv": "adv",
             "myntra": "myntra",
             "tata": "tatacliq",
+            "tata_lux": "tata_lux",
         }
 
         for s_name, data in summary.items():
@@ -338,7 +342,7 @@ async def create_job(scrapers: Optional[list] = None, force: bool = False) -> Di
         if scrapers:
             keys = [SCRAPER_KEY_MAP.get(str(s).strip().lower(), str(s).strip().lower()) for s in scrapers if s]
         else:
-            keys = ["columbia", "adv", "myntra", "tatacliq"]
+            keys = ["columbia", "adv", "myntra", "tatacliq", "tata_lux"]
 
         scrapers_dict = {
             k: {

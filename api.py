@@ -318,7 +318,13 @@ async def get_daily_reports_endpoint():
 @app.get("/scrape/report/{scraper}")
 async def get_scraper_report_endpoint(scraper: str):
     """Returns the latest JSON report for a specific scraper from Supabase scrape_runs."""
-    alias_map = {"columbiasportswear": "columbia", "adventuras": "adv", "tatacliq": "tata"}
+    alias_map = {
+        "columbiasportswear": "columbia",
+        "adventuras": "adv",
+        "tatacliq": "tata",
+        "tatalux": "tata_lux",
+        "tatacliq_luxury": "tata_lux",
+    }
     norm_name = alias_map.get(scraper.lower(), scraper.lower())
     rep = await get_daily_run_report(norm_name)
     if not rep:
@@ -331,25 +337,31 @@ async def get_scraper_report_endpoint(scraper: str):
 
 @app.post("/scrape", status_code=202)
 async def trigger_scrape_job(
-    scrapers: str = Query("columbia,adv,myntra,tata", description="Comma-separated list of scrapers to run (columbia, adv, myntra, tata)"),
+    scrapers: str = Query("columbia,adv,myntra,tata,tata_lux", description="Comma-separated list of scrapers to run (columbia, adv, myntra, tata, tata_lux)"),
     limit: int = Query(None, description="Optional product limit for testing"),
     force: bool = Query(False, description="Force start a new job even if an interrupted job exists or if scrapers already completed today")
 ):
     """
     Triggers the sequential scraping pipeline in the background.
     Supports selective execution (e.g., scrapers=columbia,adv or scrapers=tata).
-    Executes scrapers in strictly sequential order: Columbia -> Adventuras -> Myntra -> Tata CLiQ.
+    Executes scrapers in strictly sequential order: Columbia -> Adventuras -> Myntra -> Tata CLiQ -> Tata CLiQ Luxury.
     If force=False and scrapers are already completed today, skips them.
     Automatically resumes interrupted jobs across server restarts unless force=true.
     Immediately returns HTTP 202 Accepted with a unique job_id.
     """
     selected = [s.strip() for s in (scrapers or "").split(",") if s.strip()]
     if not selected:
-        selected = ["columbia", "adv", "myntra", "tata"]
+        selected = ["columbia", "adv", "myntra", "tata", "tata_lux"]
 
-    alias_map = {"columbiasportswear": "columbia", "adventuras": "adv", "tatacliq": "tata"}
+    alias_map = {
+        "columbiasportswear": "columbia",
+        "adventuras": "adv",
+        "tatacliq": "tata",
+        "tatalux": "tata_lux",
+        "tatacliq_luxury": "tata_lux",
+    }
     selected = [alias_map.get(s.lower(), s.lower()) for s in selected]
-    canonical_order = ["columbia", "adv", "myntra", "tata"]
+    canonical_order = ["columbia", "adv", "myntra", "tata", "tata_lux"]
     ordered_selected = [s for s in canonical_order if s in selected] or canonical_order
 
     clear_stop_flag()
@@ -580,6 +592,39 @@ async def get_tata_data():
             pass
 
     return _format_product_payload("tata", [])
+
+
+@app.get("/scrape/tata_lux")
+@app.get("/scrape/tatalux")
+async def get_tata_lux_data():
+    """
+    Returns canonical Tata CLiQ Luxury products from Supabase, or from rolling backup.
+    """
+    try:
+        prods = await get_all_canonical_products("tata_lux")
+        if prods:
+            return _format_product_payload("tata_lux", prods)
+    except Exception:
+        pass
+
+    backup_file = Path("data/tata_lux/tata_lux_data.json")
+    if backup_file.exists():
+        try:
+            data = json.loads(backup_file.read_text(encoding="utf-8"))
+            return _format_product_payload("tata_lux", data.get("products", []))
+        except Exception:
+            pass
+
+    legacy_file = Path("tata_lux_columbia_products.json")
+    if legacy_file.exists():
+        try:
+            data = json.loads(legacy_file.read_text(encoding="utf-8"))
+            prods = data.get("products", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+            return _format_product_payload("tata_lux", prods)
+        except Exception:
+            pass
+
+    return _format_product_payload("tata_lux", [])
 
 
 @app.get("/db/diagnostics")

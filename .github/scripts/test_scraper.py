@@ -265,6 +265,12 @@ SCRAPER_METADATA = {
         "result_file": "tata-test-result.json",
         "display_name": "Tata CLiQ",
     },
+    "tata_lux": {
+        "job_key": "tata_lux",
+        "endpoint": "/scrape/tata_lux",
+        "result_file": "tata_lux-test-result.json",
+        "display_name": "Tata CLiQ Luxury",
+    },
 }
 
 
@@ -352,10 +358,29 @@ def test_async_job_pipeline(args) -> bool:
             print(f"❌ Render service health check timed out: {msg}", file=sys.stderr)
             return False
 
-    raw_scrapers = getattr(args, "scrapers", None) or os.getenv("SCRAPERS", "columbia,adv,myntra,tata")
-    alias_map = {"columbiasportswear": "columbia", "adventuras": "adv", "tatacliq": "tata"}
+    # Pre-run reset: clear any lingering checkpoints so test runs completely fresh
+    reset_url = f"{service_url}/scrape/reset?scrapers=all"
+    print(f"Calling daily reset endpoint: GET {reset_url}...")
+    try:
+        r_req = urllib.request.Request(
+            reset_url,
+            headers={"User-Agent": "GitHub-Actions-Scraper-Tester/2.0", "Accept": "application/json"}
+        )
+        with urllib.request.urlopen(r_req, timeout=30) as r_resp:
+            print(f"  Reset completed successfully (HTTP {r_resp.status})")
+    except Exception as ex:
+        print(f"  Notice: Reset endpoint call warning ({ex}) - proceeding to trigger job...")
+
+    raw_scrapers = getattr(args, "scrapers", None) or os.getenv("SCRAPERS", "columbia,adv,myntra,tata,tata_lux")
+    alias_map = {
+        "columbiasportswear": "columbia",
+        "adventuras": "adv",
+        "tatacliq": "tata",
+        "tatalux": "tata_lux",
+        "tatacliq_luxury": "tata_lux",
+    }
     parsed_req = [alias_map.get(s.strip().lower(), s.strip().lower()) for s in raw_scrapers.split(",") if s.strip()]
-    canonical_order = ["columbia", "adv", "myntra", "tata"]
+    canonical_order = ["columbia", "adv", "myntra", "tata", "tata_lux"]
     active_scrapers = [s for s in canonical_order if s in parsed_req] or canonical_order
     scrapers_param = ",".join(active_scrapers)
     params = [f"scrapers={scrapers_param}"]
@@ -549,7 +574,10 @@ def test_async_job_pipeline(args) -> bool:
                     val_stats["schema_valid"] = True
 
                     s_product_count = val_stats.get("valid_products", 0)
-                    if s_product_count >= args.min_products and (s_status == "completed" or (s_status is None and s_product_count > 0)):
+                    if s_product_count == 0:
+                        s_success = False
+                        s_info["error"] = "0 products returned (not working)"
+                    elif s_product_count >= args.min_products and (s_status == "completed" or (s_status is None and s_product_count > 0)):
                         s_success = True
                     else:
                         s_success = False
@@ -564,17 +592,28 @@ def test_async_job_pipeline(args) -> bool:
             all_success = False
 
         duration = s_info.get("duration_seconds", 0.0)
+        actual_product_count = val_stats.get("valid_products", s_info.get("product_count", 0))
+
+        if s_success:
+            final_status = "passed"
+            final_error = None
+        elif actual_product_count == 0:
+            final_status = "not working"
+            final_error = s_info.get("error") or "0 products returned (not working)"
+        else:
+            final_status = "failed"
+            final_error = s_info.get("error") or ("Polling timed out" if is_timed_out else "Validation failed")
 
         result_data = {
             "scraper": s_name,
             "display_name": meta["display_name"],
-            "status": "passed" if s_success else "failed",
+            "status": final_status,
             "duration_seconds": duration,
-            "product_count": val_stats.get("valid_products", s_info.get("product_count", 0)),
+            "product_count": actual_product_count,
             "variant_count": val_stats.get("total_variants_found", s_info.get("variant_count", 0)),
             "response_size_bytes": resp_size,
             "validation": val_stats,
-            "error": None if s_success else (s_info.get("error") or ("Polling timed out" if is_timed_out else "Validation failed"))
+            "error": final_error
         }
         (results_dir / meta["result_file"]).write_text(json.dumps(result_data, indent=2), encoding="utf-8")
 
@@ -775,22 +814,26 @@ def generate_ci_summary(results_dir: str = "test-results"):
             data = {}
 
         passed = bool(data.get("status") == "passed")
+        s_raw_status = data.get("status", "unknown")
         dur = float(data.get("duration_seconds", 0.0))
         total_test_time += dur
         if not passed:
             all_passed = False
-            failed_scrapers.append(meta["display_name"])
+            label_suffix = " (NOT WORKING)" if s_raw_status == "not working" else ""
+            failed_scrapers.append(f"{meta['display_name']}{label_suffix}")
 
         scrapers_run.append({
             "name": s_name,
             "display_name": meta["display_name"],
             "data": data,
             "passed": passed,
+            "raw_status": s_raw_status,
         })
 
         val = data.get("validation", {})
+        status_label = "✅ PASSED" if passed else ("❌ NOT WORKING (0 PRODUCTS)" if s_raw_status == "not working" else "❌ FAILED")
         print(f"\n{meta['display_name'].upper()}")
-        print(f"Status: {'✅ PASSED' if passed else '❌ FAILED'}")
+        print(f"Status: {status_label}")
         print(f"Products: {data.get('product_count', 0):,}")
         if data.get("variant_count"):
             print(f"Variants: {data.get('variant_count', 0):,}")
@@ -820,7 +863,12 @@ def generate_ci_summary(results_dir: str = "test-results"):
     if summary_path:
         table_rows = []
         for s in scrapers_run:
-            s_status = "✅ PASSED" if s["passed"] else "❌ FAILED"
+            if s["passed"]:
+                s_status = "✅ PASSED"
+            elif s["raw_status"] == "not working":
+                s_status = "❌ NOT WORKING"
+            else:
+                s_status = "❌ FAILED"
             d = s["data"]
             p_cnt = f"{d.get('product_count', 0):,}"
             v_cnt = f"{d.get('variant_count', 0):,}" if d.get("variant_count") else "-"
