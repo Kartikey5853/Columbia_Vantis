@@ -6,3 +6,6 @@ __pycache__/
 env
 test-results/
 *data
+akamai_cookies.json
+*cookies*.json
+*.cookies.json

@@ -64,10 +64,83 @@ TOKEN = os.getenv("SHOPIFY_TOKEN")
 if TOKEN:
     TOKEN = TOKEN.strip().strip('"\'')
 
-DEFAULT_MYNTRA_TOKEN = os.getenv(
-    "MYNTRA_SESSION_TOKEN",
-    "ZXlKaGJHY2lPaUpJVXpJMU5pSXNJbXRwWkNJNklqRWlMQ0owZVhBaU9pSktWMVFpZlEuZXlKdWFXUjRJam9pTmpkalkyVXdNemd0WXpJM1lTMHhNV1l4TFdGbE9XTXRZMlUxTVRRM09UaGlPR0ppSWl3aVkybGtlQ0k2SW0xNWJuUnlZUzB3TW1RM1pHVmpOUzA0WVRBd0xUUmpOelF0T1dObU55MDVaRFl5WkdKbFlUVmxOakVpTENKaGNIQk9ZVzFsSWpvaWJYbHVkSEpoSWl3aWMzUnZjbVZKWkNJNklqSXlPVGNpTENKbGVIQWlPakU0TURZNU5EZzJOREFzSW1semN5STZJa2xFUlVFaWZRLmtYU29MWkVHSTNCbFI1WUZjS01CT0pKQml1S3N0Z21SbEZ0WGJMS0Y1cG8="
-)
+DEFAULT_MYNTRA_TOKEN = os.getenv("MYNTRA_SESSION_TOKEN")
+
+
+def load_akamai_cookies() -> List[Dict[str, Any]]:
+    """
+    Safely loads and sanitizes Akamai session cookies from:
+    1. AKAMAI_COOKIES environment variable (e.g. on Render)
+    2. akamai_cookies.json in working directory (local development)
+    3. www.myntra.com_cookies.json in working directory (local fallback)
+
+    Returns Playwright-compatible cookie dictionaries without exposing values.
+    """
+    raw_data = None
+
+    env_cookies = os.getenv("AKAMAI_COOKIES")
+    if env_cookies and env_cookies.strip():
+        try:
+            raw_data = json.loads(env_cookies.strip())
+        except Exception as e:
+            print(f"[COOKIES] Warning: Failed to parse AKAMAI_COOKIES environment variable: {e}", flush=True)
+
+    if not raw_data:
+        for fname in ("akamai_cookies.json", "www.myntra.com_cookies.json"):
+            c_path = Path(fname)
+            if c_path.exists():
+                try:
+                    raw_data = json.loads(c_path.read_text(encoding="utf-8"))
+                    break
+                except Exception as e:
+                    print(f"[COOKIES] Warning: Failed to read {fname}: {e}", flush=True)
+
+    if not raw_data or not isinstance(raw_data, list):
+        return []
+
+    sanitized: List[Dict[str, Any]] = []
+    for c in raw_data:
+        if not isinstance(c, dict):
+            continue
+        c_name = str(c.get("name") or "").strip()
+        c_val = str(c.get("value") or "").strip()
+        if not c_name:
+            continue
+
+        cookie: Dict[str, Any] = {
+            "name": c_name,
+            "value": c_val,
+            "path": str(c.get("path") or "/"),
+        }
+
+        domain = str(c.get("domain") or "").strip()
+        if domain:
+            cookie["domain"] = domain
+        elif "url" in c and c["url"]:
+            cookie["url"] = str(c["url"])
+        else:
+            cookie["domain"] = ".myntra.com"
+
+        exp = c.get("expires") if c.get("expires") is not None else c.get("expirationDate")
+        if exp is not None:
+            try:
+                cookie["expires"] = float(exp)
+            except (ValueError, TypeError):
+                pass
+
+        if "httpOnly" in c:
+            cookie["httpOnly"] = bool(c["httpOnly"])
+        if "secure" in c:
+            cookie["secure"] = bool(c["secure"])
+
+        same_site = str(c.get("sameSite") or "").lower()
+        if same_site in ("strict", "lax", "none"):
+            cookie["sameSite"] = same_site.capitalize()
+
+        sanitized.append(cookie)
+
+    return sanitized
+
 
 
 def log_console(msg):
@@ -132,9 +205,10 @@ async def get_shared_browser():
     if _SHARED_PLAYWRIGHT is None:
         _SHARED_PLAYWRIGHT = await async_playwright().start()
 
-    print("[BROWSER] Launching shared single Chromium instance (RAM-optimized)...", flush=True)
+    headless_mode = os.getenv("PLAYWRIGHT_HEADLESS", "false").lower() == "true"
+    print(f"[BROWSER] Launching shared single Chromium instance (headless={headless_mode}, RAM-optimized)...", flush=True)
     _SHARED_BROWSER = await _SHARED_PLAYWRIGHT.chromium.launch(
-        headless=True,
+        headless=headless_mode,
         ignore_default_args=["--enable-automation"],
         args=LOW_MEMORY_CHROMIUM_ARGS
     )
@@ -227,16 +301,24 @@ async def _create_lean_tab(browser, url: str, timeout: int = 60_000):
         }
     )
 
-    if "myntra.com" in url and DEFAULT_MYNTRA_TOKEN:
-        try:
-            await context.add_cookies([{
-                "name": "at",
-                "value": DEFAULT_MYNTRA_TOKEN,
-                "domain": ".myntra.com",
-                "path": "/"
-            }])
-        except Exception:
-            pass
+    if "myntra.com" in url:
+        akamai_cookies = load_akamai_cookies()
+        if akamai_cookies:
+            try:
+                await context.add_cookies(akamai_cookies)
+                print(f"[COOKIES] Loaded {len(akamai_cookies)} Akamai cookies into Myntra session", flush=True)
+            except Exception as e:
+                print(f"[COOKIES] Warning: Failed to add cookies: {e}", flush=True)
+        elif DEFAULT_MYNTRA_TOKEN:
+            try:
+                await context.add_cookies([{
+                    "name": "at",
+                    "value": DEFAULT_MYNTRA_TOKEN,
+                    "domain": ".myntra.com",
+                    "path": "/"
+                }])
+            except Exception:
+                pass
 
     page = await context.new_page()
     _ACTIVE_PAGE = page
