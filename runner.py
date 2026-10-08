@@ -196,17 +196,32 @@ _ACTIVE_PAGE = None
 _SCRAPER_LOCK = asyncio.Lock()
 
 
-async def get_shared_browser():
-    """Returns the persistent single Chromium instance, launching it if not yet started."""
+async def get_shared_browser(headless: Optional[bool] = None):
+    """
+    Returns a persistent single Chromium instance, launching it if not yet started.
+    Defaults to headless=True to minimize RAM (<150MB) on resource-constrained servers.
+    Can be explicitly set to headless=False (e.g. for Myntra with Akamai protection under Xvfb).
+    """
     global _SHARED_PLAYWRIGHT, _SHARED_BROWSER
+
+    # Determine headless mode:
+    # 1. Explicit parameter if passed
+    # 2. PLAYWRIGHT_HEADLESS environment variable if defined
+    # 3. Default True (ultra-low RAM for 512MB environments)
+    if headless is not None:
+        headless_mode = headless
+    elif os.getenv("PLAYWRIGHT_HEADLESS") is not None:
+        headless_mode = os.getenv("PLAYWRIGHT_HEADLESS", "true").lower() == "true"
+    else:
+        headless_mode = True
+
     if _SHARED_BROWSER and _SHARED_BROWSER.is_connected():
         return _SHARED_BROWSER
 
     if _SHARED_PLAYWRIGHT is None:
         _SHARED_PLAYWRIGHT = await async_playwright().start()
 
-    headless_mode = os.getenv("PLAYWRIGHT_HEADLESS", "false").lower() == "true"
-    print(f"[BROWSER] Launching shared single Chromium instance (headless={headless_mode}, RAM-optimized)...", flush=True)
+    print(f"[BROWSER] Launching single Chromium instance (headless={headless_mode}, RAM-optimized)...", flush=True)
     _SHARED_BROWSER = await _SHARED_PLAYWRIGHT.chromium.launch(
         headless=headless_mode,
         ignore_default_args=["--enable-automation"],
@@ -1205,7 +1220,10 @@ async def scrape_myntra(
 
     try:
         async with _SCRAPER_LOCK:
-            browser = await get_shared_browser()
+            # Ensure previous headless browser (e.g., from Columbia or Adventuras) is completely closed
+            # so Myntra launches in headed mode under Xvfb with Akamai cookies
+            await close_shared_browser()
+            browser = await get_shared_browser(headless=False)
             page = None
             try:
                 print("Opening lean tab for Myntra scraper (Playwright)...", flush=True)
