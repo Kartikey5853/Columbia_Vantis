@@ -104,7 +104,7 @@ async def check_and_trigger_scrapers(force: bool = False) -> Dict[str, Any]:
         print(f"[DEPLOY/STARTUP TRIGGER] Warning: Failed to query daily scrapers summary: {e}", flush=True)
         summary = {}
 
-    canonical_order = ["columbia", "adv", "myntra", "tata"]
+    canonical_order = ["columbia", "adv", "myntra", "tata", "tata_lux"]
     pending_scrapers = []
     completed_scrapers = []
 
@@ -142,7 +142,7 @@ async def check_and_trigger_scrapers(force: bool = False) -> Dict[str, Any]:
 
         backup_path = Path(f"data/{name}/{name}_data.json")
         if not force and status == "completed" and prods > 0:
-            if name == "tata" and (s_data.get("total_variants", 0) or 0) < 100:
+            if name in ("tata", "tata_lux") and (s_data.get("total_variants", 0) or 0) < 100:
                 pending_scrapers.append(name)
             else:
                 completed_scrapers.append(name)

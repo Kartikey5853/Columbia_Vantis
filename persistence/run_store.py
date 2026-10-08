@@ -371,7 +371,7 @@ async def get_daily_scrapers_summary(
     client: Optional[SupabaseClient] = None
 ) -> Dict[str, Dict[str, Any]]:
     """
-    Returns today's execution and data status for all scrapers ('columbia', 'adv', 'myntra', 'tata').
+    Returns today's execution and data status for all scrapers ('columbia', 'adv', 'myntra', 'tata', 'tata_lux').
     Used on server startup and by API/jobs to determine what has already completed today.
     """
     cli = client or get_supabase_client()
