@@ -83,7 +83,8 @@ def log_console(msg):
 
     scraper_keywords = (
         "Fetching", "fetched", "Done!", "Total SKUs", "Collected", "GraphQL", "HTTP",
-        "Listing Page", "Products", "Variants", "Worker", "Completed", "SCRAPE COMPLETE", "TEST MODE"
+        "Listing Page", "Products", "Variants", "Worker", "Completed", "SCRAPE COMPLETE", "TEST MODE",
+        "Page", "error", "Error", "Network", "Halting", "Stopping", "[ADV]", "[SCRAPER]"
     )
     if any(kw in text for kw in scraper_keywords):
         try:
@@ -223,11 +224,6 @@ async def _create_lean_tab(browser, url: str, timeout: int = 60_000):
             "sec-ch-ua": '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
             "sec-ch-ua-mobile": "?0",
             "sec-ch-ua-platform": '"Windows"',
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "none",
-            "Sec-Fetch-User": "?1",
-            "Upgrade-Insecure-Requests": "1",
         }
     )
 
