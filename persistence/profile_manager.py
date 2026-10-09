@@ -281,25 +281,24 @@ def detect_and_validate_profile(extract_dir: Path) -> Dict[str, Any]:
     if not user_data_dir:
         user_data_dir = extract_dir
 
-    # 2. Check for profile directories
+    # 2. Check for profile directories and normalize for Playwright
     has_profile_1 = (user_data_dir / "Profile 1").is_dir()
     has_default = (user_data_dir / "Default").is_dir()
 
     if has_profile_1 and not has_default:
-        profile_name = "Profile 1"
-        # Duplicate or link to Default for maximum Playwright compatibility
+        # Playwright attaches to 'Default' by default. Copy Profile 1 to Default so
+        # Chromium and DevTools Protocol load the original profile directly as Default.
         default_dir = user_data_dir / "Default"
         try:
-            if sys.platform.startswith("win"):
-                # On Windows, try junction or directory copy
-                subprocess.run(["cmd", "/c", "mklink", "/J", str(default_dir), str(user_data_dir / "Profile 1")], capture_output=True)
-            else:
-                default_dir.symlink_to("Profile 1")
-            print(f"[PROFILE] Linked 'Profile 1' to 'Default' profile alias.", flush=True)
-        except Exception:
-            pass
+            shutil.copytree(user_data_dir / "Profile 1", default_dir)
+            profile_name = "Default"
+            print(f"[PROFILE] Normalized 'Profile 1' to primary 'Default' profile directory.", flush=True)
+        except Exception as e:
+            print(f"[PROFILE] Warning: Failed to copy Profile 1 to Default: {e}", flush=True)
+            profile_name = "Profile 1"
     elif has_default:
         profile_name = "Default"
+
 
     # 3. Validate that recognizable Chrome profile artifacts exist
     recognized_markers = [
