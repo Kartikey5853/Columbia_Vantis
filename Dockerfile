@@ -9,7 +9,11 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-RUN apt-get update && apt-get install -y --no-install-recommends xvfb xauth && rm -rf /var/lib/apt/lists/*
+RUN (sed -i 's/Components: main$/Components: main contrib non-free non-free-firmware/g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true) \
+    && (sed -i 's/main$/main contrib non-free non-free-firmware/g' /etc/apt/sources.list 2>/dev/null || true) \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends xvfb xauth unrar rar unar p7zip-full \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN playwright install --with-deps chromium
 

@@ -58,6 +58,12 @@ from persistence.product_store import (
     batch_record_prices_if_changed,
 )
 from persistence.exporter import export_canonical_backup
+from persistence.profile_manager import (
+    ProfileSession,
+    package_and_upload_profile,
+    run_myntra_diagnostic,
+    get_profile_config,
+)
 
 SCRAPER_DIR = Path("scraper")
 
@@ -194,6 +200,7 @@ LOW_MEMORY_CHROMIUM_ARGS = [
 _SHARED_PLAYWRIGHT = None
 _SHARED_BROWSER = None
 _ACTIVE_PAGE = None
+_ACTIVE_PERSISTENT_CONTEXT = None
 _SCRAPER_LOCK = asyncio.Lock()
 
 
@@ -232,8 +239,8 @@ async def get_shared_browser(headless: Optional[bool] = None):
 
 
 async def close_shared_browser():
-    """Explicitly closes any open tab and shuts down the shared browser."""
-    global _SHARED_PLAYWRIGHT, _SHARED_BROWSER, _ACTIVE_PAGE
+    """Explicitly closes any open tab, active persistent context, and shuts down the shared browser."""
+    global _SHARED_PLAYWRIGHT, _SHARED_BROWSER, _ACTIVE_PAGE, _ACTIVE_PERSISTENT_CONTEXT
     if _ACTIVE_PAGE:
         try:
             if not _ACTIVE_PAGE.is_closed():
@@ -241,6 +248,13 @@ async def close_shared_browser():
         except Exception:
             pass
         _ACTIVE_PAGE = None
+
+    if _ACTIVE_PERSISTENT_CONTEXT:
+        try:
+            await _ACTIVE_PERSISTENT_CONTEXT.close()
+        except Exception:
+            pass
+        _ACTIVE_PERSISTENT_CONTEXT = None
 
     if _SHARED_BROWSER:
         try:
@@ -263,7 +277,7 @@ _CURRENT_SCRAPER_NAME: Optional[str] = None
 
 async def stop_current_scraper(reason: str = "Stopped by user request") -> None:
     """Terminates in-progress browser pages and updates active Supabase scrape run to stopped."""
-    global _CURRENT_SCRAPER_RUN_ID, _CURRENT_SCRAPER_NAME, _ACTIVE_PAGE
+    global _CURRENT_SCRAPER_RUN_ID, _CURRENT_SCRAPER_NAME, _ACTIVE_PAGE, _ACTIVE_PERSISTENT_CONTEXT
     print(f"[RUNNER] 🛑 Stopping active scraper ({_CURRENT_SCRAPER_NAME or 'none'}). Reason: {reason}", flush=True)
 
     if _CURRENT_SCRAPER_RUN_ID:
@@ -286,6 +300,13 @@ async def stop_current_scraper(reason: str = "Stopped by user request") -> None:
         except Exception:
             pass
         _ACTIVE_PAGE = None
+
+    if _ACTIVE_PERSISTENT_CONTEXT:
+        try:
+            await _ACTIVE_PERSISTENT_CONTEXT.close()
+        except Exception:
+            pass
+        _ACTIVE_PERSISTENT_CONTEXT = None
 
     await close_shared_browser()
 
@@ -1225,69 +1246,236 @@ async def scrape_myntra(
 
     try:
         async with _SCRAPER_LOCK:
-            # Ensure previous headless browser (e.g., from Columbia or Adventuras) is completely closed
-            # so Myntra launches in headed mode under Xvfb with Akamai cookies
+            # Ensure previous shared browser (e.g. from Columbia or Adventuras) is closed
+            # so Myntra launches exclusively under low RAM
             await close_shared_browser()
-            browser = await get_shared_browser(headless=False)
-            page = None
-            try:
-                print("Opening lean tab for Myntra scraper (Playwright)...", flush=True)
-                page = await _create_lean_tab(browser, "https://www.myntra.com/columbia")
 
-                print(f"Injecting Myntra JS scraper (startPage={start_page}, limit={limit_val})...", flush=True)
-                await page.evaluate(
-                    """([code, limit, startPage]) => {
-                        window.__IS_PLAYWRIGHT__ = true;
-                        window.__START_PAGE__ = startPage;
-                        if (limit > 0) window.__PRODUCT_LIMIT__ = limit;
-                        window.eval(code);
-                    }""",
-                    [scraper_code, limit_val, start_page]
+            profile_info = None
+            persistent_context = None
+            playwright_inst = None
+            diag_title = "unknown"
+            diag_url = "unknown"
+            diag_cookies = 0
+            diag_error = None
+            diag_details = {}
+
+            # Execute within managed ProfileSession (download, validate, lock)
+            async with ProfileSession(run_id=run_id, client=cli) as p_info:
+                profile_info = p_info
+                user_data_dir = profile_info["user_data_dir"]
+                profile_name = profile_info.get("profile_name") or "Default"
+
+                # Determine headless mode: default to False on Render (under Xvfb) for Akamai anti-bot evasion
+                if os.getenv("PLAYWRIGHT_HEADLESS") is not None:
+                    headless_mode = os.getenv("PLAYWRIGHT_HEADLESS", "false").lower() == "true"
+                else:
+                    headless_mode = False
+
+                print(
+                    f"[MYNTRA] 🚀 Launching Playwright persistent context (headless={headless_mode}, profile={profile_name}, user_data_dir={user_data_dir})...",
+                    flush=True
                 )
 
-                print("Myntra scraper is running. Waiting for completion while draining page checkpoints...", flush=True)
-                await _wait_and_poll_progress(
-                    page,
-                    done_flag="__SCRAPER_DONE__",
-                    progress_flag="__SCRAPER_PROGRESS__",
-                    timeout_ms=timeout_ms,
-                    poll_interval=1.5,
-                    callback=progress_callback,
-                    on_drain=drain_myntra_chunk
-                )
+                args = list(LOW_MEMORY_CHROMIUM_ARGS)
+                if profile_name:
+                    args.append(f"--profile-directory={profile_name}")
 
-                # Drain any remaining unsaved products
-                final_unsaved = await page.evaluate("() => typeof window.drainUnsavedProducts === 'function' ? window.drainUnsavedProducts() : []")
-                if final_unsaved:
-                    await drain_myntra_chunk(final_unsaved)
+                playwright_inst = await async_playwright().start()
+                try:
+                    persistent_context = await playwright_inst.chromium.launch_persistent_context(
+                        user_data_dir=str(user_data_dir),
+                        headless=headless_mode,
+                        ignore_default_args=["--enable-automation"],
+                        args=args,
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+                        viewport={"width": 1280, "height": 800},
+                        locale="en-IN",
+                        timezone_id="Asia/Kolkata",
+                        extra_http_headers={
+                            "Accept-Language": "en-IN,en-US;q=0.9,en;q=0.8",
+                            "sec-ch-ua": '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
+                            "sec-ch-ua-mobile": "?0",
+                            "sec-ch-ua-platform": '"Windows"',
+                        }
+                    )
+                    _ACTIVE_PERSISTENT_CONTEXT = persistent_context
 
-                # Capture rich session diagnostics
-                try:
-                    diag_title = await page.title()
-                except Exception:
-                    diag_title = "unknown"
-                try:
-                    diag_url = page.url
-                except Exception:
-                    diag_url = "unknown"
-                try:
-                    diag_cookies = len(await page.context.cookies())
-                except Exception:
-                    diag_cookies = 0
-                try:
-                    diag_error = await page.evaluate("() => window.__SCRAPER_ERROR__ || null")
-                except Exception:
-                    diag_error = None
-                try:
-                    diag_details = await page.evaluate("() => window.__MYNTRA_DIAGNOSTICS__ || {}")
-                except Exception:
-                    diag_details = {}
+                    # Inspect restored cookies without revealing secret values
+                    try:
+                        restored_cookies = await persistent_context.cookies(["https://www.myntra.com"])
+                        print(f"[COOKIES] Restored persistent profile has {len(restored_cookies)} cookies for .myntra.com", flush=True)
+                    except Exception as e:
+                        print(f"[COOKIES] Notice: Could not read cookies from persistent context: {e}", flush=True)
 
-            finally:
-                await close_shared_browser()
-                import gc
-                gc.collect()
-                print("[BROWSER] Myntra browser closed. Memory reclaimed.", flush=True)
+                    # Ingest any supplemental Akamai cookies configured in env
+                    akamai_env_cookies = load_akamai_cookies()
+                    if akamai_env_cookies:
+                        try:
+                            await persistent_context.add_cookies(akamai_env_cookies)
+                            print(f"[COOKIES] Injected {len(akamai_env_cookies)} supplemental Akamai cookies into session", flush=True)
+                        except Exception as e:
+                            print(f"[COOKIES] Warning: Failed to inject supplemental cookies: {e}", flush=True)
+                    elif DEFAULT_MYNTRA_TOKEN:
+                        try:
+                            await persistent_context.add_cookies([{
+                                "name": "at",
+                                "value": DEFAULT_MYNTRA_TOKEN,
+                                "domain": ".myntra.com",
+                                "path": "/"
+                            }])
+                        except Exception:
+                            pass
+
+                    page = persistent_context.pages[0] if persistent_context.pages else await persistent_context.new_page()
+                    _ACTIVE_PAGE = page
+
+                    await page.add_init_script("""
+                        Object.defineProperty(navigator, 'webdriver', { get: () => false });
+                    """)
+
+                    page.on("console", log_console)
+                    page.on("pageerror", lambda exc: print(f"[PAGE ERROR] {exc}", flush=True))
+
+                    async def block_unnecessary_resources(route):
+                        req = route.request
+                        res_type = req.resource_type
+                        url_lower = req.url.lower()
+
+                        if res_type in ("image", "media", "font"):
+                            try:
+                                await route.abort()
+                            except Exception:
+                                pass
+                            return
+
+                        tracker_keywords = (
+                            "google-analytics", "googletagmanager", "facebook", "doubleclick",
+                            "clarity.ms", "criteo", "hotjar", "omtrdc", "demdex", "tiqcdn",
+                            "branch.io", "scorecardresearch", "adroll", "datadog", "newrelic",
+                            "sentry", "shopifyanalytics"
+                        )
+                        if any(kw in url_lower for kw in tracker_keywords):
+                            try:
+                                await route.abort()
+                            except Exception:
+                                pass
+                            return
+
+                        try:
+                            await route.continue_()
+                        except Exception:
+                            pass
+
+                    await page.route("**/*", block_unnecessary_resources)
+
+                    print("Navigating persistent tab to https://www.myntra.com/columbia...", flush=True)
+                    for attempt in range(1, 4):
+                        try:
+                            await page.goto("https://www.myntra.com/columbia", wait_until="domcontentloaded", timeout=timeout_ms)
+                            break
+                        except Exception as e:
+                            if attempt == 3:
+                                raise
+                            print(f"[MYNTRA] Navigation retry {attempt}/3 due to: {e}", flush=True)
+                            await asyncio.sleep(2)
+
+                    # Immediate anti-bot / challenge inspection
+                    try:
+                        nav_title = await page.title()
+                        if any(term in nav_title.lower() for term in ("access denied", "maintenance", "blocked")):
+                            print(f"[MYNTRA DIAGNOSTICS] ⚠️ Immediate challenge / maintenance response detected: '{nav_title}'", flush=True)
+                    except Exception:
+                        pass
+
+                    print(f"Injecting Myntra JS scraper (startPage={start_page}, limit={limit_val})...", flush=True)
+                    await page.evaluate(
+                        """([code, limit, startPage]) => {
+                            window.__IS_PLAYWRIGHT__ = true;
+                            window.__START_PAGE__ = startPage;
+                            if (limit > 0) window.__PRODUCT_LIMIT__ = limit;
+                            window.eval(code);
+                        }""",
+                        [scraper_code, limit_val, start_page]
+                    )
+
+                    print("Myntra scraper is running. Waiting for completion while draining page checkpoints...", flush=True)
+                    await _wait_and_poll_progress(
+                        page,
+                        done_flag="__SCRAPER_DONE__",
+                        progress_flag="__SCRAPER_PROGRESS__",
+                        timeout_ms=timeout_ms,
+                        poll_interval=1.5,
+                        callback=progress_callback,
+                        on_drain=drain_myntra_chunk
+                    )
+
+                    # Drain any remaining unsaved products
+                    final_unsaved = await page.evaluate("() => typeof window.drainUnsavedProducts === 'function' ? window.drainUnsavedProducts() : []")
+                    if final_unsaved:
+                        await drain_myntra_chunk(final_unsaved)
+
+                    # Capture rich session diagnostics
+                    try:
+                        diag_title = await page.title()
+                    except Exception:
+                        diag_title = "unknown"
+                    try:
+                        diag_url = page.url
+                    except Exception:
+                        diag_url = "unknown"
+                    try:
+                        diag_cookies = len(await persistent_context.cookies())
+                    except Exception:
+                        diag_cookies = 0
+                    try:
+                        diag_error = await page.evaluate("() => window.__SCRAPER_ERROR__ || null")
+                    except Exception:
+                        diag_error = None
+                    try:
+                        diag_details = await page.evaluate("() => window.__MYNTRA_DIAGNOSTICS__ || {}")
+                    except Exception:
+                        diag_details = {}
+
+                finally:
+                    # Cleanly close persistent browser BEFORE packaging or cleanup
+                    _ACTIVE_PAGE = None
+                    if persistent_context:
+                        try:
+                            await persistent_context.close()
+                        except Exception:
+                            pass
+                        persistent_context = None
+                        _ACTIVE_PERSISTENT_CONTEXT = None
+
+                    if playwright_inst:
+                        try:
+                            await playwright_inst.stop()
+                        except Exception:
+                            pass
+                        playwright_inst = None
+
+                    import gc
+                    gc.collect()
+                    await asyncio.sleep(1.0)
+                    print("[BROWSER] Myntra persistent browser closed cleanly. Memory reclaimed.", flush=True)
+
+                # Persist profile ONLY if scrape was successful and not stopped
+                if total_persisted_products > 0 and not is_stop_requested():
+                    print(
+                        f"[PROFILE] Scrape succeeded ({total_persisted_products} products). "
+                        "Packaging and safely persisting updated profile to Supabase Storage...",
+                        flush=True
+                    )
+                    try:
+                        await package_and_upload_profile(profile_info, client=cli)
+                    except Exception as e:
+                        print(f"[PROFILE] Warning: Could not upload updated profile: {e}", flush=True)
+                else:
+                    print(
+                        f"[PROFILE] Scrape finished with {total_persisted_products} products (status: failed/interrupted). "
+                        "Preserving last known-good archive in Supabase Storage. Skipping upload.",
+                        flush=True
+                    )
 
         dur = round(time.perf_counter() - t_start, 1)
         await update_run_stage(run_id, "finalizing", client=cli)

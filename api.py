@@ -42,7 +42,12 @@ from runner import (
     close_shared_browser,
     stop_current_scraper
 )
-from persistence import get_all_canonical_products, get_database_storage_stats
+from persistence import (
+    get_all_canonical_products,
+    get_database_storage_stats,
+    run_myntra_diagnostic,
+    get_profile_config,
+)
 
 
 app = FastAPI(
@@ -237,6 +242,7 @@ async def root():
             "columbia_products": "GET /scrape (or GET /scrape/columbia)",
             "adv_products": "GET /scrape/adv",
             "myntra_products": "GET /scrape/myntra",
+            "myntra_diagnostic": "GET /scrape/myntra/diagnostic",
             "tata_products": "GET /scrape/tata",
             "db_diagnostics": "GET /db/diagnostics"
         }
@@ -562,6 +568,22 @@ async def get_myntra_data():
             pass
 
     return _format_product_payload("myntra", [])
+
+
+@app.get("/scrape/myntra/diagnostic", tags=["Myntra Profile Diagnostics"])
+@app.post("/scrape/myntra/diagnostic", tags=["Myntra Profile Diagnostics"])
+async def myntra_profile_diagnostic_endpoint():
+    """
+    🔬 RUNS MYNTRA PROFILE RESTORATION DIAGNOSTICS:
+    1. Downloads & extracts the restored Chrome profile archive from private Supabase Storage.
+    2. Validates profile layout (user_data_dir, active profile name) and checks for Windows DPAPI encryption vs Linux.
+    3. Launches Playwright with launch_persistent_context under the restored profile.
+    4. Counts session cookies for myntra.com (without revealing secrets).
+    5. Navigates to https://www.myntra.com/columbia and detects if normal catalog loaded vs maintenance/access-denied.
+    6. Returns an actionable JSON report diagnosing whether cookies transferred or if a Linux profile is needed.
+    """
+    report = await run_myntra_diagnostic()
+    return JSONResponse(status_code=200, content=report)
 
 
 @app.get("/scrape/tata")

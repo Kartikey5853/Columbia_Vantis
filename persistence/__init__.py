@@ -40,6 +40,12 @@ from persistence.product_store import (
 )
 from persistence.exporter import export_canonical_backup
 from persistence.diagnostics import get_database_storage_stats, format_storage_report
+from persistence.profile_manager import (
+    ProfileSession,
+    package_and_upload_profile,
+    run_myntra_diagnostic,
+    get_profile_config,
+)
 
 __all__ = [
     "NormalizedProduct",
@@ -78,4 +84,9 @@ __all__ = [
     "export_canonical_backup",
     "get_database_storage_stats",
     "format_storage_report",
+    "ProfileSession",
+    "package_and_upload_profile",
+    "run_myntra_diagnostic",
+    "get_profile_config",
 ]
+

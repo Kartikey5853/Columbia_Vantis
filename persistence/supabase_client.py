@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sys
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from dotenv import load_dotenv
 import httpx
@@ -16,7 +17,7 @@ load_dotenv()
 
 class SupabaseClient:
     """
-    Lightweight, asynchronous PostgREST client for Supabase.
+    Lightweight, asynchronous PostgREST & Storage client for Supabase.
     Designed specifically for memory-constrained environments (<512 MB).
     """
 
@@ -40,6 +41,7 @@ class SupabaseClient:
             )
 
         self.rest_url = f"{self.url}/rest/v1"
+        self.storage_url = f"{self.url}/storage/v1"
         self.headers = {
             "apikey": self.key,
             "Authorization": f"Bearer {self.key}",
@@ -238,6 +240,142 @@ class SupabaseClient:
             return res.json()
         except Exception:
             return None
+
+    # =========================================================================
+    # Supabase Storage Methods
+    # =========================================================================
+
+    async def storage_download_stream(
+        self,
+        bucket: str,
+        path: str,
+        target_path: Union[str, Path]
+    ) -> Path:
+        """
+        Downloads an object from Supabase Storage streaming directly to disk
+        in 64 KB chunks to prevent out-of-memory errors in low-RAM environments.
+        """
+        target_path = Path(target_path)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        url = f"{self.storage_url}/object/{bucket}/{path.lstrip('/')}"
+        client = await self.get_client()
+
+        for attempt in range(1, 4):
+            try:
+                async with client.stream("GET", url) as res:
+                    if res.status_code == 404:
+                        raise FileNotFoundError(f"Supabase Storage object not found: {bucket}/{path}")
+                    if res.status_code in (401, 403):
+                        raise PermissionError(f"Supabase Storage unauthorized ({res.status_code}) for {bucket}/{path}")
+                    if res.status_code in (502, 503, 504, 429) and attempt < 3:
+                        await asyncio.sleep(attempt * 2.0)
+                        continue
+                    if res.status_code >= 400:
+                        raise RuntimeError(f"Supabase Storage download error ({res.status_code}) for {bucket}/{path}")
+
+                    with open(target_path, "wb") as f:
+                        async for chunk in res.aiter_bytes(chunk_size=65536):
+                            f.write(chunk)
+                    return target_path
+            except (httpx.ConnectError, httpx.ReadTimeout, httpx.WriteTimeout) as exc:
+                if attempt < 3:
+                    await asyncio.sleep(attempt * 2.0)
+                    continue
+                raise exc
+
+        raise RuntimeError(f"Failed to download {bucket}/{path} after retries")
+
+    async def storage_upload_file(
+        self,
+        bucket: str,
+        path: str,
+        source_path: Union[str, Path],
+        upsert: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Uploads a file to Supabase Storage streaming from disk in chunks.
+        """
+        source_path = Path(source_path)
+        if not source_path.exists():
+            raise FileNotFoundError(f"Source file to upload not found: {source_path}")
+
+        url = f"{self.storage_url}/object/{bucket}/{path.lstrip('/')}"
+        headers = dict(self.headers)
+        headers["x-upsert"] = "true" if upsert else "false"
+        headers["Content-Type"] = "application/octet-stream"
+
+        async def file_generator():
+            with open(source_path, "rb") as f:
+                while True:
+                    chunk = f.read(65536)
+                    if not chunk:
+                        break
+                    yield chunk
+
+        client = await self.get_client()
+        for attempt in range(1, 4):
+            try:
+                res = await client.post(url, headers=headers, content=file_generator())
+                if res.status_code in (502, 503, 504, 429) and attempt < 3:
+                    await asyncio.sleep(attempt * 2.0)
+                    continue
+                if res.status_code >= 400:
+                    raise RuntimeError(f"Supabase Storage upload error ({res.status_code}) for {bucket}/{path}: {res.text}")
+                return res.json() if res.text else {}
+            except (httpx.ConnectError, httpx.ReadTimeout, httpx.WriteTimeout) as exc:
+                if attempt < 3:
+                    await asyncio.sleep(attempt * 2.0)
+                    continue
+                raise exc
+
+        raise RuntimeError(f"Failed to upload {bucket}/{path} after retries")
+
+    async def storage_move(
+        self,
+        bucket: str,
+        from_path: str,
+        to_path: str
+    ) -> bool:
+        """
+        Moves/renames an object within a bucket for atomic profile replacement.
+        """
+        url = f"{self.storage_url}/object/move"
+        client = await self.get_client()
+        res = await client.post(
+            url,
+            json={"bucketId": bucket, "sourceKey": from_path.lstrip("/"), "destinationKey": to_path.lstrip("/")}
+        )
+        if res.status_code >= 400:
+            raise RuntimeError(f"Supabase Storage move error ({res.status_code}): {res.text}")
+        return True
+
+    async def storage_delete(
+        self,
+        bucket: str,
+        paths: List[str]
+    ) -> bool:
+        """Deletes one or more objects from a bucket."""
+        url = f"{self.storage_url}/object/{bucket}"
+        client = await self.get_client()
+        clean_paths = [p.lstrip("/") for p in paths]
+        res = await client.request("DELETE", url, json={"prefixes": clean_paths})
+        if res.status_code >= 400:
+            raise RuntimeError(f"Supabase Storage delete error ({res.status_code}): {res.text}")
+        return True
+
+    async def storage_list(
+        self,
+        bucket: str,
+        prefix: str = "",
+        limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        """Lists objects in a bucket with metadata."""
+        url = f"{self.storage_url}/object/list/{bucket}"
+        client = await self.get_client()
+        res = await client.post(url, json={"prefix": prefix, "limit": limit})
+        if res.status_code >= 400:
+            raise RuntimeError(f"Supabase Storage list error ({res.status_code}): {res.text}")
+        return res.json() if res.text else []
 
 
 # Singleton factory for global reuse
