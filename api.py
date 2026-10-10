@@ -209,10 +209,11 @@ async def check_and_trigger_scrapers(force: bool = False) -> Dict[str, Any]:
 @app.on_event("startup")
 async def on_startup():
     """
-    On server boot:
-    Checks if today's scraping is complete in Supabase; if not, triggers the background queue scraper.
+    Server startup hook.
+    Automatic background scraping on boot is disabled to prevent unwanted scrapes/OOM.
+    Scrapers run only when explicitly triggered via /scrape or /deploy-trigger endpoints.
     """
-    await check_and_trigger_scrapers(force=False)
+    logger.info("[STARTUP] Server started. Automatic startup scraping is disabled.")
 
 
 @app.on_event("shutdown")

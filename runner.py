@@ -2826,31 +2826,26 @@ async def scrape_amazon(
     total_products_persisted = 0
     total_variants_persisted = 0
     total_prices_added = 0
+    persisted_source_ids = set()
 
-    try:
-        from amazon_scraper.amazon_scraper import run_amazon_scraper
-        await update_run_stage(run_id, "products", client=cli)
+    async def persist_chunk(chunk_items: List[Dict[str, Any]]):
+        nonlocal total_products_persisted, total_variants_persisted, total_prices_added
+        if not chunk_items:
+            return
 
-        res = await run_amazon_scraper(
-            limit=limit,
-            progress_callback=progress_callback,
-        )
+        norm_chunk = [normalize_amazon_product(p) for p in chunk_items]
+        # Filter items we haven't already persisted in this run
+        to_persist = [p for p in norm_chunk if p.source_product_id not in persisted_source_ids]
+        if not to_persist:
+            return
 
-        raw_products = res.get("products", [])
-        norm_products = [normalize_amazon_product(p) for p in raw_products]
-        if limit:
-            norm_products = norm_products[:limit]
-
-        # Batch persist into Supabase in chunks of 200
-        batch_size = 200
-        print(f"\n[PERSISTENCE] Persisting {len(norm_products)} Amazon products to Supabase (batches of {batch_size})...")
-
-        db_products = await upsert_canonical_products_batch(norm_products, client=cli, batch_size=batch_size)
+        print(f"[PERSISTENCE] Streaming {len(to_persist)} Amazon products to Supabase...", flush=True)
+        db_products = await upsert_canonical_products_batch(to_persist, client=cli, batch_size=100)
         id_by_src = {p["source_product_id"]: p["id"] for p in db_products if "source_product_id" in p and "id" in p}
 
         price_entries = []
         progress_items = []
-        for prod in norm_products:
+        for prod in to_persist:
             pid = id_by_src.get(prod.source_product_id)
             if pid:
                 price_entries.append({
@@ -2863,20 +2858,41 @@ async def scrape_amazon(
                     "source_product_id": prod.source_product_id,
                     "variant_count": len(prod.variants),
                 })
+                persisted_source_ids.add(prod.source_product_id)
 
-        total_prices_added = await batch_record_prices_if_changed(
-            price_entries, scrape_run_id=run_id, client=cli, batch_size=batch_size
+        added_prices = await batch_record_prices_if_changed(
+            price_entries, scrape_run_id=run_id, client=cli, batch_size=100
         )
+        total_prices_added += added_prices
 
         await batch_record_product_progress(
-            run_id, progress_items, status="completed", client=cli, batch_size=batch_size
+            run_id, progress_items, status="completed", client=cli, batch_size=100
         )
 
-        total_products_persisted = len(progress_items)
-        failed_count = len(norm_products) - total_products_persisted
-        total_variants_persisted = sum(len(p.variants) for p in norm_products)
+        chunk_persisted = len(progress_items)
+        chunk_variants = sum(len(p.variants) for p in to_persist)
+        total_products_persisted += chunk_persisted
+        total_variants_persisted += chunk_variants
 
-        await update_run_counts(run_id, completed_delta=total_products_persisted, failed_delta=failed_count, client=cli)
+        await update_run_counts(run_id, completed_delta=chunk_persisted, failed_delta=0, client=cli)
+        print(f"[PERSISTENCE] Persisted {chunk_persisted} products ({total_products_persisted} total so far).", flush=True)
+
+    try:
+        from amazon_scraper.amazon_scraper import run_amazon_scraper
+        await update_run_stage(run_id, "products", client=cli)
+
+        res = await run_amazon_scraper(
+            limit=limit,
+            progress_callback=progress_callback,
+            chunk_callback=persist_chunk,
+        )
+
+        # In case any unpersisted products remain in the final result
+        raw_products = res.get("products", [])
+        unpersisted = [p for p in raw_products if str(p.get("asin") or "").strip() not in persisted_source_ids]
+        if unpersisted:
+            await persist_chunk(unpersisted)
+
         await update_run_stage(run_id, "finalizing", client=cli)
 
         export_path = await export_canonical_backup("amazon", client=cli)

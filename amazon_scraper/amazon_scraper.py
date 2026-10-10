@@ -121,12 +121,13 @@ async def run_amazon_scraper(
     max_pages: int = 500,
     headless: bool = True,
     progress_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
+    chunk_callback: Optional[Callable[[List[Dict[str, Any]]], Any]] = None,
     existing_browser: Optional[Browser] = None,
 ) -> Dict[str, Any]:
     """
     Main asynchronous Amazon scraper runner.
-    Uses a SINGLE Playwright browser instance and a single reused page tab
-    to iterate all pages across all configured sellers with minimum RAM consumption.
+    Uses a SINGLE Playwright browser instance and recycles tabs periodically (every 10 pages)
+    to prevent Chromium V8 memory leaks. Periodically flushes collected products via chunk_callback.
     """
     start_time = time.perf_counter()
 
@@ -169,6 +170,7 @@ async def run_amazon_scraper(
     print("=" * 65, flush=True)
 
     products: Dict[str, Dict[str, Any]] = {}
+    pending_chunk: List[Dict[str, Any]] = []
     total_cards_seen = 0
     total_columbia_accepted = 0
     total_rejected = 0
@@ -187,8 +189,9 @@ async def run_amazon_scraper(
             )
             own_browser = True
 
-        # Create single reused tab
+        # Create single lean tab
         page = await _setup_lean_page(browser)
+        pages_on_current_tab = 0
 
         for seller_idx, seller in enumerate(targets):
             print("\n" + "-" * 60)
@@ -203,6 +206,17 @@ async def run_amazon_scraper(
                 if limit and len(products) >= limit:
                     print(f"Reached product limit of {limit}. Stopping pagination.")
                     break
+
+                # Recycle Chromium tab every 10 pages to release V8 DOM/layout memory leak
+                pages_on_current_tab += 1
+                if pages_on_current_tab > 10:
+                    try:
+                        await page.close()
+                    except Exception:
+                        pass
+                    page = await _setup_lean_page(browser)
+                    pages_on_current_tab = 1
+                    gc.collect()
 
                 page_url = seller.get_page_url(page_no)
                 page_success = False
@@ -276,12 +290,27 @@ async def run_amazon_scraper(
                             consecutive_empty_pages = 0
 
                         # Merge into master dict
+                        prev_count = len(products)
                         seen, columbia_acc, rejected = merge_extracted_items(
                             products, items, seller.seller_id, seller.name
                         )
                         total_cards_seen += seen
                         total_columbia_accepted += columbia_acc
                         total_rejected += rejected
+
+                        # Collect new products added in this page for streaming persistence
+                        if chunk_callback and len(products) > prev_count:
+                            new_items = list(products.values())[prev_count:]
+                            pending_chunk.extend(new_items)
+                            if len(pending_chunk) >= 25 or page_no % 3 == 0:
+                                try:
+                                    res = chunk_callback(pending_chunk)
+                                    if asyncio.iscoroutine(res):
+                                        await res
+                                    pending_chunk = []
+                                    gc.collect()
+                                except Exception as cb_err:
+                                    print(f"⚠️ Warning in chunk_callback: {cb_err}")
 
                         print(
                             f"  ↳ Page {page_no:02d} | Cards: {len(items):02d} | "
@@ -310,6 +339,16 @@ async def run_amazon_scraper(
 
                 if consecutive_empty_pages >= MAX_EMPTY_PAGES:
                     break
+
+            # Flush any remaining items in pending_chunk for this seller
+            if chunk_callback and pending_chunk:
+                try:
+                    res = chunk_callback(pending_chunk)
+                    if asyncio.iscoroutine(res):
+                        await res
+                    pending_chunk = []
+                except Exception as cb_err:
+                    print(f"⚠️ Warning in chunk_callback: {cb_err}")
 
             # Reclaim garbage collection after each seller
             gc.collect()
