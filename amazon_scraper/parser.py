@@ -203,12 +203,14 @@ EXTRACT_CARDS_JS = """
     const bodyText = document.body ? document.body.innerText : '';
     const noResults = bodyText.includes('No results for your search query.') || bodyText.includes('No results for');
     const isBot = bodyText.includes('Robot Check') || bodyText.includes('Enter the characters you see');
+    const is503 = document.title.includes('503') || bodyText.includes("It's rush hour and traffic is piling up") || bodyText.includes('Service Unavailable');
     
     return {
         items,
         hasNext,
         noResults,
-        isBot
+        isBot,
+        is503
     };
 }
 """

@@ -73,25 +73,13 @@ MAX_EMPTY_PAGES = 2
 
 
 async def _setup_lean_page(browser: Browser) -> Page:
-    """Creates a single lean Chromium page with aggressive resource aborting."""
+    """Creates a single lean Chromium page with media resource blocking."""
     context = await browser.new_context(
-        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-        viewport={"width": 1400, "height": 900},
         locale="en-IN",
         timezone_id="Asia/Kolkata",
-        extra_http_headers={
-            "Accept-Language": "en-IN,en-US;q=0.9,en;q=0.8",
-            "sec-ch-ua": '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
-            "sec-ch-ua-mobile": "?0",
-            "sec-ch-ua-platform": '"Windows"',
-        },
     )
 
     page = await context.new_page()
-
-    await page.add_init_script("""
-        Object.defineProperty(navigator, 'webdriver', { get: () => false });
-    """)
 
     # Aggressive resource blocking to preserve memory and network bandwidth
     async def block_resources(route):
@@ -237,6 +225,12 @@ async def run_amazon_scraper(
                             except Exception:
                                 pass
 
+                        # Reset session cookies between pages to bypass Amazon rate-limit fingerprinting
+                        try:
+                            await page.context.clear_cookies()
+                        except Exception:
+                            pass
+
                         print(f"[{seller.seller_id}] Page {page_no:02d} (Attempt {attempt}/3)...", flush=True)
                         await page.goto(page_url, wait_until="domcontentloaded", timeout=60000)
 
@@ -252,9 +246,11 @@ async def run_amazon_scraper(
                         has_next = data.get("hasNext", False)
                         no_results = data.get("noResults", False)
                         is_bot = data.get("isBot", False)
+                        is_503 = data.get("is503", False)
 
-                        if is_bot:
-                            print(f"⚠️ [WARNING] Amazon presented a bot challenge on page {page_no}. Retrying in 4s...")
+                        if is_bot or is_503:
+                            reason = "bot challenge" if is_bot else "transient 503"
+                            print(f"⚠️ [WARNING] Amazon presented {reason} on page {page_no} (Attempt {attempt}/3). Retrying in 4s...")
                             await asyncio.sleep(4.0)
                             continue
 
@@ -264,6 +260,13 @@ async def run_amazon_scraper(
                                 consecutive_empty_pages = MAX_EMPTY_PAGES
                                 page_success = True
                                 break
+                            
+                            # If no cards found and not explicit no-results, retry attempt first before treating as empty
+                            if attempt < 3:
+                                print(f"⚠️ [WARNING] 0 items parsed on page {page_no}. Retrying attempt {attempt + 1}...")
+                                await asyncio.sleep(3.0)
+                                continue
+
                             consecutive_empty_pages += 1
                             if consecutive_empty_pages >= MAX_EMPTY_PAGES:
                                 print(f"ℹ️ {MAX_EMPTY_PAGES} consecutive empty pages encountered. Seller finished at page {page_no}.")
@@ -301,7 +304,11 @@ async def run_amazon_scraper(
                 if not page_success and consecutive_empty_pages >= MAX_EMPTY_PAGES:
                     break
 
-                if not data.get("hasNext", True) or consecutive_empty_pages >= MAX_EMPTY_PAGES:
+                if page_success and not has_next:
+                    print(f"ℹ️ Reached last page of catalog for seller {seller.seller_id} at page {page_no}.")
+                    break
+
+                if consecutive_empty_pages >= MAX_EMPTY_PAGES:
                     break
 
             # Reclaim garbage collection after each seller
