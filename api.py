@@ -234,8 +234,8 @@ async def root():
         "endpoints": {
             "deploy_trigger": "POST /deploy-trigger (or GET /deploy-trigger)",
             "stop_pipeline": "POST /scrape/stop (or GET /scrape/stop)",
-            "reset_scrapers": "POST /scrape/reset (or GET /scrape/reset)",
-            "trigger_job": "POST /scrape?scrapers=columbia,adv,myntra,tata",
+            "reset_scrapers": "POST /scrape/reset (or GET /scrape/reset, /scrape/reset/{scraper}, /scrape/{scraper}/reset)",
+            "trigger_job": "POST /scrape?scrapers=columbia,adv,tata,tata_lux,amazon",
             "check_status": "GET /scrape/status/{job_id}",
             "active_status": "GET /scrape/status",
             "daily_reports": "GET /scrape/report",
@@ -244,6 +244,9 @@ async def root():
             "myntra_products": "GET /scrape/myntra",
             "myntra_diagnostic": "GET /scrape/myntra/diagnostic",
             "tata_products": "GET /scrape/tata",
+            "tata_lux_products": "GET /scrape/tata_lux",
+            "amazon_products": "GET /scrape/amazon",
+            "variants": "GET /scrape/{scraper}/variants (e.g. /scrape/amazon/variants)",
             "db_diagnostics": "GET /db/diagnostics"
         }
     }
@@ -269,7 +272,7 @@ async def stop_pipeline_endpoint(
 @app.post("/scrape/reset", tags=["Scraper Pipeline"])
 @app.get("/scrape/reset", tags=["Scraper Pipeline"])
 async def reset_scrapers_endpoint(
-    scrapers: str = Query("all", description="Comma-separated scrapers to reset e.g. 'all' or 'columbia,adv,myntra,tata'"),
+    scrapers: str = Query("all", description="Comma-separated scrapers to reset e.g. 'all', 'amazon', or 'columbia,adv,tata,tata_lux,amazon'"),
     business_date: Optional[str] = Query(None, description="Business date to reset (YYYY-MM-DD), defaults to today")
 ):
     """
@@ -296,6 +299,22 @@ async def reset_scrapers_endpoint(
             "details": res
         }
     )
+
+
+@app.post("/scrape/reset/{scraper}", tags=["Scraper Pipeline"])
+@app.get("/scrape/reset/{scraper}", tags=["Scraper Pipeline"])
+@app.post("/scrape/{scraper}/reset", tags=["Scraper Pipeline"])
+@app.get("/scrape/{scraper}/reset", tags=["Scraper Pipeline"])
+async def reset_single_scraper_endpoint(
+    scraper: str,
+    business_date: Optional[str] = Query(None, description="Business date to reset (YYYY-MM-DD), defaults to today")
+):
+    """
+    🔄 RESET SINGLE SCRAPER:
+    Convenience endpoint variant to reset a single scraper directly (e.g. /scrape/reset/amazon or /scrape/amazon/reset).
+    """
+    return await reset_scrapers_endpoint(scrapers=scraper, business_date=business_date)
+
 
 
 @app.post("/deploy-trigger")
@@ -331,6 +350,7 @@ async def get_scraper_report_endpoint(scraper: str):
         "tatalux": "tata_lux",
         "tatacliq_luxury": "tata_lux",
         "lux": "tata_lux",
+        "amazon": "amazon",
     }
     norm_name = alias_map.get(scraper.lower(), scraper.lower())
     rep = await get_daily_run_report(norm_name)
@@ -344,14 +364,14 @@ async def get_scraper_report_endpoint(scraper: str):
 
 @app.post("/scrape", status_code=202)
 async def trigger_scrape_job(
-    scrapers: str = Query("columbia,adv,myntra,tata,tata_lux", description="Comma-separated list of scrapers to run (columbia, adv, myntra, tata, tata_lux)"),
+    scrapers: str = Query("columbia,adv,tata,tata_lux,amazon", description="Comma-separated list of scrapers to run (columbia, adv, tata, tata_lux, amazon)"),
     limit: int = Query(None, description="Optional product limit for testing"),
     force: bool = Query(False, description="Force start a new job even if an interrupted job exists or if scrapers already completed today")
 ):
     """
     Triggers the sequential scraping pipeline in the background.
-    Supports selective execution (e.g., scrapers=columbia,adv or scrapers=tata).
-    Executes scrapers in strictly sequential order: Columbia -> Adventuras -> Myntra -> Tata CLiQ -> Tata CLiQ Luxury.
+    Supports selective execution (e.g., scrapers=amazon or scrapers=columbia,adv).
+    Executes scrapers in strictly sequential order: Columbia -> Adventuras -> Tata CLiQ -> Tata CLiQ Luxury -> Amazon.
     If force=False and scrapers are already completed today, skips them.
     Automatically resumes interrupted jobs across server restarts unless force=true.
     Immediately returns HTTP 202 Accepted with a unique job_id.
@@ -651,6 +671,134 @@ async def get_tata_lux_data():
             pass
 
     return _format_product_payload("tata_lux", [])
+
+
+@app.get("/scrape/amazon")
+async def get_amazon_data():
+    """
+    Returns canonical Amazon products from Supabase, or from rolling backup.
+    """
+    try:
+        prods = await get_all_canonical_products("amazon")
+        if prods:
+            return _format_product_payload("amazon", prods)
+    except Exception:
+        pass
+
+    backup_file = Path("data/amazon/amazon_data.json")
+    if backup_file.exists():
+        try:
+            data = json.loads(backup_file.read_text(encoding="utf-8"))
+            return _format_product_payload("amazon", data.get("products", []))
+        except Exception:
+            pass
+
+    b_date = get_business_date()
+    dated_file = Path(f"data/amazon/{b_date}.json")
+    if dated_file.exists():
+        try:
+            data = json.loads(dated_file.read_text(encoding="utf-8"))
+            return _format_product_payload("amazon", data.get("products", []))
+        except Exception:
+            pass
+
+    legacy_file = Path("amazon_products.json")
+    if legacy_file.exists():
+        try:
+            data = json.loads(legacy_file.read_text(encoding="utf-8"))
+            prods = data.get("products", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+            return _format_product_payload("amazon", prods)
+        except Exception:
+            pass
+
+    return _format_product_payload("amazon", [])
+
+
+@app.get("/scrape/{scraper}/variants")
+async def get_scraper_variants(scraper: str):
+    """
+    Returns all product variants for a given scraper (e.g. columbia, adv, tata, tata_lux, amazon).
+    Flattens variants with their associated parent product details, SKU, size, price, and availability.
+    """
+    alias_map = {
+        "columbiasportswear": "columbia",
+        "adventuras": "adv",
+        "tatacliq": "tata",
+        "tatalux": "tata_lux",
+        "tatacliq_luxury": "tata_lux",
+        "lux": "tata_lux",
+        "amazon": "amazon",
+    }
+    norm_name = alias_map.get(scraper.lower(), scraper.lower())
+
+    # Dispatch to specific product retriever
+    if norm_name == "columbia":
+        prod_resp = await get_columbia_data()
+    elif norm_name == "adv":
+        prod_resp = await get_adv_data()
+    elif norm_name == "myntra":
+        prod_resp = await get_myntra_data()
+    elif norm_name == "tata":
+        prod_resp = await get_tata_data()
+    elif norm_name == "tata_lux":
+        prod_resp = await get_tata_lux_data()
+    elif norm_name == "amazon":
+        prod_resp = await get_amazon_data()
+    else:
+        return JSONResponse(status_code=404, content={"error": f"Unknown scraper '{scraper}'"})
+
+    prods = prod_resp.get("products", []) if isinstance(prod_resp, dict) else []
+    flattened_variants = []
+
+    for p in prods:
+        pid = p.get("product_id") or p.get("source_product_id") or ""
+        p_title = p.get("title") or ""
+        p_price = p.get("price") if p.get("price") is not None else p.get("current_price")
+        p_mrp = p.get("mrp") if p.get("mrp") is not None else p.get("current_mrp")
+        p_url = p.get("url") or ""
+
+        raw_variants = p.get("variants") or []
+        if isinstance(raw_variants, list) and raw_variants:
+            for v in raw_variants:
+                if not isinstance(v, dict):
+                    continue
+                v_price = v.get("price") if v.get("price") is not None else p_price
+                v_mrp = v.get("mrp") if v.get("mrp") is not None else p_mrp
+                flattened_variants.append({
+                    "scraper": norm_name,
+                    "product_id": pid,
+                    "title": p_title,
+                    "sku": v.get("sku") or pid,
+                    "size": v.get("size") or "",
+                    "ean": v.get("ean"),
+                    "price": v_price,
+                    "mrp": v_mrp,
+                    "available": v.get("available", True),
+                    "url": v.get("url") or p_url,
+                })
+        else:
+            # Standalone single-variant fallback
+            flattened_variants.append({
+                "scraper": norm_name,
+                "product_id": pid,
+                "title": p_title,
+                "sku": p.get("sku") or pid,
+                "size": "",
+                "ean": p.get("ean"),
+                "price": p_price,
+                "mrp": p_mrp,
+                "available": p.get("available", True),
+                "url": p_url,
+            })
+
+    return {
+        "schema_version": 1,
+        "source": norm_name,
+        "total_products": len(prods),
+        "total_variants": len(flattened_variants),
+        "variants": flattened_variants
+    }
+
 
 
 @app.get("/db/diagnostics")

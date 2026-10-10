@@ -287,7 +287,7 @@ async def reset_daily_scrapers(
     """
     cli = client or get_supabase_client()
     b_date = business_date or get_business_date()
-    canonical = ["columbia", "adv", "myntra", "tata", "tata_lux"]
+    canonical = ["columbia", "adv", "myntra", "tata", "tata_lux", "amazon"]
 
     alias_map = {
         "columbiasportswear": "columbia",
@@ -296,6 +296,7 @@ async def reset_daily_scrapers(
         "tatalux": "tata_lux",
         "tatacliq_luxury": "tata_lux",
         "lux": "tata_lux",
+        "amazon": "amazon",
     }
     if scrapers:
         target_names = [alias_map.get(s.strip().lower(), s.strip().lower()) for s in scrapers if s.strip()]
@@ -380,7 +381,7 @@ async def get_daily_scrapers_summary(
     cli = client or get_supabase_client()
     b_date = business_date or get_business_date()
 
-    canonical_names = ["columbia", "adv", "myntra", "tata", "tata_lux"]
+    canonical_names = ["columbia", "adv", "myntra", "tata", "tata_lux", "amazon"]
     id_to_name = {}
     for name in canonical_names:
         s_id = await get_scraper_id(name, cli)
@@ -588,7 +589,7 @@ async def get_all_daily_reports(
     """Retrieves JSON reports for all canonical scrapers for today from Supabase scrape_runs."""
     cli = client or get_supabase_client()
     b_date = business_date or get_business_date()
-    canonical_names = ["columbia", "adv", "myntra", "tata", "tata_lux"]
+    canonical_names = ["columbia", "adv", "myntra", "tata", "tata_lux", "amazon"]
 
     reports = {}
     total_prods = 0
