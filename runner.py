@@ -2826,6 +2826,7 @@ async def scrape_amazon(
     total_products_persisted = 0
     total_variants_persisted = 0
     total_prices_added = 0
+    failed_count = 0
     persisted_source_ids = set()
 
     async def persist_chunk(chunk_items: List[Dict[str, Any]]):
@@ -2881,11 +2882,16 @@ async def scrape_amazon(
         from amazon_scraper.amazon_scraper import run_amazon_scraper
         await update_run_stage(run_id, "products", client=cli)
 
-        res = await run_amazon_scraper(
-            limit=limit,
-            progress_callback=progress_callback,
-            chunk_callback=persist_chunk,
-        )
+        async with _SCRAPER_LOCK:
+            # Reclaim any shared browser allocated by prior scrapers to preserve strict RAM limit
+            await close_shared_browser()
+            gc.collect()
+
+            res = await run_amazon_scraper(
+                limit=limit,
+                progress_callback=progress_callback,
+                chunk_callback=persist_chunk,
+            )
 
         # In case any unpersisted products remain in the final result
         raw_products = res.get("products", [])
@@ -2947,6 +2953,8 @@ async def scrape_amazon(
         await fail_run(run_id, error=str(e), report=fail_report, client=cli)
         raise
     finally:
+        await close_shared_browser()
+        gc.collect()
         _CURRENT_SCRAPER_RUN_ID = None
         _CURRENT_SCRAPER_NAME = None
 

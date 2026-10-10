@@ -53,6 +53,7 @@ LOW_MEMORY_CHROMIUM_ARGS = [
     "--disable-gpu",
     "--disable-software-rasterizer",
     "--mute-audio",
+    "--no-zygote",
     "--disable-background-networking",
     "--disable-background-timer-throttling",
     "--disable-backgrounding-occluded-windows",
@@ -62,7 +63,7 @@ LOW_MEMORY_CHROMIUM_ARGS = [
     "--disable-features=TranslateUI,BlinkGenPropertyTrees",
     "--disable-ipc-flooding-protection",
     "--disable-renderer-backgrounding",
-    "--js-flags=--max-old-space-size=256",
+    "--js-flags=--max-old-space-size=64",
     "--disable-blink-features=AutomationControlled",
 ]
 
@@ -72,47 +73,46 @@ SEARCH_RESULT_SELECTOR = 'div[data-component-type="s-search-result"]'
 MAX_EMPTY_PAGES = 2
 
 
-async def _setup_lean_page(browser: Browser) -> Page:
-    """Creates a single lean Chromium page with media resource blocking."""
+async def _block_non_document_resources(route):
+    """Aggressively blocks all assets, scripts, stylesheets, and fonts to ensure pure zero-JS HTML DOM."""
+    res_type = route.request.resource_type
+    if res_type in ("image", "media", "font", "stylesheet", "script", "other"):
+        try:
+            await route.abort()
+        except Exception:
+            pass
+        return
+    try:
+        await route.continue_()
+    except Exception:
+        pass
+
+
+async def _fetch_seller_page(browser: Browser, page_url: str, timeout: int = 45000) -> Dict[str, Any]:
+    """Fetches a single Amazon seller page in an isolated context and destroys both page and context immediately."""
     context = await browser.new_context(
         locale="en-IN",
         timezone_id="Asia/Kolkata",
     )
-
     page = await context.new_page()
-
-    # Aggressive resource blocking to preserve memory and network bandwidth
-    async def block_resources(route):
-        req = route.request
-        res_type = req.resource_type
-        url_lower = req.url.lower()
-
-        if res_type in ("image", "media", "font"):
-            try:
-                await route.abort()
-            except Exception:
-                pass
-            return
-
-        tracker_keywords = (
-            "google-analytics", "googletagmanager", "facebook", "doubleclick",
-            "clarity.ms", "criteo", "hotjar", "omtrdc", "demdex", "tiqcdn",
-            "scorecardresearch", "adroll", "datadog", "newrelic", "sentry"
-        )
-        if any(kw in url_lower for kw in tracker_keywords):
-            try:
-                await route.abort()
-            except Exception:
-                pass
-            return
-
+    await page.route("**/*", _block_non_document_resources)
+    try:
+        await page.goto(page_url, wait_until="domcontentloaded", timeout=timeout)
         try:
-            await route.continue_()
+            await page.wait_for_selector(SEARCH_RESULT_SELECTOR, timeout=12000)
         except Exception:
             pass
-
-    await page.route("**/*", block_resources)
-    return page
+        data = await page.evaluate(EXTRACT_CARDS_JS)
+        return data or {}
+    finally:
+        try:
+            await page.close()
+        except Exception:
+            pass
+        try:
+            await context.close()
+        except Exception:
+            pass
 
 
 async def run_amazon_scraper(
@@ -126,8 +126,8 @@ async def run_amazon_scraper(
 ) -> Dict[str, Any]:
     """
     Main asynchronous Amazon scraper runner.
-    Uses a SINGLE Playwright browser instance and recycles tabs periodically (every 10 pages)
-    to prevent Chromium V8 memory leaks. Periodically flushes collected products via chunk_callback.
+    Uses ultra-low-memory per-page context isolation (destroying tabs & contexts after every page)
+    and relaunches Chromium every 10 pages to prevent memory leaks.
     """
     start_time = time.perf_counter()
 
@@ -189,9 +189,7 @@ async def run_amazon_scraper(
             )
             own_browser = True
 
-        # Create single lean tab
-        page = await _setup_lean_page(browser)
-        pages_on_current_tab = 0
+        pages_since_browser_recycle = 0
 
         for seller_idx, seller in enumerate(targets):
             print("\n" + "-" * 60)
@@ -207,15 +205,19 @@ async def run_amazon_scraper(
                     print(f"Reached product limit of {limit}. Stopping pagination.")
                     break
 
-                # Recycle Chromium tab every 10 pages to release V8 DOM/layout memory leak
-                pages_on_current_tab += 1
-                if pages_on_current_tab > 10:
+                # Recycle entire browser process every 10 pages to fully reclaim OS memory
+                pages_since_browser_recycle += 1
+                if pages_since_browser_recycle > 10 and own_browser:
                     try:
-                        await page.close()
+                        await browser.close()
                     except Exception:
                         pass
-                    page = await _setup_lean_page(browser)
-                    pages_on_current_tab = 1
+                    browser = await playwright_instance.chromium.launch(
+                        headless=headless,
+                        ignore_default_args=["--enable-automation"],
+                        args=LOW_MEMORY_CHROMIUM_ARGS,
+                    )
+                    pages_since_browser_recycle = 1
                     gc.collect()
 
                 page_url = seller.get_page_url(page_no)
@@ -224,7 +226,7 @@ async def run_amazon_scraper(
                 for attempt in range(1, 4):
                     try:
                         # Human-like delay
-                        await asyncio.sleep(random.uniform(0.8, 1.6))
+                        await asyncio.sleep(random.uniform(0.6, 1.2))
 
                         elapsed = int(time.perf_counter() - start_time)
                         if progress_callback:
@@ -239,23 +241,9 @@ async def run_amazon_scraper(
                             except Exception:
                                 pass
 
-                        # Reset session cookies between pages to bypass Amazon rate-limit fingerprinting
-                        try:
-                            await page.context.clear_cookies()
-                        except Exception:
-                            pass
-
                         print(f"[{seller.seller_id}] Page {page_no:02d} (Attempt {attempt}/3)...", flush=True)
-                        await page.goto(page_url, wait_until="domcontentloaded", timeout=60000)
+                        data = await _fetch_seller_page(browser, page_url, timeout=50000)
 
-                        try:
-                            await page.wait_for_selector(SEARCH_RESULT_SELECTOR, timeout=12000)
-                        except Exception:
-                            # Might be end of catalog or bot check
-                            pass
-
-                        # Extract items directly in Chromium V8 engine (zero Python RAM overhead)
-                        data = await page.evaluate(EXTRACT_CARDS_JS)
                         items = data.get("items", [])
                         has_next = data.get("hasNext", False)
                         no_results = data.get("noResults", False)
@@ -302,7 +290,7 @@ async def run_amazon_scraper(
                         if chunk_callback and len(products) > prev_count:
                             new_items = list(products.values())[prev_count:]
                             pending_chunk.extend(new_items)
-                            if len(pending_chunk) >= 25 or page_no % 3 == 0:
+                            if len(pending_chunk) >= 20 or page_no % 2 == 0:
                                 try:
                                     res = chunk_callback(pending_chunk)
                                     if asyncio.iscoroutine(res):
