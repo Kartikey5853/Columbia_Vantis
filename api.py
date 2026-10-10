@@ -213,7 +213,7 @@ async def on_startup():
     Automatic background scraping on boot is disabled to prevent unwanted scrapes/OOM.
     Scrapers run only when explicitly triggered via /scrape or /deploy-trigger endpoints.
     """
-    logger.info("[STARTUP] Server started. Automatic startup scraping is disabled.")
+    print("[STARTUP] Server started. Automatic startup scraping is disabled.", flush=True)
 
 
 @app.on_event("shutdown")
