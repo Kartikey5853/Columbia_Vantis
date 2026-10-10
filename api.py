@@ -325,9 +325,22 @@ async def deploy_trigger_endpoint(
     force: bool = Query(False, description="Force run even if already completed today")
 ):
     """
-    Endpoint triggered automatically upon server deployment or wakeup.
-    Checks if today's scraping is complete in the database; if not, triggers the background queue scraper.
+    Endpoint called upon deployment or wakeup.
+    Automatic background scraping on deployment is disabled to prevent unwanted jobs.
+    Scrapers must be triggered explicitly via POST /scrape (or POST /deploy-trigger?force=true).
     """
+    if not force:
+        b_date = get_business_date()
+        summary = await get_daily_scrapers_summary(business_date=b_date)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "idle",
+                "business_date": b_date,
+                "message": "Deployment auto-trigger is disabled. Trigger pipeline explicitly via POST /scrape.",
+                "summary": summary,
+            }
+        )
     res = await check_and_trigger_scrapers(force=force)
     status_code = 200 if res.get("status") in ("already_completed", "already_running") else 202
     return JSONResponse(status_code=status_code, content=res)
@@ -365,21 +378,21 @@ async def get_scraper_report_endpoint(scraper: str):
 
 @app.post("/scrape", status_code=202)
 async def trigger_scrape_job(
-    scrapers: str = Query("columbia,adv,tata,tata_lux,amazon", description="Comma-separated list of scrapers to run (columbia, adv, tata, tata_lux, amazon)"),
+    scrapers: str = Query("columbia,adv,tata,tata_lux,amazon,myntra", description="Comma-separated list of scrapers to run (columbia, adv, tata, tata_lux, amazon, myntra)"),
     limit: int = Query(None, description="Optional product limit for testing"),
     force: bool = Query(False, description="Force start a new job even if an interrupted job exists or if scrapers already completed today")
 ):
     """
     Triggers the sequential scraping pipeline in the background.
-    Supports selective execution (e.g., scrapers=amazon or scrapers=columbia,adv).
-    Executes scrapers in strictly sequential order: Columbia -> Adventuras -> Tata CLiQ -> Tata CLiQ Luxury -> Amazon.
+    Supports selective execution (e.g., scrapers=amazon or scrapers=myntra or scrapers=columbia,adv).
+    Executes scrapers in strictly sequential order: Columbia -> Adventuras -> Tata CLiQ -> Tata CLiQ Luxury -> Amazon -> Myntra.
     If force=False and scrapers are already completed today, skips them.
     Automatically resumes interrupted jobs across server restarts unless force=true.
     Immediately returns HTTP 202 Accepted with a unique job_id.
     """
     selected = [s.strip() for s in (scrapers or "").split(",") if s.strip()]
     if not selected:
-        selected = ["columbia", "adv", "tata", "tata_lux", "amazon"]
+        selected = ["columbia", "adv", "tata", "tata_lux", "amazon", "myntra"]
 
     alias_map = {
         "columbiasportswear": "columbia",
@@ -389,9 +402,10 @@ async def trigger_scrape_job(
         "tatacliq_luxury": "tata_lux",
         "lux": "tata_lux",
         "amazon": "amazon",
+        "myntra": "myntra",
     }
-    selected = [alias_map.get(s.lower(), s.lower()) for s in selected if s.lower() != "myntra"]
-    canonical_order = ["columbia", "adv", "tata", "tata_lux", "amazon"]
+    selected = [alias_map.get(s.lower(), s.lower()) for s in selected]
+    canonical_order = ["columbia", "adv", "tata", "tata_lux", "amazon", "myntra"]
     ordered_selected = [s for s in canonical_order if s in selected] or canonical_order
 
     clear_stop_flag()

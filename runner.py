@@ -2961,10 +2961,10 @@ async def scrape_amazon(
 
 
 # =========================================================================
-# Sequential Pipeline Coordinator (Columbia -> Adventuras -> Tata CLiQ -> Tata CLiQ Luxury -> Amazon)
+# Sequential Pipeline Coordinator (Columbia -> Adventuras -> Tata CLiQ -> Tata CLiQ Luxury -> Amazon -> Myntra)
 # =========================================================================
 
-ORDERED_SCRAPERS = ["columbia", "adv", "tata", "tata_lux", "amazon"]
+ORDERED_SCRAPERS = ["columbia", "adv", "tata", "tata_lux", "amazon", "myntra"]
 
 SCRAPER_KEY_MAP = {
     "columbia": "columbia",
@@ -2973,6 +2973,7 @@ SCRAPER_KEY_MAP = {
     "tata_lux": "tata_lux",
     "lux": "tata_lux",
     "amazon": "amazon",
+    "myntra": "myntra",
 }
 
 SCRAPER_FUNCS = {
@@ -2981,13 +2982,14 @@ SCRAPER_FUNCS = {
     "tata": scrape_tata,
     "tata_lux": scrape_tata_lux,
     "amazon": scrape_amazon,
+    "myntra": scrape_myntra,
 }
 
 
 def normalize_scraper_names(scrapers: Optional[List[str]]) -> List[str]:
     """
     Normalizes scraper aliases and strictly enforces canonical sequential execution order:
-    columbia -> adv -> tata -> tata_lux -> amazon.
+    columbia -> adv -> tata -> tata_lux -> amazon -> myntra.
     """
     if not scrapers:
         return list(ORDERED_SCRAPERS)
