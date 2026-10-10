@@ -535,15 +535,92 @@ class ProfileSession:
                 self._locked = False
 
 
+async def fetch_storage_cookies(client: Optional[SupabaseClient] = None) -> List[Dict[str, Any]]:
+    """
+    Retrieves portable Akamai/Myntra session cookies from:
+    1. Supabase Storage: browser-profiles/myntra_cookies.json
+    2. AKAMAI_COOKIES environment variable
+    3. Local fallback files: myntra_cookies.json or www.myntra.com_cookies.json
+
+    Always filters out 'ak_bmsc' to prevent HTTP/2 protocol reset errors (ERR_HTTP2_PROTOCOL_ERROR).
+    Returns Playwright-compatible cookie dictionaries without logging sensitive values.
+    """
+    raw_cookies = None
+    cli = client or get_supabase_client()
+
+    # 1. Try Supabase Storage
+    try:
+        temp_c = Path(tempfile.gettempdir()) / "downloaded_myntra_cookies.json"
+        await cli.storage_download_file(PROFILE_BUCKET, "myntra_cookies.json", temp_c)
+        if temp_c.exists() and temp_c.stat().st_size > 10:
+            raw_cookies = json.loads(temp_c.read_text(encoding="utf-8"))
+            print(f"[COOKIES] Retrieved {len(raw_cookies)} session cookies from Supabase Storage ({PROFILE_BUCKET}/myntra_cookies.json)", flush=True)
+            temp_c.unlink(missing_ok=True)
+    except Exception as e:
+        print(f"[COOKIES] Notice: Could not fetch myntra_cookies.json from Supabase Storage: {e}", flush=True)
+
+    # 2. Try AKAMAI_COOKIES env
+    if not raw_cookies:
+        env_c = os.getenv("AKAMAI_COOKIES")
+        if env_c and env_c.strip():
+            try:
+                raw_cookies = json.loads(env_c.strip())
+            except Exception:
+                pass
+
+    # 3. Try local fallback files
+    if not raw_cookies:
+        for fname in ("myntra_cookies.json", "akamai_cookies.json", "www.myntra.com_cookies.json"):
+            fp = Path(fname)
+            if fp.exists():
+                try:
+                    raw_cookies = json.loads(fp.read_text(encoding="utf-8"))
+                    break
+                except Exception:
+                    pass
+
+    if not raw_cookies or not isinstance(raw_cookies, list):
+        return []
+
+    sanitized = []
+    for c in raw_cookies:
+        if not isinstance(c, dict):
+            continue
+        c_name = str(c.get("name") or "").strip()
+        c_val = str(c.get("value") or "").strip()
+        if not c_name or not c_val:
+            continue
+        # CRUCIAL: Drop ak_bmsc to prevent Akamai ERR_HTTP2_PROTOCOL_ERROR
+        if c_name == "ak_bmsc":
+            continue
+
+        item = {
+            "name": c_name,
+            "value": c_val,
+            "path": str(c.get("path") or "/"),
+            "domain": str(c.get("domain") or ".myntra.com"),
+        }
+        if c.get("secure") is not None:
+            item["secure"] = bool(c["secure"])
+        if c.get("httpOnly") is not None:
+            item["httpOnly"] = bool(c["httpOnly"])
+        same_site = str(c.get("sameSite") or "").lower()
+        if same_site in ("strict", "lax", "none"):
+            item["sameSite"] = same_site.capitalize()
+        sanitized.append(item)
+
+    return sanitized
+
+
 async def run_myntra_diagnostic(client: Optional[SupabaseClient] = None) -> Dict[str, Any]:
     """
     Diagnostic tool:
     1. Downloads and extracts the restored Chrome profile.
     2. Launches Playwright with launch_persistent_context under the restored profile.
-    3. Inspects session cookies for myntra.com (without logging sensitive values).
-    4. Navigates to https://www.myntra.com/columbia and inspects the response.
-    5. Reports whether a normal product page or a maintenance/access-denied response was returned.
-    6. Identifies whether Windows-encrypted cookies or IP challenges are responsible.
+    3. Ingests portable Akamai/Myntra cookies from Supabase Storage or env.
+    4. Inspects session cookies for myntra.com (without logging sensitive values).
+    5. Navigates to https://www.myntra.com/columbia and inspects the response.
+    6. Reports whether a normal product page or a maintenance/access-denied response was returned.
     """
     from playwright.async_api import async_playwright
 
@@ -616,6 +693,15 @@ async def run_myntra_diagnostic(client: Optional[SupabaseClient] = None) -> Dict
             )
 
             report["browser_startup"] = "success"
+
+            # Ingest portable Akamai / Myntra session cookies from Supabase Storage or env
+            injected_cookies = await fetch_storage_cookies(client=cli)
+            if injected_cookies:
+                try:
+                    await context.add_cookies(injected_cookies)
+                    print(f"[DIAGNOSTIC] Injected {len(injected_cookies)} portable session cookies into context", flush=True)
+                except Exception as e:
+                    print(f"[DIAGNOSTIC] Warning: Cookie injection failed: {e}", flush=True)
 
             # 1. Inspect cookies in restored session before and after navigation
             all_initial_cookies = await context.cookies()

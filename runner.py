@@ -1346,19 +1346,6 @@ async def scrape_myntra(
     in a lean Chromium tab with anti-bot evasion, injecting scraper/myntra_scraper.js,
     checkpointing page-by-page into Supabase, and updating local rolling backups.
     """
-    global _CURRENT_SCRAPER_RUN_ID, _CURRENT_SCRAPER_NAME
-    print("\n" + "=" * 60)
-    print("MYNTRA SCRAPER: DISABLED (Cookie/profile injection stopped to preserve RAM)")
-    print("=" * 60, flush=True)
-    return {
-        "source": "myntra",
-        "status": "skipped",
-        "total_products": 0,
-        "completed_products": 0,
-        "total_variants": 0,
-        "duration_seconds": 0.0,
-        "message": "Myntra scraper disabled to keep RAM minimum."
-    }
     run_id = run["id"]
     _CURRENT_SCRAPER_RUN_ID = run_id
     _CURRENT_SCRAPER_NAME = "myntra"
@@ -1492,8 +1479,12 @@ async def scrape_myntra(
                     except Exception as e:
                         print(f"[COOKIES] Notice: Could not read cookies from persistent context: {e}", flush=True)
 
-                    # Ingest any supplemental Akamai cookies configured in env
-                    akamai_env_cookies = load_akamai_cookies()
+                    # Ingest portable Akamai / Myntra session cookies from Supabase Storage or env
+                    from persistence.profile_manager import fetch_storage_cookies
+                    akamai_env_cookies = await fetch_storage_cookies(client=cli)
+                    if not akamai_env_cookies:
+                        akamai_env_cookies = load_akamai_cookies()
+
                     if akamai_env_cookies:
                         try:
                             await persistent_context.add_cookies(akamai_env_cookies)
