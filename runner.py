@@ -585,131 +585,167 @@ async def scrape_columbia(
     # 1. Initialize or resume daily scrape run
     run = await get_or_create_daily_run("columbia", client=cli)
     run_id = run["id"]
+    _CURRENT_SCRAPER_RUN_ID = run_id
+    _CURRENT_SCRAPER_NAME = "columbia"
     print(f"[RUN] Columbia Scrape Run ID: {run_id} (Date: {run['business_date']}, Status: {run['status']})")
 
     scraper_path = SCRAPER_DIR / "columbia_scraper.js"
     scraper_code = scraper_path.read_text(encoding="utf-8")
 
-    raw_products = []
-    async with _SCRAPER_LOCK:
-        browser = await get_shared_browser()
-        page = None
-        try:
-            print("Opening lean tab for Columbia scraper...", flush=True)
-            page = await _create_lean_tab(browser, "https://www.columbiasportswear.co.in/")
-
-            limit_val = int(limit) if limit else 0
-            print("Injecting and starting Columbia scraper...", flush=True)
-            await page.evaluate(
-                """([code, token, limit]) => {
-                    window.__SHOPIFY_TOKEN__ = token;
-                    window.__IS_PLAYWRIGHT__ = true;
-                    if (limit > 0) window.__PRODUCT_LIMIT__ = limit;
-                    window.eval(code);
-                }""",
-                [scraper_code, TOKEN, limit_val]
-            )
-
-            print("Columbia scraper is running. Waiting for completion...", flush=True)
-            await _wait_and_poll_progress(
-                page,
-                done_flag="__SCRAPER_DONE__",
-                progress_flag="__SCRAPER_PROGRESS__",
-                timeout_ms=180_000,
-                poll_interval=1.5,
-                callback=progress_callback
-            )
-
-            result = await page.evaluate("() => window.scraperResult || null")
-            if result and isinstance(result, dict):
-                raw_products = result.get("products", [])
-            else:
-                raw_products = await page.evaluate("() => window.output || []")
-
-        finally:
-            await close_shared_browser()
-            import gc
-            gc.collect()
-            print("[BROWSER] Columbia browser closed. Memory reclaimed.", flush=True)
-
-    # 2. Normalize raw products into canonical product structures
     await update_run_stage(run_id, "products", client=cli)
-    norm_products = group_columbia_products(raw_products)
-    if limit:
-        norm_products = norm_products[:limit]
 
-    # 2. Batch Persist into Supabase in chunks of 200
-    batch_size = 200
-    print(f"\n[PERSISTENCE] Persisting {len(norm_products)} canonical Columbia products to Supabase (batches of {batch_size})...")
+    total_persisted_products = 0
+    total_variants_persisted = 0
+    total_prices_added = 0
+    t_start = time.perf_counter()
 
-    db_products = await upsert_canonical_products_batch(norm_products, client=cli, batch_size=batch_size)
-    id_by_src = {p["source_product_id"]: p["id"] for p in db_products if "source_product_id" in p and "id" in p}
+    async def handle_columbia_chunk(chunk: List[Dict[str, Any]]):
+        nonlocal total_persisted_products, total_variants_persisted, total_prices_added
+        if not chunk:
+            return
 
-    price_entries = []
-    progress_items = []
-    for prod in norm_products:
-        pid = id_by_src.get(prod.source_product_id)
-        if pid:
-            price_entries.append({
-                "product_id": pid,
-                "price": prod.price,
-                "mrp": prod.mrp
-            })
-            progress_items.append({
-                "product_id": pid,
-                "source_product_id": prod.source_product_id,
-                "variant_count": len(prod.variants)
-            })
+        norm_chunk = group_columbia_products(chunk)
+        if not norm_chunk:
+            return
 
-    # Batch record prices (500 per call)
-    price_records_count = await batch_record_prices_if_changed(
-        price_entries, scrape_run_id=run_id, client=cli, batch_size=batch_size
-    )
+        db_prods = await upsert_canonical_products_batch(norm_chunk, client=cli, batch_size=200)
+        id_by_src = {p["source_product_id"]: p["id"] for p in db_prods if "source_product_id" in p and "id" in p}
 
-    # Batch record checkpoints (500 per call)
-    await batch_record_product_progress(
-        run_id, progress_items, status="completed", client=cli, batch_size=batch_size
-    )
+        price_entries = []
+        progress_items = []
+        for prod in norm_chunk:
+            pid = id_by_src.get(prod.source_product_id)
+            if pid:
+                price_entries.append({
+                    "product_id": pid,
+                    "price": prod.price,
+                    "mrp": prod.mrp
+                })
+                progress_items.append({
+                    "product_id": pid,
+                    "source_product_id": prod.source_product_id,
+                    "variant_count": len(prod.variants)
+                })
+                total_variants_persisted += len(prod.variants)
 
-    persisted_count = len(progress_items)
-    failed_count = len(norm_products) - persisted_count
-    total_variants = sum(len(p.variants) for p in norm_products)
-    await update_run_counts(run_id, completed_delta=persisted_count, failed_delta=failed_count, client=cli)
+        if price_entries:
+            added = await batch_record_prices_if_changed(
+                price_entries, scrape_run_id=run_id, client=cli, batch_size=200
+            )
+            total_prices_added += added
 
-    # 3. Finalize run and export local rolling backup
-    await update_run_stage(run_id, "finalizing", client=cli)
-    export_path = await export_canonical_backup("columbia", client=cli)
-    columbia_report = {
-        "scraper": "columbia",
-        "business_date": run["business_date"],
-        "status": "completed",
-        "stage": "completed",
-        "total_products": persisted_count,
-        "completed_products": persisted_count,
-        "total_variants": total_variants,
-        "failed_products": failed_count,
-        "prices_recorded": price_records_count,
-        "error": None
-    }
-    await complete_run(run_id, report=columbia_report, client=cli)
+        if progress_items:
+            await batch_record_product_progress(
+                run_id, progress_items, status="completed", client=cli, batch_size=200
+            )
 
-    print("\n" + "=" * 60)
-    print(f"COLUMBIA SCRAPING FINISHED: {persisted_count} products persisted")
-    print(f"Total Variants Persisted: {total_variants}")
-    print(f"Price Records Added: {price_records_count}")
-    print(f"Local Rolling Backup: {export_path.resolve()}")
-    print("=" * 60 + "\n", flush=True)
+        total_persisted_products += len(norm_chunk)
+        await update_run_counts(run_id, completed_delta=len(norm_chunk), client=cli)
+        print(f"[COLUMBIA CHUNK] Persisted {len(norm_chunk)} products ({sum(len(p.variants) for p in norm_chunk)} variants). Total so far: {total_persisted_products}.", flush=True)
 
-    return {
-        "status": "completed",
-        "run_id": run_id,
-        "completed_products": persisted_count,
-        "total_variants": total_variants,
-        "failed_products": failed_count,
-        "price_records_added": price_records_count,
-        "export_file": str(export_path),
-        "products": [p.to_dict() for p in norm_products],
-    }
+    try:
+        async with _SCRAPER_LOCK:
+            browser = await get_shared_browser()
+            page = None
+            try:
+                print("Opening lean tab for Columbia scraper...", flush=True)
+                page = await _create_lean_tab(browser, "https://www.columbiasportswear.co.in/")
+
+                limit_val = int(limit) if limit else 0
+                print("Injecting and starting Columbia scraper...", flush=True)
+                await page.evaluate(
+                    """([code, token, limit]) => {
+                        window.__SHOPIFY_TOKEN__ = token;
+                        window.__IS_PLAYWRIGHT__ = true;
+                        if (limit > 0) window.__PRODUCT_LIMIT__ = limit;
+                        window.eval(code);
+                    }""",
+                    [scraper_code, TOKEN, limit_val]
+                )
+
+                print("Columbia scraper is running. Waiting for completion and streaming chunks...", flush=True)
+                await _wait_and_poll_progress(
+                    page,
+                    done_flag="__SCRAPER_DONE__",
+                    progress_flag="__SCRAPER_PROGRESS__",
+                    timeout_ms=300_000,
+                    poll_interval=1.5,
+                    callback=progress_callback,
+                    on_drain=handle_columbia_chunk
+                )
+
+                # Drain any remaining unsaved products
+                final_unsaved = await page.evaluate("() => typeof window.drainUnsavedProducts === 'function' ? window.drainUnsavedProducts() : []")
+                if final_unsaved:
+                    await handle_columbia_chunk(final_unsaved)
+
+                # Fallback if no items were drained via stream
+                if total_persisted_products == 0:
+                    raw_fallback = await page.evaluate("() => window.output || []")
+                    if raw_fallback:
+                        await handle_columbia_chunk(raw_fallback)
+
+            finally:
+                await close_shared_browser()
+                import gc
+                gc.collect()
+                print("[BROWSER] Columbia browser closed. Memory reclaimed.", flush=True)
+
+        # 3. Finalize run and export local rolling backup
+        await update_run_stage(run_id, "finalizing", client=cli)
+        export_path = await export_canonical_backup("columbia", client=cli)
+        dur = round(time.perf_counter() - t_start, 1)
+        columbia_report = {
+            "scraper": "columbia",
+            "business_date": run["business_date"],
+            "status": "completed",
+            "stage": "completed",
+            "total_products": total_persisted_products,
+            "completed_products": total_persisted_products,
+            "total_variants": total_variants_persisted,
+            "failed_products": 0,
+            "prices_recorded": total_prices_added,
+            "duration_seconds": dur,
+            "error": None
+        }
+        await complete_run(run_id, report=columbia_report, client=cli)
+
+        print("\n" + "=" * 60)
+        print(f"COLUMBIA SCRAPING FINISHED: {total_persisted_products} products persisted")
+        print(f"Total Variants Persisted: {total_variants_persisted}")
+        print(f"Price Records Added: {total_prices_added}")
+        print(f"Local Rolling Backup: {export_path.resolve()}")
+        print("=" * 60 + "\n", flush=True)
+
+        return {
+            "status": "completed",
+            "run_id": run_id,
+            "completed_products": total_persisted_products,
+            "total_variants": total_variants_persisted,
+            "failed_products": 0,
+            "price_records_added": total_prices_added,
+            "export_file": str(export_path),
+        }
+
+    except Exception as e:
+        dur = round(time.perf_counter() - t_start, 1)
+        fail_report = {
+            "scraper": "columbia",
+            "business_date": run["business_date"],
+            "status": "failed",
+            "stage": "products",
+            "total_products": total_persisted_products,
+            "completed_products": total_persisted_products,
+            "total_variants": total_variants_persisted,
+            "prices_recorded": total_prices_added,
+            "duration_seconds": dur,
+            "error": str(e)
+        }
+        await fail_run(run_id, error=str(e), report=fail_report, client=cli)
+        raise
+    finally:
+        _CURRENT_SCRAPER_RUN_ID = None
+        _CURRENT_SCRAPER_NAME = None
 
 
 # =========================================================================

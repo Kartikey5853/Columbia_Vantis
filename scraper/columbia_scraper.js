@@ -66,6 +66,13 @@ query GetProducts($first:Int!, $after:String){
 `;
 
 window.output = [];
+window.__COLUMBIA_UNSAVED__ = [];
+
+window.drainUnsavedProducts = function () {
+    const chunk = window.__COLUMBIA_UNSAVED__ || [];
+    window.__COLUMBIA_UNSAVED__ = [];
+    return chunk;
+};
 
 const progressStartedAt = Date.now();
 window.updateProgress = function (progress) {
@@ -96,11 +103,12 @@ const randomDelay = () => 1200 + Math.floor(Math.random() * 1000);
 let cursor = null;
 let hasNextPage = true;
 let page = 1;
+let totalSkuCount = 0;
 const limit = window.__PRODUCT_LIMIT__ ? Number(window.__PRODUCT_LIMIT__) : 0;
 
 while (hasNextPage) {
     console.log(`Fetching Page ${page} (cursor: ${cursor || "start"})...`);
-    window.updateProgress({ stage: "Collecting Products", current: page, total: page + 1 });
+    window.updateProgress({ stage: "Collecting Products", current: page, total: page + 1, variant_count: totalSkuCount });
 
     let json = null;
     let success = false;
@@ -169,7 +177,7 @@ while (hasNextPage) {
     for (const edge of edges) {
         const product = edge.node;
         for (const { node } of (product.variants?.edges || [])) {
-            window.output.push({
+            const item = {
                 source: "columbia",
                 product_id: product.id.split("/").pop(),
                 sku: node.sku,
@@ -182,8 +190,13 @@ while (hasNextPage) {
                     : Number(node.price?.amount || 0),
                 image_url: product.featuredImage?.url || "",
                 url: "https://www.columbiasportswear.co.in/products/" + product.handle
-            });
-            if (limit > 0 && window.output.length >= limit) {
+            };
+            window.__COLUMBIA_UNSAVED__.push(item);
+            totalSkuCount++;
+            if (!window.__IS_PLAYWRIGHT__) {
+                window.output.push(item);
+            }
+            if (limit > 0 && totalSkuCount >= limit) {
                 limitReached = true;
                 break;
             }
@@ -193,12 +206,12 @@ while (hasNextPage) {
         }
     }
 
-    console.log(`Page ${page}: fetched ${edges.length} products. Total SKUs so far: ${window.output.length}`);
+    console.log(`Page ${page}: fetched ${edges.length} products. Total SKUs so far: ${totalSkuCount}`);
     window.updateProgress({
         stage: "Collecting Products",
         current: page,
         total: page + 1,
-        variant_count: window.output.length
+        variant_count: totalSkuCount
     });
 
     if (limitReached) {
@@ -216,57 +229,31 @@ while (hasNextPage) {
 }
 
 const totalPages = Math.max(1, page - 1);
-console.log(`Collected ${window.output.length} products across ${totalPages} pages`);
+console.log(`Collected ${totalSkuCount} products across ${totalPages} pages`);
 console.log("Done!");
-console.log(window.output);
-console.log("Total SKUs:", window.output.length);
-window.updateProgress({ stage: "Completed", current: totalPages, total: totalPages });
+console.log("Total SKUs:", totalSkuCount);
+window.updateProgress({ stage: "Completed", current: totalPages, total: totalPages, variant_count: totalSkuCount });
 window.__SCRAPER_DONE__ = true;
 
-// Download JSON
-
-const output = {
-
-    schema_version: 1,
-
-    source: "columbia",
-
-    scrape_date: new Date().toISOString().slice(0,10),
-
-    scraped_at: new Date().toISOString(),
-
-    products: window.output
-
-};
-
-window.scraperResult = output;
-
-const blob = new Blob(
-    [
-      JSON.stringify(output, null, 2)
-    ],
-    {
-        type: "application/json"
-    }
-);
-
-const url = URL.createObjectURL(blob);
-
-const a = document.createElement("a");
-
-a.href = url;
-a.download = "columbia_products.json";
-
-document.body.appendChild(a);
-
-a.click();
-
-document.body.removeChild(a);
-
-URL.revokeObjectURL(url);
-
-console.log("Download Complete!");
-if (typeof window.__IS_PLAYWRIGHT__ === "undefined") {
+if (!window.__IS_PLAYWRIGHT__) {
+    const output = {
+        schema_version: 1,
+        source: "columbia",
+        scrape_date: new Date().toISOString().slice(0, 10),
+        scraped_at: new Date().toISOString(),
+        products: window.output
+    };
+    try {
+        const blob = new Blob([JSON.stringify(output, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "columbia_products.json";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    } catch (_) {}
     setTimeout(() => { try { window.close(); } catch (_) {} }, 1500);
 }
 
