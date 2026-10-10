@@ -595,8 +595,12 @@ async def run_myntra_diagnostic(client: Optional[SupabaseClient] = None) -> Dict
             if profile_name:
                 args.append(f"--profile-directory={profile_name}")
 
-            # Headless on Windows local test or env, headed on Xvfb if configured
-            is_headless = os.getenv("PLAYWRIGHT_HEADLESS", "true").lower() == "true"
+            # Default to False on Render/Linux (under Xvfb) for Akamai anti-bot evasion
+            if os.getenv("PLAYWRIGHT_HEADLESS") is not None:
+                is_headless = os.getenv("PLAYWRIGHT_HEADLESS", "false").lower() == "true"
+            else:
+                is_headless = False
+
             context = await pw.chromium.launch_persistent_context(
                 user_data_dir=str(user_data_dir),
                 headless=is_headless,
@@ -608,9 +612,6 @@ async def run_myntra_diagnostic(client: Optional[SupabaseClient] = None) -> Dict
                 timezone_id="Asia/Kolkata",
                 extra_http_headers={
                     "Accept-Language": "en-IN,en-US;q=0.9,en;q=0.8",
-                    "sec-ch-ua": '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
-                    "sec-ch-ua-mobile": "?0",
-                    "sec-ch-ua-platform": '"Windows"',
                 }
             )
 

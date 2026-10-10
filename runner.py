@@ -1481,9 +1481,6 @@ async def scrape_myntra(
                         timezone_id="Asia/Kolkata",
                         extra_http_headers={
                             "Accept-Language": "en-IN,en-US;q=0.9,en;q=0.8",
-                            "sec-ch-ua": '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
-                            "sec-ch-ua-mobile": "?0",
-                            "sec-ch-ua-platform": '"Windows"',
                         }
                     )
                     _ACTIVE_PERSISTENT_CONTEXT = persistent_context
