@@ -109,7 +109,7 @@ async def check_and_trigger_scrapers(force: bool = False) -> Dict[str, Any]:
         print(f"[DEPLOY/STARTUP TRIGGER] Warning: Failed to query daily scrapers summary: {e}", flush=True)
         summary = {}
 
-    canonical_order = ["columbia", "adv", "myntra", "tata", "tata_lux"]
+    canonical_order = ["columbia", "adv", "tata", "tata_lux", "amazon"]
     pending_scrapers = []
     completed_scrapers = []
 
@@ -358,7 +358,7 @@ async def trigger_scrape_job(
     """
     selected = [s.strip() for s in (scrapers or "").split(",") if s.strip()]
     if not selected:
-        selected = ["columbia", "adv", "myntra", "tata", "tata_lux"]
+        selected = ["columbia", "adv", "tata", "tata_lux", "amazon"]
 
     alias_map = {
         "columbiasportswear": "columbia",
@@ -367,9 +367,10 @@ async def trigger_scrape_job(
         "tatalux": "tata_lux",
         "tatacliq_luxury": "tata_lux",
         "lux": "tata_lux",
+        "amazon": "amazon",
     }
-    selected = [alias_map.get(s.lower(), s.lower()) for s in selected]
-    canonical_order = ["columbia", "adv", "myntra", "tata", "tata_lux"]
+    selected = [alias_map.get(s.lower(), s.lower()) for s in selected if s.lower() != "myntra"]
+    canonical_order = ["columbia", "adv", "tata", "tata_lux", "amazon"]
     ordered_selected = [s for s in canonical_order if s in selected] or canonical_order
 
     clear_stop_flag()

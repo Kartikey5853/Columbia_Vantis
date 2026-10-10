@@ -1,0 +1,17 @@
+# =============================================================================
+# Amazon Sellers Configuration
+# =============================================================================
+# You can add sellers in either of the following formats:
+#
+# 1. Full Amazon Seller URL (query parameters like popularity-rank are preserved):
+#    https://www.amazon.in/s?i=merchant-items&me=AUEEW31YCNC4K&s=popularity-rank&fs=true
+#
+# 2. Seller ID with optional display name:
+#    AUEEW31YCNC4K:Chogori
+#    A1WYWER0W24N8S:Seller2
+#    AUEEW31YCNC4K
+#
+# Lines starting with '#' and blank lines are ignored.
+# =============================================================================
+
+https://www.amazon.in/s?i=merchant-items&me=AUEEW31YCNC4K&s=popularity-rank&fs=true

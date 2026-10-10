@@ -40,7 +40,8 @@ async def get_scraper_id(scraper_name: str, client: Optional[SupabaseClient] = N
         "lux": "tatacliq_luxury",
         "columbia": "columbia_sportswear_india",
         "adv": "adventuras",
-        "myntra": "myntra"
+        "myntra": "myntra",
+        "amazon": "amazon"
     }
     new_rows = await cli.upsert(
         "scrapers",
