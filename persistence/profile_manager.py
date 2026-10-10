@@ -617,17 +617,24 @@ async def run_myntra_diagnostic(client: Optional[SupabaseClient] = None) -> Dict
 
             report["browser_startup"] = "success"
 
-            # 1. Inspect cookies in restored session
-            cookies = await context.cookies(["https://www.myntra.com"])
-            cookie_names = [c["name"] for c in cookies]
+            # 1. Inspect cookies in restored session before and after navigation
+            all_initial_cookies = await context.cookies()
+            myntra_initial_cookies = [c for c in all_initial_cookies if "myntra.com" in c.get("domain", "")]
+            cookie_names = [c["name"] for c in myntra_initial_cookies]
+            
+            # Check SQLite cookies files on disk
+            sqlite_cookie_files = [str(p.relative_to(user_data_dir)) for p in user_data_dir.rglob("Cookies")]
+
             report["session_cookies"] = {
-                "count": len(cookies),
-                "cookie_names": cookie_names,
+                "sqlite_cookie_files": sqlite_cookie_files,
+                "total_initial_cookies": len(all_initial_cookies),
+                "myntra_initial_count": len(myntra_initial_cookies),
+                "myntra_cookie_names": cookie_names,
                 "has_at_token": "at" in cookie_names,
                 "has_abck": "_abck" in cookie_names,
                 "has_bm_sz": "bm_sz" in cookie_names,
             }
-            print(f"[DIAGNOSTIC] Restored session has {len(cookies)} Myntra cookies: {cookie_names}", flush=True)
+            print(f"[DIAGNOSTIC] Restored session has {len(myntra_initial_cookies)} Myntra cookies (total {len(all_initial_cookies)} cookies). Files: {sqlite_cookie_files}", flush=True)
 
             page = context.pages[0] if context.pages else await context.new_page()
 
@@ -640,6 +647,7 @@ async def run_myntra_diagnostic(client: Optional[SupabaseClient] = None) -> Dict
             resp = None
             try:
                 resp = await page.goto("https://www.myntra.com/columbia", wait_until="domcontentloaded", timeout=45000)
+                await page.wait_for_timeout(3000)
             except Exception as e:
                 nav_error = str(e)
                 print(f"[DIAGNOSTIC] Navigation error: {e}", flush=True)
@@ -668,6 +676,17 @@ async def run_myntra_diagnostic(client: Optional[SupabaseClient] = None) -> Dict
                 is_maint = True
             elif "columbia" in low_title or "buy columbia" in low_content or "product-base" in low_content:
                 is_catalog = True
+
+            # Inspect post-navigation cookies
+            post_cookies = await context.cookies()
+            post_myntra = [c for c in post_cookies if "myntra.com" in c.get("domain", "")]
+
+            report["post_navigation"] = {
+                "post_total_cookies": len(post_cookies),
+                "post_myntra_count": len(post_myntra),
+                "post_myntra_names": [c["name"] for c in post_myntra],
+                "page_snippet": page_content[:500] if page_content else "",
+            }
 
             report["page_response"] = {
                 "http_status": status_code,
