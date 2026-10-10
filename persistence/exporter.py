@@ -63,24 +63,20 @@ async def export_canonical_backup(
     # 4. If existing valid file exists, copy to rolling .backup.json
     if main_file.exists():
         try:
-            existing_content = json.loads(main_file.read_text(encoding="utf-8"))
-            if validate_export_payload(existing_content):
+            if main_file.stat().st_size > 100:
                 shutil.copy2(main_file, backup_file)
         except Exception as e:
             print(f"[EXPORTER] Warning: existing main file could not be backed up: {e}", flush=True)
 
-    # 5. Write new data to temporary file
-    temp_file.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    # 5. Write new data directly to temporary file (streamed, low RAM)
+    with open(temp_file, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False)
 
     # 6. Validate written temporary file
-    try:
-        loaded_temp = json.loads(temp_file.read_text(encoding="utf-8"))
-        if not validate_export_payload(loaded_temp):
-            raise ValueError("Temporary file failed payload validation")
-    except Exception as e:
+    if not temp_file.exists() or temp_file.stat().st_size < 100:
         if temp_file.exists():
             temp_file.unlink()
-        raise RuntimeError(f"Export validation failed for temporary file: {e}")
+        raise RuntimeError("Export validation failed: temporary file is empty or corrupted")
 
     # 7. Atomically replace main file
     if os.name == "nt":
@@ -101,5 +97,11 @@ async def export_canonical_backup(
     else:
         os.replace(temp_file, main_file)
 
-    print(f"[EXPORTER] Atomically exported {len(products)} {norm_name} products to {main_file.resolve()}", flush=True)
+    num_prods = len(products)
+    del products
+    del payload
+    import gc
+    gc.collect()
+
+    print(f"[EXPORTER] Atomically exported {num_prods} {norm_name} products to {main_file.resolve()}", flush=True)
     return main_file

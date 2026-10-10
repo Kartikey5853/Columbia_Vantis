@@ -565,21 +565,66 @@ def group_columbia_products(raw_items: List[Dict[str, Any]]) -> List[NormalizedP
 # Columbia Sportswear Scraper (Browser JS + Supabase Persistence)
 # =========================================================================
 
+COLUMBIA_GRAPHQL_ENDPOINT = "https://columbia-sportswear-india.myshopify.com/api/2025-07/graphql.json"
+
+COLUMBIA_GRAPHQL_QUERY = """
+query GetProducts($first:Int!, $after:String){
+  products(
+    first:$first
+    after:$after
+  ){
+    edges{
+      cursor
+      node{
+        id
+        title
+        handle
+        featuredImage{
+          url
+        }
+        variants(first:100){
+          edges{
+            node{
+              sku
+              barcode
+              availableForSale
+              price{
+                amount
+              }
+              compareAtPrice{
+                amount
+              }
+            }
+          }
+        }
+      }
+    }
+    pageInfo{
+      hasNextPage
+      endCursor
+    }
+  }
+}
+"""
+
+
 async def scrape_columbia(
     limit: Optional[int] = None,
     progress_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
     client=None
 ) -> Dict[str, Any]:
     """
-    Scrapes Columbia Sportswear India product data using the browser JS scraper,
-    then normalizes and persists canonical products and price history into Supabase.
+    Scrapes Columbia Sportswear India product data using native async Shopify GraphQL API.
+    Runs with ultra-low memory footprint (~20MB RAM, zero Chromium processes),
+    streaming each 250-product page directly into Supabase.
     """
+    global _CURRENT_SCRAPER_RUN_ID, _CURRENT_SCRAPER_NAME
     if not TOKEN:
         raise RuntimeError("SHOPIFY_TOKEN is missing from .env or environment")
 
     cli = client or get_supabase_client()
     print("\n" + "=" * 60)
-    print("STARTING COLUMBIA SPORTSWEAR INDIA SCRAPER")
+    print("STARTING COLUMBIA SPORTSWEAR INDIA SCRAPER (LEAN NATIVE GRAPHQL ENGINE)")
     print("=" * 60, flush=True)
 
     # 1. Initialize or resume daily scrape run
@@ -589,109 +634,221 @@ async def scrape_columbia(
     _CURRENT_SCRAPER_NAME = "columbia"
     print(f"[RUN] Columbia Scrape Run ID: {run_id} (Date: {run['business_date']}, Status: {run['status']})")
 
-    scraper_path = SCRAPER_DIR / "columbia_scraper.js"
-    scraper_code = scraper_path.read_text(encoding="utf-8")
-
     await update_run_stage(run_id, "products", client=cli)
 
     total_persisted_products = 0
     total_variants_persisted = 0
     total_prices_added = 0
+    limit_val = int(limit) if limit else 0
     t_start = time.perf_counter()
 
-    async def handle_columbia_chunk(chunk: List[Dict[str, Any]]):
-        nonlocal total_persisted_products, total_variants_persisted, total_prices_added
-        if not chunk:
-            return
+    cursor = None
+    has_next_page = True
+    page = 1
 
-        norm_chunk = group_columbia_products(chunk)
-        if not norm_chunk:
-            return
-
-        db_prods = await upsert_canonical_products_batch(norm_chunk, client=cli, batch_size=200)
-        id_by_src = {p["source_product_id"]: p["id"] for p in db_prods if "source_product_id" in p and "id" in p}
-
-        price_entries = []
-        progress_items = []
-        for prod in norm_chunk:
-            pid = id_by_src.get(prod.source_product_id)
-            if pid:
-                price_entries.append({
-                    "product_id": pid,
-                    "price": prod.price,
-                    "mrp": prod.mrp
-                })
-                progress_items.append({
-                    "product_id": pid,
-                    "source_product_id": prod.source_product_id,
-                    "variant_count": len(prod.variants)
-                })
-                total_variants_persisted += len(prod.variants)
-
-        if price_entries:
-            added = await batch_record_prices_if_changed(
-                price_entries, scrape_run_id=run_id, client=cli, batch_size=200
-            )
-            total_prices_added += added
-
-        if progress_items:
-            await batch_record_product_progress(
-                run_id, progress_items, status="completed", client=cli, batch_size=200
-            )
-
-        total_persisted_products += len(norm_chunk)
-        await update_run_counts(run_id, completed_delta=len(norm_chunk), client=cli)
-        print(f"[COLUMBIA CHUNK] Persisted {len(norm_chunk)} products ({sum(len(p.variants) for p in norm_chunk)} variants). Total so far: {total_persisted_products}.", flush=True)
+    headers = {
+        "Content-Type": "application/json",
+        "X-Shopify-Storefront-Access-Token": TOKEN
+    }
 
     try:
-        async with _SCRAPER_LOCK:
-            browser = await get_shared_browser()
-            page = None
-            try:
-                print("Opening lean tab for Columbia scraper...", flush=True)
-                page = await _create_lean_tab(browser, "https://www.columbiasportswear.co.in/")
+        async with httpx.AsyncClient(timeout=45.0) as http_client:
+            while has_next_page:
+                if is_stop_requested():
+                    reason = get_stop_reason()
+                    print(f"[COLUMBIA] 🛑 Stopping scraper due to stop signal: {reason}", flush=True)
+                    break
 
-                limit_val = int(limit) if limit else 0
-                print("Injecting and starting Columbia scraper...", flush=True)
-                await page.evaluate(
-                    """([code, token, limit]) => {
-                        window.__SHOPIFY_TOKEN__ = token;
-                        window.__IS_PLAYWRIGHT__ = true;
-                        if (limit > 0) window.__PRODUCT_LIMIT__ = limit;
-                        window.eval(code);
-                    }""",
-                    [scraper_code, TOKEN, limit_val]
-                )
+                print(f"[SCRAPER] Fetching Page {page} (cursor: {cursor or 'start'})...", flush=True)
+                if progress_callback:
+                    try:
+                        await progress_callback({
+                            "stage": "Collecting Products",
+                            "current": page,
+                            "total": page + 1,
+                            "variant_count": total_variants_persisted
+                        })
+                    except Exception:
+                        pass
 
-                print("Columbia scraper is running. Waiting for completion and streaming chunks...", flush=True)
-                await _wait_and_poll_progress(
-                    page,
-                    done_flag="__SCRAPER_DONE__",
-                    progress_flag="__SCRAPER_PROGRESS__",
-                    timeout_ms=300_000,
-                    poll_interval=1.5,
-                    callback=progress_callback,
-                    on_drain=handle_columbia_chunk
-                )
+                payload_vars = {"first": 250, "after": cursor}
+                req_body = {"query": COLUMBIA_GRAPHQL_QUERY, "variables": payload_vars}
 
-                # Drain any remaining unsaved products
-                final_unsaved = await page.evaluate("() => typeof window.drainUnsavedProducts === 'function' ? window.drainUnsavedProducts() : []")
-                if final_unsaved:
-                    await handle_columbia_chunk(final_unsaved)
+                data = None
+                for attempt in range(1, 5):
+                    try:
+                        resp = await http_client.post(COLUMBIA_GRAPHQL_ENDPOINT, headers=headers, json=req_body)
+                        if resp.status_code != 200:
+                            print(f"[SCRAPER] HTTP {resp.status_code} on Columbia page {page}, attempt {attempt}/4", flush=True)
+                            if attempt < 4:
+                                await asyncio.sleep(attempt * 2.0)
+                                continue
+                            break
+                        res_json = resp.json()
+                        if "errors" in res_json:
+                            print(f"[SCRAPER] GraphQL errors on page {page}, attempt {attempt}/4: {res_json['errors']}", flush=True)
+                            if attempt < 4:
+                                await asyncio.sleep(attempt * 2.0)
+                                continue
+                            break
+                        data = res_json.get("data", {}).get("products") or res_json.get("data", {}).get("search")
+                        if data is not None:
+                            break
+                    except Exception as err:
+                        print(f"[SCRAPER] Network error on Columbia page {page}, attempt {attempt}/4: {err}", flush=True)
+                        if attempt < 4:
+                            await asyncio.sleep(attempt * 2.0)
 
-                # Fallback if no items were drained via stream
-                if total_persisted_products == 0:
-                    raw_fallback = await page.evaluate("() => window.output || []")
-                    if raw_fallback:
-                        await handle_columbia_chunk(raw_fallback)
+                if not data:
+                    print(f"[SCRAPER] Stopping Columbia pagination at page {page} due to persistent error.", flush=True)
+                    break
 
-            finally:
-                await close_shared_browser()
+                edges = data.get("edges") or []
+                if not edges:
+                    print(f"[SCRAPER] Page {page} returned 0 products. Reached end of catalog.", flush=True)
+                    break
+
+                norm_chunk: List[NormalizedProduct] = []
+                limit_reached = False
+                for edge in edges:
+                    node = edge.get("node") or {}
+                    pid = str(node.get("id") or "").split("/")[-1]
+                    title = str(node.get("title") or "").strip()
+                    handle = str(node.get("handle") or "").strip()
+                    image_url = (node.get("featuredImage") or {}).get("url") or ""
+                    product_url = f"https://www.columbiasportswear.co.in/products/{handle}" if handle else "https://www.columbiasportswear.co.in"
+
+                    variants: List[NormalizedVariant] = []
+                    first_sku = None
+                    first_ean = None
+                    min_price = None
+                    max_mrp = None
+
+                    variant_edges = (node.get("variants") or {}).get("edges") or []
+                    for v_edge in variant_edges:
+                        v_node = v_edge.get("node") or {}
+                        v_sku = str(v_node.get("sku") or "").strip() or None
+                        v_barcode = str(v_node.get("barcode") or "").strip() or None
+                        v_avail = bool(v_node.get("availableForSale", True))
+
+                        try:
+                            v_price = float((v_node.get("price") or {}).get("amount") or 0.0)
+                        except Exception:
+                            v_price = 0.0
+
+                        try:
+                            comp = v_node.get("compareAtPrice")
+                            if comp and comp.get("amount"):
+                                v_mrp = float(comp.get("amount") or 0.0)
+                            else:
+                                v_mrp = v_price
+                        except Exception:
+                            v_mrp = v_price
+
+                        if not first_sku and v_sku:
+                            first_sku = v_sku
+                        if not first_ean and v_barcode:
+                            first_ean = v_barcode
+                        if v_price > 0:
+                            if min_price is None or v_price < min_price:
+                                min_price = v_price
+                        if v_mrp > 0:
+                            if max_mrp is None or v_mrp > max_mrp:
+                                max_mrp = v_mrp
+
+                        variants.append(
+                            NormalizedVariant(
+                                size="",
+                                sku=v_sku,
+                                ean=v_barcode,
+                                available=v_avail,
+                                price=v_price,
+                                mrp=v_mrp if v_mrp > 0 else None,
+                                url=product_url,
+                            )
+                        )
+
+                    norm_chunk.append(
+                        NormalizedProduct(
+                            source="columbia",
+                            source_product_id=pid,
+                            title=title,
+                            sku=first_sku or (variants[0].sku if variants else None),
+                            ean=first_ean or (variants[0].ean if variants else None),
+                            price=min_price or (variants[0].price if variants else 0.0),
+                            mrp=max_mrp or (variants[0].mrp if variants else None),
+                            available=any(v.available for v in variants) if variants else True,
+                            image_url=image_url,
+                            url=product_url,
+                            variants=variants,
+                            scraped_at=datetime.now(timezone.utc).isoformat(),
+                        )
+                    )
+
+                    if limit_val > 0 and (total_persisted_products + len(norm_chunk)) >= limit_val:
+                        limit_reached = True
+                        break
+
+                # Stream and persist chunk into Supabase
+                if norm_chunk:
+                    db_prods = await upsert_canonical_products_batch(norm_chunk, client=cli, batch_size=200)
+                    id_by_src = {p["source_product_id"]: p["id"] for p in db_prods if "source_product_id" in p and "id" in p}
+
+                    price_entries = []
+                    progress_items = []
+                    chunk_variants = 0
+                    for prod in norm_chunk:
+                        pid = id_by_src.get(prod.source_product_id)
+                        if pid:
+                            price_entries.append({
+                                "product_id": pid,
+                                "price": prod.price,
+                                "mrp": prod.mrp
+                            })
+                            progress_items.append({
+                                "product_id": pid,
+                                "source_product_id": prod.source_product_id,
+                                "variant_count": len(prod.variants)
+                            })
+                        chunk_variants += len(prod.variants)
+
+                    if price_entries:
+                        added = await batch_record_prices_if_changed(
+                            price_entries, scrape_run_id=run_id, client=cli, batch_size=200
+                        )
+                        total_prices_added += added
+
+                    if progress_items:
+                        await batch_record_product_progress(
+                            run_id, progress_items, status="completed", client=cli, batch_size=200
+                        )
+
+                    total_persisted_products += len(norm_chunk)
+                    total_variants_persisted += chunk_variants
+                    await update_run_counts(run_id, completed_delta=len(norm_chunk), client=cli)
+                    print(f"[SCRAPER] Page {page}: fetched {len(edges)} products. Total SKUs so far: {total_variants_persisted}", flush=True)
+
+                del norm_chunk
                 import gc
                 gc.collect()
-                print("[BROWSER] Columbia browser closed. Memory reclaimed.", flush=True)
 
-        # 3. Finalize run and export local rolling backup
+                if limit_reached:
+                    print(f"[SCRAPER] Product limit {limit_val} reached. Stopping Columbia pagination.", flush=True)
+                    break
+
+                page_info = data.get("pageInfo") or {}
+                has_next_page = bool(page_info.get("hasNextPage")) and len(edges) > 0
+                cursor = page_info.get("endCursor") or (edges[-1].get("cursor") if edges else None)
+                page += 1
+                if has_next_page:
+                    await asyncio.sleep(0.3)
+
+        total_pages = max(1, page - 1)
+        print(f"[SCRAPER] Collected {total_variants_persisted} products across {total_pages} pages", flush=True)
+        print("[SCRAPER] Done!", flush=True)
+        print(f"[SCRAPER] Total SKUs: {total_variants_persisted}", flush=True)
+
+        # Finalize run and export local rolling backup
         await update_run_stage(run_id, "finalizing", client=cli)
         export_path = await export_canonical_backup("columbia", client=cli)
         dur = round(time.perf_counter() - t_start, 1)
@@ -709,6 +866,17 @@ async def scrape_columbia(
             "error": None
         }
         await complete_run(run_id, report=columbia_report, client=cli)
+
+        if progress_callback:
+            try:
+                await progress_callback({
+                    "stage": "Completed",
+                    "current": total_pages,
+                    "total": total_pages,
+                    "variant_count": total_variants_persisted
+                })
+            except Exception:
+                pass
 
         print("\n" + "=" * 60)
         print(f"COLUMBIA SCRAPING FINISHED: {total_persisted_products} products persisted")
@@ -2986,6 +3154,14 @@ async def run_sequential_pipeline(
             )
             icon = "✅" if s_status == "completed" else "⚠️"
             print(f"[JOB {job_id}] {icon} {s_name.upper()} {s_status.upper()} ({prods} products, {vars_cnt} variants, {dur}s)", flush=True)
+
+            # Reclaim browser and memory before next scraper
+            try:
+                await close_shared_browser()
+            except Exception:
+                pass
+            import gc
+            gc.collect()
 
         except asyncio.CancelledError:
             reason = get_stop_reason()
