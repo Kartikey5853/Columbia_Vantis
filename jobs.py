@@ -343,9 +343,9 @@ async def create_job(scrapers: Optional[list] = None, force: bool = False) -> Di
         now_iso = datetime.now(timezone.utc).isoformat()
 
         if scrapers:
-            keys = [SCRAPER_KEY_MAP.get(str(s).strip().lower(), str(s).strip().lower()) for s in scrapers if s and str(s).strip().lower() != "myntra"]
+            keys = [SCRAPER_KEY_MAP.get(str(s).strip().lower(), str(s).strip().lower()) for s in scrapers if s]
         else:
-            keys = ["columbia", "adv", "tatacliq", "tata_lux", "amazon"]
+            keys = ["columbia", "adv", "tatacliq", "tata_lux", "amazon", "myntra"]
 
         scrapers_dict = {
             k: {
