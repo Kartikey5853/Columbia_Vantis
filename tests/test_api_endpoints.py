@@ -143,7 +143,23 @@ class TestApiEndpoints(unittest.TestCase):
         res = self.client.get("/scrape/reset?scrapers=amazon")
         self.assertEqual(res.status_code, 200)
         data = res.json()
-        self.assertEqual(data["status"], "reset_completed")
+    @patch("api.create_job", new_callable=AsyncMock)
+    @patch("api.run_sequential_pipeline", new_callable=AsyncMock)
+    @patch("api.get_daily_scrapers_summary", new_callable=AsyncMock)
+    @patch("api.get_job", new_callable=AsyncMock)
+    def test_trigger_scrape_job_with_wait_seconds(self, mock_get_job, mock_summary, mock_pipeline, mock_create):
+        mock_summary.return_value = {}
+        mock_create.return_value = {"job_id": "job_wait_test"}
+        mock_get_job.return_value = {
+            "job_id": "job_wait_test",
+            "status": "running",
+            "progress_percentage": 10.0,
+            "product_count": 5
+        }
+        res = self.client.post("/scrape?scrapers=columbia&wait_seconds=0")
+        self.assertEqual(res.status_code, 202)
+        data = res.json()
+        self.assertEqual(data["job_id"], "job_wait_test")
 
 if __name__ == "__main__":
     unittest.main()

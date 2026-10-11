@@ -88,14 +88,15 @@ from persistence.run_store import (
 from persistence.exporter import export_canonical_backup
 
 
-async def check_and_trigger_scrapers(force: bool = False) -> Dict[str, Any]:
+async def check_and_trigger_scrapers(force: bool = False, wait_seconds: int = 300) -> Dict[str, Any]:
     """
     Core auto-trigger logic:
     1. Checks today's date in database (Asia/Kolkata timezone).
-    2. Inspects status of all scrapers (columbia, adv, myntra, tata).
+    2. Inspects status of all scrapers (columbia, adv, tata, tata_lux, amazon).
     3. If all scrapers are completed with valid data and not force -> returns already_completed.
     4. If pipeline is already running -> returns already_running with active job.
     5. If any scraper failed, was interrupted, or has not run -> starts sequential queue scraper in background.
+    6. If wait_seconds > 0, waits up to wait_seconds before returning current status.
     """
     b_date = get_business_date()
     print(f"\n[DEPLOY/STARTUP TRIGGER] 🔍 Checking database scraper status for business date: {b_date}...", flush=True)
@@ -171,7 +172,20 @@ async def check_and_trigger_scrapers(force: bool = False) -> Dict[str, Any]:
 
     if is_pipeline_running():
         active = await get_active_job()
-        msg = f"Scraper pipeline is already running (Job: {active['job_id'] if active else 'unknown'})."
+        job_id = active["job_id"] if active else None
+        if wait_seconds > 0 and job_id:
+            wait_task = get_pipeline_task()
+            if wait_task:
+                try:
+                    await asyncio.wait_for(asyncio.shield(wait_task), timeout=wait_seconds)
+                except asyncio.TimeoutError:
+                    pass
+                except Exception:
+                    pass
+            job_status = await get_job(job_id)
+            if job_status:
+                return job_status
+        msg = f"Scraper pipeline is already running (Job: {job_id if job_id else 'unknown'})."
         print(f"[DEPLOY/STARTUP TRIGGER] ⚠️ {msg}\n", flush=True)
         return {
             "status": "already_running",
@@ -191,6 +205,18 @@ async def check_and_trigger_scrapers(force: bool = False) -> Dict[str, Any]:
     print(f"[DEPLOY/STARTUP TRIGGER] 🔄 Auto-triggering incomplete scrapers for today ({b_date}): {pending_scrapers} (Job: {job_id}). Dispatching in background...\n", flush=True)
     task = asyncio.create_task(run_sequential_pipeline(job_id, selected_scrapers=pending_scrapers, force=force))
     set_pipeline_task(task)
+
+    if wait_seconds > 0:
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=wait_seconds)
+        except asyncio.TimeoutError:
+            pass
+        except Exception:
+            pass
+
+    current_job_data = await get_job(job_id)
+    if current_job_data:
+        return current_job_data
 
     return {
         "status": "triggered",
@@ -317,12 +343,14 @@ async def reset_single_scraper_endpoint(
 @app.get("/deploy-trigger")
 @app.post("/trigger")
 async def deploy_trigger_endpoint(
-    force: bool = Query(False, description="Force run even if already completed today")
+    force: bool = Query(False, description="Force run even if already completed today"),
+    wait_seconds: int = Query(300, ge=0, description="Seconds to wait before returning status (default 300s/5min; 0 returns immediately)")
 ):
     """
     Endpoint called upon deployment or wakeup.
     Automatic background scraping on deployment is disabled to prevent unwanted jobs.
     Scrapers must be triggered explicitly via POST /scrape (or POST /deploy-trigger?force=true).
+    Waits up to wait_seconds (default 300s / 5 min) so calling hooks or cron triggers keep the server alive.
     """
     if not force:
         b_date = get_business_date()
@@ -336,7 +364,7 @@ async def deploy_trigger_endpoint(
                 "summary": summary,
             }
         )
-    res = await check_and_trigger_scrapers(force=force)
+    res = await check_and_trigger_scrapers(force=force, wait_seconds=wait_seconds)
     status_code = 200 if res.get("status") in ("already_completed", "already_running") else 202
     return JSONResponse(status_code=status_code, content=res)
 
@@ -375,7 +403,8 @@ async def get_scraper_report_endpoint(scraper: str):
 async def trigger_scrape_job(
     scrapers: str = Query("columbia,adv,tata,tata_lux,amazon", description="Comma-separated list of scrapers to run (columbia, adv, tata, tata_lux, amazon)"),
     limit: int = Query(None, description="Optional product limit for testing"),
-    force: bool = Query(False, description="Force start a new job even if an interrupted job exists or if scrapers already completed today")
+    force: bool = Query(False, description="Force start a new job even if an interrupted job exists or if scrapers already completed today"),
+    wait_seconds: int = Query(300, ge=0, description="Seconds to wait before returning status (default 300s/5min to keep server alive during long runs; 0 returns immediately)")
 ):
     """
     Triggers the sequential scraping pipeline in the background.
@@ -383,7 +412,7 @@ async def trigger_scrape_job(
     Executes scrapers in strictly sequential order: Columbia -> Adventuras -> Tata CLiQ -> Tata CLiQ Luxury -> Amazon.
     If force=False and scrapers are already completed today, skips them.
     Automatically resumes interrupted jobs across server restarts unless force=true.
-    Immediately returns HTTP 202 Accepted with a unique job_id.
+    Waits up to wait_seconds (default 300s / 5 min) before returning current status so client calls keep the server alive.
     """
     selected = [s.strip() for s in (scrapers or "").split(",") if s.strip()]
     if not selected:
@@ -434,13 +463,34 @@ async def trigger_scrape_job(
 
     if is_pipeline_running():
         active = await get_active_job()
+        job_id = active["job_id"] if active else None
+        if wait_seconds > 0 and job_id:
+            wait_task = get_pipeline_task()
+            if wait_task:
+                try:
+                    await asyncio.wait_for(asyncio.shield(wait_task), timeout=wait_seconds)
+                except asyncio.TimeoutError:
+                    pass
+                except Exception:
+                    pass
+            job_status = await get_job(job_id)
+            status_code = 200 if job_status and job_status.get("status") in ("completed", "failed") else 202
+            return JSONResponse(
+                status_code=status_code,
+                content=job_status or {
+                    "status": "conflict",
+                    "message": "A scrape job is already currently running",
+                    "active_job": active,
+                    "status_url": f"/scrape/status/{job_id}"
+                }
+            )
         return JSONResponse(
             status_code=409,
             content={
                 "status": "conflict",
                 "message": "A scrape job is already currently running",
                 "active_job": active,
-                "status_url": f"/scrape/status/{active['job_id']}" if active else None
+                "status_url": f"/scrape/status/{job_id}" if job_id else None
             }
         )
 
@@ -451,24 +501,29 @@ async def trigger_scrape_job(
         print(f"[API] 🔄 Resuming interrupted job {job_id} in background...", flush=True)
         task = asyncio.create_task(run_sequential_pipeline(job_id, selected_scrapers=ordered_selected, limit=limit, force=force))
         set_pipeline_task(task)
+    else:
+        job = await create_job(scrapers=ordered_selected, force=force)
+        job_id = job["job_id"]
+        # Dispatch pipeline in background task
+        task = asyncio.create_task(run_sequential_pipeline(job_id, selected_scrapers=ordered_selected, limit=limit, force=force))
+        set_pipeline_task(task)
+
+    # If wait_seconds > 0, wait up to wait_seconds before returning so incoming caller stays connected / server stays alive
+    if wait_seconds > 0:
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=wait_seconds)
+        except asyncio.TimeoutError:
+            pass
+        except Exception:
+            pass
+
+    current_job_data = await get_job(job_id)
+    if current_job_data:
+        status_code = 200 if current_job_data.get("status") in ("completed", "failed") else 202
         return JSONResponse(
-            status_code=202,
-            content={
-                "job_id": job_id,
-                "status": "resumed",
-                "scrapers": ordered_selected,
-                "limit": limit,
-                "message": f"Resumed interrupted scrape job {job_id} in background",
-                "status_url": f"/scrape/status/{job_id}"
-            }
+            status_code=status_code,
+            content=current_job_data
         )
-
-    job = await create_job(scrapers=ordered_selected, force=force)
-    job_id = job["job_id"]
-
-    # Dispatch pipeline in background task
-    task = asyncio.create_task(run_sequential_pipeline(job_id, selected_scrapers=ordered_selected, limit=limit, force=force))
-    set_pipeline_task(task)
 
     return JSONResponse(
         status_code=202,
