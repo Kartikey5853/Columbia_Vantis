@@ -163,10 +163,10 @@ async def run_amazon_scraper(
             targets = [default_t]
 
     print("\n" + "=" * 65)
-    print("🚀 STARTING AMAZON PLAYWRIGHT SCRAPER (SINGLE BROWSER, ULTRA-LOW RAM)")
-    print(f"Configured Sellers: {len(targets)}")
+    print("[amazon](init) STARTING AMAZON PLAYWRIGHT SCRAPER (SINGLE BROWSER, ULTRA-LOW RAM)")
+    print(f"[amazon](config) Configured Sellers: {len(targets)}")
     for t in targets:
-        print(f"  • Seller ID: {t.seller_id} ({t.name})")
+        print(f"[amazon](config)   • Seller ID: {t.seller_id} ({t.name})")
     print("=" * 65, flush=True)
 
     products: Dict[str, Dict[str, Any]] = {}
@@ -193,8 +193,8 @@ async def run_amazon_scraper(
 
         for seller_idx, seller in enumerate(targets):
             print("\n" + "-" * 60)
-            print(f"[{seller_idx + 1}/{len(targets)}] Scraping Seller: {seller.name} ({seller.seller_id})")
-            print(f"Base URL: {seller.base_url}")
+            print(f"[amazon](collecting data) [{seller_idx + 1}/{len(targets)}] Scraping Seller: {seller.name} ({seller.seller_id})")
+            print(f"[amazon](collecting data) Base URL: {seller.base_url}")
             print("-" * 60, flush=True)
 
             consecutive_empty_pages = 0
@@ -202,7 +202,7 @@ async def run_amazon_scraper(
             for page_no in range(1, max_pages + 1):
                 # Check product limit
                 if limit and len(products) >= limit:
-                    print(f"Reached product limit of {limit}. Stopping pagination.")
+                    print(f"[amazon](collecting data) Reached product limit of {limit}. Stopping pagination.")
                     break
 
                 # Recycle entire browser process every 10 pages to fully reclaim OS memory
@@ -241,7 +241,7 @@ async def run_amazon_scraper(
                             except Exception:
                                 pass
 
-                        print(f"[{seller.seller_id}] Page {page_no:02d} (Attempt {attempt}/3)...", flush=True)
+                        print(f"[amazon](collecting data) [{seller.name}] Page {page_no:02d} (Attempt {attempt}/3)...", flush=True)
                         data = await _fetch_seller_page(browser, page_url, timeout=50000)
 
                         items = data.get("items", [])
@@ -252,26 +252,26 @@ async def run_amazon_scraper(
 
                         if is_bot or is_503:
                             reason = "bot challenge" if is_bot else "transient 503"
-                            print(f"⚠️ [WARNING] Amazon presented {reason} on page {page_no} (Attempt {attempt}/3). Retrying in 4s...")
+                            print(f"[amazon](bot guard) Amazon presented {reason} on page {page_no} (Attempt {attempt}/3). Retrying in 4s...")
                             await asyncio.sleep(4.0)
                             continue
 
                         if len(items) == 0:
                             if no_results:
-                                print(f"ℹ️ Amazon returned 'No results' for seller {seller.seller_id} at page {page_no}. Reached end of catalog.")
+                                print(f"[amazon](collecting data) Amazon returned 'No results' for seller {seller.name} at page {page_no}. Reached end of catalog.")
                                 consecutive_empty_pages = MAX_EMPTY_PAGES
                                 page_success = True
                                 break
                             
                             # If no cards found and not explicit no-results, retry attempt first before treating as empty
                             if attempt < 3:
-                                print(f"⚠️ [WARNING] 0 items parsed on page {page_no}. Retrying attempt {attempt + 1}...")
+                                print(f"[amazon](collecting data) 0 items parsed on page {page_no}. Retrying attempt {attempt + 1}...")
                                 await asyncio.sleep(3.0)
                                 continue
 
                             consecutive_empty_pages += 1
                             if consecutive_empty_pages >= MAX_EMPTY_PAGES:
-                                print(f"ℹ️ {MAX_EMPTY_PAGES} consecutive empty pages encountered. Seller finished at page {page_no}.")
+                                print(f"[amazon](collecting data) {MAX_EMPTY_PAGES} consecutive empty pages encountered. Seller finished at page {page_no}.")
                                 page_success = True
                                 break
                         else:
@@ -298,10 +298,10 @@ async def run_amazon_scraper(
                                     pending_chunk = []
                                     gc.collect()
                                 except Exception as cb_err:
-                                    print(f"⚠️ Warning in chunk_callback: {cb_err}")
+                                    print(f"[amazon](storing in database) Warning in chunk_callback: {cb_err}")
 
                         print(
-                            f"  ↳ Page {page_no:02d} | Cards: {len(items):02d} | "
+                            f"[amazon](collecting data) ↳ Page {page_no:02d} | Cards: {len(items):02d} | "
                             f"Columbia: {columbia_acc:02d} | Unique ASINs: {len(products)}"
                         )
 
@@ -309,20 +309,20 @@ async def run_amazon_scraper(
 
                         # If next button disabled or absent and cards were fewer than standard 16
                         if not has_next:
-                            print(f"ℹ️ No next page button found on page {page_no}. Reached end of seller catalog.")
+                            print(f"[amazon](collecting data) No next page button found on page {page_no}. Reached end of seller catalog.")
                             break
 
                         break  # Break retry loop on success
 
                     except Exception as exc:
-                        print(f"⚠️ Error on page {page_no} (Attempt {attempt}/3): {exc}", flush=True)
+                        print(f"[amazon](collecting data) Error on page {page_no} (Attempt {attempt}/3): {exc}", flush=True)
                         await asyncio.sleep(2.5)
 
                 if not page_success and consecutive_empty_pages >= MAX_EMPTY_PAGES:
                     break
 
                 if page_success and not has_next:
-                    print(f"ℹ️ Reached last page of catalog for seller {seller.seller_id} at page {page_no}.")
+                    print(f"[amazon](collecting data) Reached last page of catalog for seller {seller.name} at page {page_no}.")
                     break
 
                 if consecutive_empty_pages >= MAX_EMPTY_PAGES:
@@ -336,7 +336,7 @@ async def run_amazon_scraper(
                         await res
                     pending_chunk = []
                 except Exception as cb_err:
-                    print(f"⚠️ Warning in chunk_callback: {cb_err}")
+                    print(f"[amazon](storing in database) Warning in chunk_callback: {cb_err}")
 
             # Reclaim garbage collection after each seller
             gc.collect()
@@ -355,7 +355,7 @@ async def run_amazon_scraper(
                 except Exception:
                     pass
         gc.collect()
-        print("[BROWSER] Playwright browser closed. RAM reclaimed.", flush=True)
+        print("[amazon](cleanup) Playwright browser closed. RAM reclaimed.", flush=True)
 
     elapsed_total = time.perf_counter() - start_time
     minutes = int(elapsed_total // 60)
@@ -364,11 +364,11 @@ async def run_amazon_scraper(
     print("\n" + "=" * 65)
     print("                AMAZON SCRAPE COMPLETE SUMMARY")
     print("=" * 65)
-    print(f"Total Cards Seen        : {total_cards_seen:,}")
-    print(f"Columbia Products Found : {total_columbia_accepted:,}")
-    print(f"Other Products Seen     : {total_rejected:,}")
-    print(f"Total Unique ASINs      : {len(products):,}")
-    print(f"Execution Time          : {minutes}m {seconds:.2f}s")
+    print(f"[amazon](summary) Total Cards Seen        : {total_cards_seen:,}")
+    print(f"[amazon](summary) Columbia Products Found : {total_columbia_accepted:,}")
+    print(f"[amazon](summary) Other Products Seen     : {total_rejected:,}")
+    print(f"[amazon](summary) Total Unique ASINs      : {len(products):,}")
+    print(f"[amazon](summary) Execution Time          : {minutes} min {seconds:.1f} sec ({elapsed_total:.1f}s)")
     print("=" * 65 + "\n", flush=True)
 
     # 4. Save snapshots matching old scraper format
