@@ -229,18 +229,71 @@ async def check_and_trigger_scrapers(force: bool = False, wait_seconds: int = 0)
     }
 
 
+import httpx
+
+keepalive_task: Optional[asyncio.Task] = None
+
+
+async def _render_keepalive_loop():
+    """
+    Background keepalive loop for Render free tier.
+    Pings the public service URL every 3 minutes (180s) ONLY when a scraper pipeline is active.
+    This generates incoming HTTP requests to Render's routing layer, preventing inactivity spin-down.
+    """
+    keepalive_url = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("SERVER_URL")
+    if keepalive_url:
+        keepalive_url = keepalive_url.rstrip("/")
+        if not keepalive_url.startswith("http"):
+            keepalive_url = f"https://{keepalive_url}"
+        target_endpoint = f"{keepalive_url}/health"
+    else:
+        target_endpoint = None
+
+    if not target_endpoint:
+        print("[KEEPALIVE] Note: Neither RENDER_EXTERNAL_URL nor SERVER_URL is set. Self-ping will be skipped until set.", flush=True)
+    else:
+        print(f"[KEEPALIVE] Initialized keepalive self-ping targeting: {target_endpoint} (interval: 180s when pipeline running)", flush=True)
+
+    while True:
+        try:
+            await asyncio.sleep(180)  # Ping every 3 minutes
+            if is_pipeline_running():
+                current_url = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("SERVER_URL")
+                if current_url:
+                    current_url = current_url.rstrip("/")
+                    if not current_url.startswith("http"):
+                        current_url = f"https://{current_url}"
+                    ping_target = f"{current_url}/health"
+                    try:
+                        async with httpx.AsyncClient(timeout=15.0) as client:
+                            resp = await client.get(ping_target)
+                            print(f"[KEEPALIVE] 🏓 Pinged {ping_target} -> Status {resp.status_code} (pipeline active)", flush=True)
+                    except Exception as ping_err:
+                        print(f"[KEEPALIVE] ⚠️ Ping attempt to {ping_target} failed: {ping_err}", flush=True)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"[KEEPALIVE] Error in keepalive loop: {e}", flush=True)
+
+
 @app.on_event("startup")
 async def on_startup():
     """
     Server startup hook.
     Automatic background scraping on boot is disabled to prevent unwanted scrapes/OOM.
-    Scrapers run only when explicitly triggered via /scrape or /deploy-trigger endpoints.
+    Starts background keepalive loop to keep Render awake during active jobs.
     """
+    global keepalive_task
     print("[STARTUP] Server started. Automatic startup scraping is disabled.", flush=True)
+    if keepalive_task is None or keepalive_task.done():
+        keepalive_task = asyncio.create_task(_render_keepalive_loop())
 
 
 @app.on_event("shutdown")
 async def on_shutdown():
+    global keepalive_task
+    if keepalive_task and not keepalive_task.done():
+        keepalive_task.cancel()
     await close_shared_browser()
 
 
