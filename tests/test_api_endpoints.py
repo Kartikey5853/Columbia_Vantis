@@ -7,11 +7,19 @@ class TestApiEndpoints(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app, raise_server_exceptions=False)
 
+    def test_health_endpoint(self):
+        res = self.client.get("/health")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["status"], "healthy")
+        self.assertIn("pipeline_running", data)
+
     def test_root_endpoint(self):
         res = self.client.get("/")
         self.assertEqual(res.status_code, 200)
         data = res.json()
         self.assertEqual(data["status"], "online")
+        self.assertIn("health", data["endpoints"])
         self.assertIn("deploy_trigger", data["endpoints"])
         self.assertIn("daily_reports", data["endpoints"])
 

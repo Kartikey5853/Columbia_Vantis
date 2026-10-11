@@ -88,7 +88,7 @@ from persistence.run_store import (
 from persistence.exporter import export_canonical_backup
 
 
-async def check_and_trigger_scrapers(force: bool = False, wait_seconds: int = 300) -> Dict[str, Any]:
+async def check_and_trigger_scrapers(force: bool = False, wait_seconds: int = 0) -> Dict[str, Any]:
     """
     Core auto-trigger logic:
     1. Checks today's date in database (Asia/Kolkata timezone).
@@ -244,6 +244,19 @@ async def on_shutdown():
     await close_shared_browser()
 
 
+@app.get("/health")
+async def health_check():
+    """
+    Immediate liveness and health check endpoint.
+    Returns 200 OK immediately without triggering any scraping operations.
+    """
+    return {
+        "status": "healthy",
+        "service": "Product Scraper API",
+        "pipeline_running": is_pipeline_running()
+    }
+
+
 @app.get("/")
 async def root():
     active = await get_active_job()
@@ -256,6 +269,7 @@ async def root():
         "active_job": active["job_id"] if active else None,
         "pipeline_running": is_pipeline_running(),
         "endpoints": {
+            "health": "GET /health",
             "deploy_trigger": "POST /deploy-trigger (or GET /deploy-trigger)",
             "stop_pipeline": "POST /scrape/stop (or GET /scrape/stop)",
             "reset_scrapers": "POST /scrape/reset (or GET /scrape/reset, /scrape/reset/{scraper}, /scrape/{scraper}/reset)",
@@ -344,13 +358,12 @@ async def reset_single_scraper_endpoint(
 @app.post("/trigger")
 async def deploy_trigger_endpoint(
     force: bool = Query(False, description="Force run even if already completed today"),
-    wait_seconds: int = Query(300, ge=0, description="Seconds to wait before returning status (default 300s/5min; 0 returns immediately)")
+    wait_seconds: int = Query(0, ge=0, description="Optional seconds to wait before returning status (default 0 returns immediately)")
 ):
     """
     Endpoint called upon deployment or wakeup.
     Automatic background scraping on deployment is disabled to prevent unwanted jobs.
     Scrapers must be triggered explicitly via POST /scrape (or POST /deploy-trigger?force=true).
-    Waits up to wait_seconds (default 300s / 5 min) so calling hooks or cron triggers keep the server alive.
     """
     if not force:
         b_date = get_business_date()
@@ -404,7 +417,7 @@ async def trigger_scrape_job(
     scrapers: str = Query("columbia,adv,tata,tata_lux,amazon", description="Comma-separated list of scrapers to run (columbia, adv, tata, tata_lux, amazon)"),
     limit: int = Query(None, description="Optional product limit for testing"),
     force: bool = Query(False, description="Force start a new job even if an interrupted job exists or if scrapers already completed today"),
-    wait_seconds: int = Query(300, ge=0, description="Seconds to wait before returning status (default 300s/5min to keep server alive during long runs; 0 returns immediately)")
+    wait_seconds: int = Query(0, ge=0, description="Optional seconds to wait before returning status (default 0 returns immediately with 202 and job_id)")
 ):
     """
     Triggers the sequential scraping pipeline in the background.
@@ -412,7 +425,7 @@ async def trigger_scrape_job(
     Executes scrapers in strictly sequential order: Columbia -> Adventuras -> Tata CLiQ -> Tata CLiQ Luxury -> Amazon.
     If force=False and scrapers are already completed today, skips them.
     Automatically resumes interrupted jobs across server restarts unless force=true.
-    Waits up to wait_seconds (default 300s / 5 min) before returning current status so client calls keep the server alive.
+    Immediately returns HTTP 202 Accepted with a unique job_id (or waits if wait_seconds > 0).
     """
     selected = [s.strip() for s in (scrapers or "").split(",") if s.strip()]
     if not selected:
