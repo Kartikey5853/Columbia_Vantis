@@ -36,7 +36,6 @@ from jobs import (
 from runner import (
     scrape_columbia,
     scrape_adv,
-    scrape_myntra,
     scrape_tata,
     run_sequential_pipeline,
     close_shared_browser,
@@ -45,8 +44,6 @@ from runner import (
 from persistence import (
     get_all_canonical_products,
     get_database_storage_stats,
-    run_myntra_diagnostic,
-    get_profile_config,
 )
 
 
@@ -242,8 +239,6 @@ async def root():
             "daily_reports": "GET /scrape/report",
             "columbia_products": "GET /scrape (or GET /scrape/columbia)",
             "adv_products": "GET /scrape/adv",
-            "myntra_products": "GET /scrape/myntra",
-            "myntra_diagnostic": "GET /scrape/myntra/diagnostic",
             "tata_products": "GET /scrape/tata",
             "tata_lux_products": "GET /scrape/tata_lux",
             "amazon_products": "GET /scrape/amazon",
@@ -378,21 +373,21 @@ async def get_scraper_report_endpoint(scraper: str):
 
 @app.post("/scrape", status_code=202)
 async def trigger_scrape_job(
-    scrapers: str = Query("columbia,adv,tata,tata_lux,amazon,myntra", description="Comma-separated list of scrapers to run (columbia, adv, tata, tata_lux, amazon, myntra)"),
+    scrapers: str = Query("columbia,adv,tata,tata_lux,amazon", description="Comma-separated list of scrapers to run (columbia, adv, tata, tata_lux, amazon)"),
     limit: int = Query(None, description="Optional product limit for testing"),
     force: bool = Query(False, description="Force start a new job even if an interrupted job exists or if scrapers already completed today")
 ):
     """
     Triggers the sequential scraping pipeline in the background.
-    Supports selective execution (e.g., scrapers=amazon or scrapers=myntra or scrapers=columbia,adv).
-    Executes scrapers in strictly sequential order: Columbia -> Adventuras -> Tata CLiQ -> Tata CLiQ Luxury -> Amazon -> Myntra.
+    Supports selective execution (e.g., scrapers=amazon or scrapers=columbia,adv).
+    Executes scrapers in strictly sequential order: Columbia -> Adventuras -> Tata CLiQ -> Tata CLiQ Luxury -> Amazon.
     If force=False and scrapers are already completed today, skips them.
     Automatically resumes interrupted jobs across server restarts unless force=true.
     Immediately returns HTTP 202 Accepted with a unique job_id.
     """
     selected = [s.strip() for s in (scrapers or "").split(",") if s.strip()]
     if not selected:
-        selected = ["columbia", "adv", "tata", "tata_lux", "amazon", "myntra"]
+        selected = ["columbia", "adv", "tata", "tata_lux", "amazon"]
 
     alias_map = {
         "columbiasportswear": "columbia",
@@ -402,10 +397,9 @@ async def trigger_scrape_job(
         "tatacliq_luxury": "tata_lux",
         "lux": "tata_lux",
         "amazon": "amazon",
-        "myntra": "myntra",
     }
     selected = [alias_map.get(s.lower(), s.lower()) for s in selected]
-    canonical_order = ["columbia", "adv", "tata", "tata_lux", "amazon", "myntra"]
+    canonical_order = ["columbia", "adv", "tata", "tata_lux", "amazon"]
     ordered_selected = [s for s in canonical_order if s in selected] or canonical_order
 
     clear_stop_flag()
@@ -583,43 +577,7 @@ async def get_adv_data():
     return _format_product_payload("adv", [])
 
 
-@app.get("/scrape/myntra")
-async def get_myntra_data():
-    """
-    Returns canonical Myntra products from Supabase, or from rolling backup.
-    """
-    try:
-        prods = await get_all_canonical_products("myntra")
-        if prods:
-            return _format_product_payload("myntra", prods)
-    except Exception:
-        pass
 
-    backup_file = Path("data/myntra/myntra_data.json")
-    if backup_file.exists():
-        try:
-            data = json.loads(backup_file.read_text(encoding="utf-8"))
-            return _format_product_payload("myntra", data.get("products", []))
-        except Exception:
-            pass
-
-    return _format_product_payload("myntra", [])
-
-
-@app.get("/scrape/myntra/diagnostic", tags=["Myntra Profile Diagnostics"])
-@app.post("/scrape/myntra/diagnostic", tags=["Myntra Profile Diagnostics"])
-async def myntra_profile_diagnostic_endpoint():
-    """
-    🔬 RUNS MYNTRA PROFILE RESTORATION DIAGNOSTICS:
-    1. Downloads & extracts the restored Chrome profile archive from private Supabase Storage.
-    2. Validates profile layout (user_data_dir, active profile name) and checks for Windows DPAPI encryption vs Linux.
-    3. Launches Playwright with launch_persistent_context under the restored profile.
-    4. Counts session cookies for myntra.com (without revealing secrets).
-    5. Navigates to https://www.myntra.com/columbia and detects if normal catalog loaded vs maintenance/access-denied.
-    6. Returns an actionable JSON report diagnosing whether cookies transferred or if a Linux profile is needed.
-    """
-    report = await run_myntra_diagnostic()
-    return JSONResponse(status_code=200, content=report)
 
 
 @app.get("/scrape/tata")
@@ -751,8 +709,6 @@ async def get_scraper_variants(scraper: str):
         prod_resp = await get_columbia_data()
     elif norm_name == "adv":
         prod_resp = await get_adv_data()
-    elif norm_name == "myntra":
-        prod_resp = await get_myntra_data()
     elif norm_name == "tata":
         prod_resp = await get_tata_data()
     elif norm_name == "tata_lux":

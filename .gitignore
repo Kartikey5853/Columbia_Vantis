@@ -9,3 +9,5 @@ test-results/
 akamai_cookies.json
 *cookies*.json
 *.cookies.json
+scratch
+experiments 

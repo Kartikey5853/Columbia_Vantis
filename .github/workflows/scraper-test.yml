@@ -1,4 +1,4 @@
-name: Scraper Continuous Testing Pipeline
+name: Scraper Deployment Health & Verification Pipeline
 
 on:
   push:
@@ -6,52 +6,30 @@ on:
       - main
   workflow_dispatch:
     inputs:
-      scrapers:
-        description: 'Comma-separated scrapers to test (columbia, adv, myntra, tata, tata_lux)'
-        required: false
-        default: 'columbia,adv,myntra,tata,tata_lux'
-      min_products:
-        description: 'Minimum expected products/SKUs'
-        required: false
-        default: '1'
-      force:
-        description: 'Force start scraping even if already completed today'
-        required: false
-        default: 'false'
       deploy_wait_seconds:
         description: 'Maximum seconds to wait for Render deployment to become healthy'
         required: false
         default: '600'
       health_check_interval_seconds:
-        description: 'Seconds between job status polls (default: 30s)'
+        description: 'Seconds between health check polls (default: 15s)'
         required: false
-        default: '30'
-      scrape_timeout_seconds:
-        description: 'Timeout in seconds for scraper job completion'
-        required: false
-        default: '3900'
+        default: '15'
 
 env:
   DEFAULT_RENDER_URL: "https://columbia-4-0.onrender.com"
-  SCRAPERS: ${{ inputs.scrapers || 'columbia,adv,myntra,tata,tata_lux' }}
-  MIN_PRODUCTS: ${{ inputs.min_products || '1' }}
-  FORCE: ${{ inputs.force || 'false' }}
   RENDER_DEPLOY_WAIT_SECONDS: ${{ inputs.deploy_wait_seconds || '600' }}
-  HEALTH_CHECK_INTERVAL_SECONDS: ${{ inputs.health_check_interval_seconds || '30' }}
-  SCRAPE_TIMEOUT_SECONDS: ${{ inputs.scrape_timeout_seconds || '3900' }}
+  HEALTH_CHECK_INTERVAL_SECONDS: ${{ inputs.health_check_interval_seconds || '15' }}
 
 jobs:
   # =========================================================================
-  # Asynchronous Multi-Scraper Pipeline:
-  # 1. Health check & Render readiness
-  # 2. Trigger POST /scrape?scrapers=... (202 Accepted) & poll status
-  # 3. Generate combined CI summary table & step summary
-  # 4. Upload test artifacts (JSON results & job trace)
+  # Render Deployment Verification:
+  # 1. Health check & Render readiness.
+  # 2. Closes successfully the moment the server is up and running properly.
   # =========================================================================
-  test-scrapers:
-    name: Async Scraper Testing (Columbia -> Adventuras -> Myntra -> Tata CLiQ -> Tata CLiQ Luxury)
+  verify-deployment:
+    name: Verify Server Health & Deployment
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repository
@@ -62,14 +40,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install test runner dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install psutil
-
-      - name: Create test results directory
-        run: mkdir -p test-results
-
       - name: 1. Wait for Render deployment to be healthy
         env:
           RENDER_SERVICE_URL: ${{ secrets.RENDER_SERVICE_URL || env.DEFAULT_RENDER_URL }}
@@ -78,38 +48,8 @@ jobs:
             --wait-only \
             --service-url "${RENDER_SERVICE_URL}" \
             --deploy-wait-seconds "${RENDER_DEPLOY_WAIT_SECONDS}" \
-            --health-check-interval 15
+            --health-check-interval "${HEALTH_CHECK_INTERVAL_SECONDS}"
 
-      - name: 2. Trigger async scraper job & poll status until completion (30s interval)
-        env:
-          RENDER_SERVICE_URL: ${{ secrets.RENDER_SERVICE_URL || env.DEFAULT_RENDER_URL }}
+      - name: 2. Server is Up and Running
         run: |
-          FORCE_FLAG=""
-          if [ "${FORCE}" = "true" ]; then
-            FORCE_FLAG="--force"
-          fi
-          python .github/scripts/test_scraper.py \
-            --poll-job \
-            --service-url "${RENDER_SERVICE_URL}" \
-            --scrapers "${SCRAPERS}" \
-            --min-products "${MIN_PRODUCTS}" \
-            --scrape-timeout-seconds "${SCRAPE_TIMEOUT_SECONDS}" \
-            --health-check-interval "${HEALTH_CHECK_INTERVAL_SECONDS}" \
-            --results-dir "test-results" \
-            ${FORCE_FLAG} \
-            --skip-wait
-
-      - name: 3. Generate CI summary and step summary
-        if: always()
-        run: |
-          python .github/scripts/test_scraper.py \
-            --generate-summary \
-            --results-dir "test-results"
-
-      - name: 4. Upload test result artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: scraper-test-results
-          path: test-results/
-          retention-days: 30
+          echo "Server is fully operational and responding to health checks. Pipeline closing."

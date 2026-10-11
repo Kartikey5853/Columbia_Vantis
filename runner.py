@@ -59,96 +59,13 @@ from persistence.product_store import (
     batch_record_prices_if_changed,
 )
 from persistence.exporter import export_canonical_backup
-from persistence.profile_manager import (
-    ProfileSession,
-    package_and_upload_profile,
-    run_myntra_diagnostic,
-    get_profile_config,
-)
+from persistence.exporter import export_canonical_backup
 
 SCRAPER_DIR = Path("scraper")
 
 TOKEN = os.getenv("SHOPIFY_TOKEN")
 if TOKEN:
     TOKEN = TOKEN.strip().strip('"\'')
-
-DEFAULT_MYNTRA_TOKEN = os.getenv("MYNTRA_SESSION_TOKEN")
-
-
-def load_akamai_cookies() -> List[Dict[str, Any]]:
-    """
-    Safely loads and sanitizes Akamai session cookies from:
-    1. AKAMAI_COOKIES environment variable (e.g. on Render)
-    2. akamai_cookies.json in working directory (local development)
-    3. www.myntra.com_cookies.json in working directory (local fallback)
-
-    Returns Playwright-compatible cookie dictionaries without exposing values.
-    """
-    raw_data = None
-
-    env_cookies = os.getenv("AKAMAI_COOKIES")
-    if env_cookies and env_cookies.strip():
-        try:
-            raw_data = json.loads(env_cookies.strip())
-        except Exception as e:
-            print(f"[COOKIES] Warning: Failed to parse AKAMAI_COOKIES environment variable: {e}", flush=True)
-
-    if not raw_data:
-        for fname in ("akamai_cookies.json", "www.myntra.com_cookies.json"):
-            c_path = Path(fname)
-            if c_path.exists():
-                try:
-                    raw_data = json.loads(c_path.read_text(encoding="utf-8"))
-                    break
-                except Exception as e:
-                    print(f"[COOKIES] Warning: Failed to read {fname}: {e}", flush=True)
-
-    if not raw_data or not isinstance(raw_data, list):
-        return []
-
-    sanitized: List[Dict[str, Any]] = []
-    for c in raw_data:
-        if not isinstance(c, dict):
-            continue
-        c_name = str(c.get("name") or "").strip()
-        c_val = str(c.get("value") or "").strip()
-        if not c_name:
-            continue
-
-        cookie: Dict[str, Any] = {
-            "name": c_name,
-            "value": c_val,
-            "path": str(c.get("path") or "/"),
-        }
-
-        domain = str(c.get("domain") or "").strip()
-        if domain:
-            cookie["domain"] = domain
-        elif "url" in c and c["url"]:
-            cookie["url"] = str(c["url"])
-        else:
-            cookie["domain"] = ".myntra.com"
-
-        exp = c.get("expires") if c.get("expires") is not None else c.get("expirationDate")
-        if exp is not None:
-            try:
-                cookie["expires"] = float(exp)
-            except (ValueError, TypeError):
-                pass
-
-        if "httpOnly" in c:
-            cookie["httpOnly"] = bool(c["httpOnly"])
-        if "secure" in c:
-            cookie["secure"] = bool(c["secure"])
-
-        same_site = str(c.get("sameSite") or "").lower()
-        if same_site in ("strict", "lax", "none"):
-            cookie["sameSite"] = same_site.capitalize()
-
-        sanitized.append(cookie)
-
-    return sanitized
-
 
 
 def log_console(msg):
@@ -1270,467 +1187,7 @@ async def scrape_adv(
     }
 
 
-# =========================================================================
-# Myntra Scraper (Browser JS + Supabase Persistence)
-# =========================================================================
 
-def group_myntra_products(raw_items: List[Dict[str, Any]]) -> List[NormalizedProduct]:
-    """
-    Groups raw variant items from myntra_scraper.js into canonical NormalizedProduct objects.
-    Each product has one canonical row per source_product_id with its variants JSON array.
-    """
-    grouped: Dict[str, Dict[str, Any]] = {}
-
-    for item in raw_items:
-        pid = str(item.get("product_id") or "").strip()
-        if not pid:
-            continue
-
-        if pid not in grouped:
-            grouped[pid] = {
-                "source_product_id": pid,
-                "title": item.get("title") or "",
-                "sku": item.get("sku") or None,
-                "ean": item.get("ean") or None,
-                "price": float(item.get("price") or 0.0),
-                "mrp": float(item.get("mrp") or 0.0) if item.get("mrp") else None,
-                "image_url": item.get("image_url") or "",
-                "url": item.get("url") or "",
-                "variants": [],
-            }
-
-        var = NormalizedVariant(
-            size=str(item.get("size") or ""),
-            sku=str(item.get("variant_id") or "") or None,
-            available=True,
-            stock=0,
-            url=item.get("url") or "",
-        )
-        grouped[pid]["variants"].append(var)
-        p_val = float(item.get("price") or 0.0)
-        if p_val > 0 and (grouped[pid]["price"] == 0 or p_val < grouped[pid]["price"]):
-            grouped[pid]["price"] = p_val
-        m_val = float(item.get("mrp") or 0.0) if item.get("mrp") else None
-        if m_val and (grouped[pid]["mrp"] is None or m_val > grouped[pid]["mrp"]):
-            grouped[pid]["mrp"] = m_val
-
-    result = []
-    scraped_iso = datetime.now(timezone.utc).isoformat()
-    for pid, g in grouped.items():
-        result.append(
-            NormalizedProduct(
-                source="myntra",
-                source_product_id=pid,
-                title=g["title"],
-                sku=g["sku"],
-                ean=g["ean"],
-                price=g["price"],
-                mrp=g["mrp"],
-                available=True,
-                image_url=g["image_url"],
-                url=g["url"],
-                variants=g["variants"],
-                scraped_at=scraped_iso,
-            )
-        )
-    return result
-
-
-async def scrape_myntra(
-    limit: Optional[int] = None,
-    progress_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
-    client=None
-) -> Dict[str, Any]:
-    """
-    Executes the Myntra Columbia scraper by opening https://www.myntra.com/columbia
-    in a lean Chromium tab with anti-bot evasion, injecting scraper/myntra_scraper.js,
-    checkpointing page-by-page into Supabase, and updating local rolling backups.
-    """
-    run_id = run["id"]
-    _CURRENT_SCRAPER_RUN_ID = run_id
-    _CURRENT_SCRAPER_NAME = "myntra"
-    print(f"[RUN] Myntra Scrape Run ID: {run_id} (Date: {run['business_date']}, Status: {run['status']})")
-
-    completed_pages = await get_completed_listing_pages(run_id, client=cli)
-    start_page = (max(completed_pages) + 1) if completed_pages else 1
-    if completed_pages:
-        print(f"[MYNTRA CHECKPOINT] Resuming from checkpoint: Pages {sorted(completed_pages)} already persisted. Starting at page {start_page}.", flush=True)
-
-    if len(completed_pages) >= 49:
-        print(f"[MYNTRA CHECKPOINT] All 49 pages already completed today for run {run_id}. Skipping browser.", flush=True)
-        export_path = await export_canonical_backup("myntra", client=cli)
-        return {
-            "status": "completed",
-            "run_id": run_id,
-            "completed_products": run.get("completed_products") or 1704,
-            "total_variants": 0,
-            "duration_seconds": 0.5
-        }
-
-    total_persisted_products = run.get("completed_products") or 0
-    total_variants_persisted = 0
-    total_prices_added = 0
-    limit_val = int(limit) if limit else 0
-    scraper_path = SCRAPER_DIR / "myntra_scraper.js"
-    scraper_code = scraper_path.read_text(encoding="utf-8")
-    timeout_ms = int(os.getenv("MYNTRA_SCRAPE_TIMEOUT_SECONDS", "1800")) * 1000
-
-    await update_run_stage(run_id, "products", client=cli)
-
-    async def drain_myntra_chunk(chunk: List[Dict[str, Any]]):
-        nonlocal total_persisted_products, total_variants_persisted, total_prices_added
-        if not chunk:
-            return
-
-        for item in chunk:
-            p_num = item.get("page", 0)
-            raw_items = item.get("products", [])
-            if not raw_items:
-                await record_listing_page_completed(run_id, p_num, 0, client=cli)
-                completed_pages.add(p_num)
-                continue
-
-            norm_chunk = group_myntra_products(raw_items)
-            if norm_chunk:
-                db_prods = await upsert_canonical_products_batch(norm_chunk, client=cli, batch_size=200)
-                id_by_src = {p["source_product_id"]: p["id"] for p in db_prods if "source_product_id" in p and "id" in p}
-                price_entries = []
-                progress_items = []
-                for prod in norm_chunk:
-                    pid = id_by_src.get(prod.source_product_id)
-                    if pid:
-                        price_entries.append({"product_id": pid, "price": prod.price, "mrp": prod.mrp})
-                        progress_items.append({"product_id": pid, "source_product_id": prod.source_product_id, "variant_count": len(prod.variants)})
-                        total_variants_persisted += len(prod.variants)
-
-                if price_entries:
-                    p_cnt = await batch_record_prices_if_changed(price_entries, scrape_run_id=run_id, client=cli, batch_size=200)
-                    total_prices_added += p_cnt
-                if progress_items:
-                    await batch_record_product_progress(run_id, progress_items, status="completed", client=cli, batch_size=200)
-
-                total_persisted_products += len(norm_chunk)
-
-            await record_listing_page_completed(run_id, p_num, len(raw_items), client=cli)
-            completed_pages.add(p_num)
-            print(f"[MYNTRA CHECKPOINT] Saved page {p_num} checkpoint ({len(raw_items)} items, total persisted: {total_persisted_products}).", flush=True)
-
-        if chunk:
-            await export_canonical_backup("myntra", client=cli)
-            await update_run_counts(run_id, completed_delta=len(chunk), client=cli)
-
-    try:
-        async with _SCRAPER_LOCK:
-            # Ensure previous shared browser (e.g. from Columbia or Adventuras) is closed
-            # so Myntra launches exclusively under low RAM
-            await close_shared_browser()
-
-            profile_info = None
-            persistent_context = None
-            playwright_inst = None
-            diag_title = "unknown"
-            diag_url = "unknown"
-            diag_cookies = 0
-            diag_error = None
-            diag_details = {}
-
-            # Execute within managed ProfileSession (download, validate, lock)
-            async with ProfileSession(run_id=run_id, client=cli) as p_info:
-                profile_info = p_info
-                user_data_dir = profile_info["user_data_dir"]
-                profile_name = profile_info.get("profile_name") or "Default"
-
-                # Determine headless mode: default to False on Render (under Xvfb) for Akamai anti-bot evasion
-                if os.getenv("PLAYWRIGHT_HEADLESS") is not None:
-                    headless_mode = os.getenv("PLAYWRIGHT_HEADLESS", "false").lower() == "true"
-                else:
-                    headless_mode = False
-
-                print(
-                    f"[MYNTRA] 🚀 Launching Playwright persistent context (headless={headless_mode}, profile={profile_name}, user_data_dir={user_data_dir})...",
-                    flush=True
-                )
-
-                args = list(LOW_MEMORY_CHROMIUM_ARGS)
-                if profile_name:
-                    args.append(f"--profile-directory={profile_name}")
-
-                playwright_inst = await async_playwright().start()
-                try:
-                    persistent_context = await playwright_inst.chromium.launch_persistent_context(
-                        user_data_dir=str(user_data_dir),
-                        headless=headless_mode,
-                        ignore_default_args=["--enable-automation"],
-                        args=args,
-                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-                        viewport={"width": 1280, "height": 800},
-                        locale="en-IN",
-                        timezone_id="Asia/Kolkata",
-                        extra_http_headers={
-                            "Accept-Language": "en-IN,en-US;q=0.9,en;q=0.8",
-                        }
-                    )
-                    _ACTIVE_PERSISTENT_CONTEXT = persistent_context
-
-                    # Inspect restored cookies without revealing secret values
-                    try:
-                        restored_cookies = await persistent_context.cookies(["https://www.myntra.com"])
-                        print(f"[COOKIES] Restored persistent profile has {len(restored_cookies)} cookies for .myntra.com", flush=True)
-                    except Exception as e:
-                        print(f"[COOKIES] Notice: Could not read cookies from persistent context: {e}", flush=True)
-
-                    # Ingest portable Akamai / Myntra session cookies from Supabase Storage or env
-                    from persistence.profile_manager import fetch_storage_cookies
-                    akamai_env_cookies = await fetch_storage_cookies(client=cli)
-                    if not akamai_env_cookies:
-                        akamai_env_cookies = load_akamai_cookies()
-
-                    if akamai_env_cookies:
-                        try:
-                            await persistent_context.add_cookies(akamai_env_cookies)
-                            print(f"[COOKIES] Injected {len(akamai_env_cookies)} supplemental Akamai cookies into session", flush=True)
-                        except Exception as e:
-                            print(f"[COOKIES] Warning: Failed to inject supplemental cookies: {e}", flush=True)
-                    elif DEFAULT_MYNTRA_TOKEN:
-                        try:
-                            await persistent_context.add_cookies([{
-                                "name": "at",
-                                "value": DEFAULT_MYNTRA_TOKEN,
-                                "domain": ".myntra.com",
-                                "path": "/"
-                            }])
-                        except Exception:
-                            pass
-
-                    page = persistent_context.pages[0] if persistent_context.pages else await persistent_context.new_page()
-                    _ACTIVE_PAGE = page
-
-                    await page.add_init_script("""
-                        Object.defineProperty(navigator, 'webdriver', { get: () => false });
-                    """)
-
-                    page.on("console", log_console)
-                    page.on("pageerror", lambda exc: print(f"[PAGE ERROR] {exc}", flush=True))
-
-                    async def block_unnecessary_resources(route):
-                        req = route.request
-                        res_type = req.resource_type
-                        url_lower = req.url.lower()
-
-                        if res_type in ("image", "media", "font"):
-                            try:
-                                await route.abort()
-                            except Exception:
-                                pass
-                            return
-
-                        tracker_keywords = (
-                            "google-analytics", "googletagmanager", "facebook", "doubleclick",
-                            "clarity.ms", "criteo", "hotjar", "omtrdc", "demdex", "tiqcdn",
-                            "branch.io", "scorecardresearch", "adroll", "datadog", "newrelic",
-                            "sentry", "shopifyanalytics"
-                        )
-                        if any(kw in url_lower for kw in tracker_keywords):
-                            try:
-                                await route.abort()
-                            except Exception:
-                                pass
-                            return
-
-                        try:
-                            await route.continue_()
-                        except Exception:
-                            pass
-
-                    await page.route("**/*", block_unnecessary_resources)
-
-                    print("Navigating persistent tab to https://www.myntra.com/columbia...", flush=True)
-                    for attempt in range(1, 4):
-                        try:
-                            await page.goto("https://www.myntra.com/columbia", wait_until="domcontentloaded", timeout=timeout_ms)
-                            break
-                        except Exception as e:
-                            if attempt == 3:
-                                raise
-                            print(f"[MYNTRA] Navigation retry {attempt}/3 due to: {e}", flush=True)
-                            await asyncio.sleep(2)
-
-                    # Immediate anti-bot / challenge inspection
-                    try:
-                        nav_title = await page.title()
-                        if any(term in nav_title.lower() for term in ("access denied", "maintenance", "blocked")):
-                            print(f"[MYNTRA DIAGNOSTICS] ⚠️ Immediate challenge / maintenance response detected: '{nav_title}'", flush=True)
-                    except Exception:
-                        pass
-
-                    print(f"Injecting Myntra JS scraper (startPage={start_page}, limit={limit_val})...", flush=True)
-                    await page.evaluate(
-                        """([code, limit, startPage]) => {
-                            window.__IS_PLAYWRIGHT__ = true;
-                            window.__START_PAGE__ = startPage;
-                            if (limit > 0) window.__PRODUCT_LIMIT__ = limit;
-                            window.eval(code);
-                        }""",
-                        [scraper_code, limit_val, start_page]
-                    )
-
-                    print("Myntra scraper is running. Waiting for completion while draining page checkpoints...", flush=True)
-                    await _wait_and_poll_progress(
-                        page,
-                        done_flag="__SCRAPER_DONE__",
-                        progress_flag="__SCRAPER_PROGRESS__",
-                        timeout_ms=timeout_ms,
-                        poll_interval=1.5,
-                        callback=progress_callback,
-                        on_drain=drain_myntra_chunk
-                    )
-
-                    # Drain any remaining unsaved products
-                    final_unsaved = await page.evaluate("() => typeof window.drainUnsavedProducts === 'function' ? window.drainUnsavedProducts() : []")
-                    if final_unsaved:
-                        await drain_myntra_chunk(final_unsaved)
-
-                    # Capture rich session diagnostics
-                    try:
-                        diag_title = await page.title()
-                    except Exception:
-                        diag_title = "unknown"
-                    try:
-                        diag_url = page.url
-                    except Exception:
-                        diag_url = "unknown"
-                    try:
-                        diag_cookies = len(await persistent_context.cookies())
-                    except Exception:
-                        diag_cookies = 0
-                    try:
-                        diag_error = await page.evaluate("() => window.__SCRAPER_ERROR__ || null")
-                    except Exception:
-                        diag_error = None
-                    try:
-                        diag_details = await page.evaluate("() => window.__MYNTRA_DIAGNOSTICS__ || {}")
-                    except Exception:
-                        diag_details = {}
-
-                finally:
-                    # Cleanly close persistent browser BEFORE packaging or cleanup
-                    _ACTIVE_PAGE = None
-                    if persistent_context:
-                        try:
-                            await persistent_context.close()
-                        except Exception:
-                            pass
-                        persistent_context = None
-                        _ACTIVE_PERSISTENT_CONTEXT = None
-
-                    if playwright_inst:
-                        try:
-                            await playwright_inst.stop()
-                        except Exception:
-                            pass
-                        playwright_inst = None
-
-                    import gc
-                    gc.collect()
-                    await asyncio.sleep(1.0)
-                    print("[BROWSER] Myntra persistent browser closed cleanly. Memory reclaimed.", flush=True)
-
-                # Persist profile ONLY if scrape was successful and not stopped
-                if total_persisted_products > 0 and not is_stop_requested():
-                    print(
-                        f"[PROFILE] Scrape succeeded ({total_persisted_products} products). "
-                        "Packaging and safely persisting updated profile to Supabase Storage...",
-                        flush=True
-                    )
-                    try:
-                        await package_and_upload_profile(profile_info, client=cli)
-                    except Exception as e:
-                        print(f"[PROFILE] Warning: Could not upload updated profile: {e}", flush=True)
-                else:
-                    print(
-                        f"[PROFILE] Scrape finished with {total_persisted_products} products (status: failed/interrupted). "
-                        "Preserving last known-good archive in Supabase Storage. Skipping upload.",
-                        flush=True
-                    )
-
-        dur = round(time.perf_counter() - t_start, 1)
-        await update_run_stage(run_id, "finalizing", client=cli)
-        export_path = await export_canonical_backup("myntra", client=cli)
-
-        err_msg = None
-        if total_persisted_products == 0:
-            http_st = diag_details.get("http_status", "unknown")
-            body_prev = str(diag_details.get("body_preview") or "").strip().replace("\n", " ")[:120]
-            err_msg = f"0 products collected. Error: {diag_error or 'Akamai/bot challenge page returned instead of JSON'}. (HTTP {http_st}, Title: '{diag_title}', Cookies: {diag_cookies}, Preview: '{body_prev}')"
-            print(f"\n[MYNTRA DIAGNOSTICS] ⚠️ {err_msg}\n", flush=True)
-
-        myntra_status = "failed" if total_persisted_products == 0 else "completed"
-
-        report = {
-            "scraper": "myntra",
-            "business_date": run["business_date"],
-            "status": myntra_status,
-            "stage": "completed",
-            "total_products": total_persisted_products,
-            "completed_products": total_persisted_products,
-            "failed_products": 0 if total_persisted_products > 0 else 1,
-            "total_variants": total_variants_persisted,
-            "prices_recorded": total_prices_added,
-            "completed_pages": sorted(list(completed_pages)),
-            "checkpoints": {
-                "listing_pages_completed": len(completed_pages),
-            },
-            "duration_seconds": dur,
-            "error": err_msg,
-            "diagnostics": {
-                "page_title": diag_title,
-                "current_url": diag_url,
-                "cookies_injected": diag_cookies,
-                "js_error": diag_error,
-                "api_details": diag_details,
-            }
-        }
-        await complete_run(run_id, report=report, client=cli)
-
-        print("\n" + "=" * 60)
-        print(f"MYNTRA SCRAPING FINISHED: {total_persisted_products} products persisted (Status: {myntra_status})")
-        if err_msg:
-            print(f"Diagnostics: {err_msg}")
-        print(f"Total Variants Persisted: {total_variants_persisted}")
-        print(f"Price Records Added: {total_prices_added}")
-        print(f"Local Rolling Backup: {export_path.resolve()}")
-        print(f"Database Report Saved to scrape_runs (ID: {run_id})")
-        print("=" * 60 + "\n", flush=True)
-
-        return {
-            "status": myntra_status,
-            "run_id": run_id,
-            "completed_products": total_persisted_products,
-            "total_variants": total_variants_persisted,
-            "error": err_msg,
-            "diagnostics": report["diagnostics"],
-            "report": report
-        }
-
-    except Exception as e:
-        dur = round(time.perf_counter() - t_start, 1)
-        fail_report = {
-            "scraper": "myntra",
-            "business_date": run["business_date"],
-            "status": "failed",
-            "stage": "products",
-            "total_products": total_persisted_products,
-            "completed_products": total_persisted_products,
-            "total_variants": total_variants_persisted,
-            "completed_pages": sorted(list(completed_pages)),
-            "duration_seconds": dur,
-            "error": str(e)
-        }
-        await fail_run(run_id, error=str(e), report=fail_report, client=cli)
-        raise
-    finally:
-        _CURRENT_SCRAPER_RUN_ID = None
-        _CURRENT_SCRAPER_NAME = None
 
 
 # =========================================================================
@@ -2803,14 +2260,14 @@ async def scrape_amazon(
     t_start = time.perf_counter()
 
     print("\n" + "=" * 60)
-    print("STARTING AMAZON SCRAPER (SINGLE BROWSER, ULTRA-LOW RAM)")
+    print("[amazon](init) STARTING AMAZON SCRAPER (SINGLE BROWSER, ULTRA-LOW RAM)")
     print("=" * 60, flush=True)
 
     run = await get_or_create_daily_run("amazon", client=cli)
     run_id = run["id"]
     _CURRENT_SCRAPER_RUN_ID = run_id
     _CURRENT_SCRAPER_NAME = "amazon"
-    print(f"[RUN] Amazon Scrape Run ID: {run_id} (Date: {run['business_date']}, Status: {run['status']})")
+    print(f"[amazon](init) Amazon Scrape Run ID: {run_id} (Date: {run['business_date']}, Status: {run['status']})")
 
     total_products_persisted = 0
     total_variants_persisted = 0
@@ -2829,7 +2286,7 @@ async def scrape_amazon(
         if not to_persist:
             return
 
-        print(f"[PERSISTENCE] Streaming {len(to_persist)} Amazon products to Supabase...", flush=True)
+        print(f"[amazon](storing in database) Streaming {len(to_persist)} Amazon products to Supabase...", flush=True)
         db_products = await upsert_canonical_products_batch(to_persist, client=cli, batch_size=100)
         id_by_src = {p["source_product_id"]: p["id"] for p in db_products if "source_product_id" in p and "id" in p}
 
@@ -2865,7 +2322,7 @@ async def scrape_amazon(
         total_variants_persisted += chunk_variants
 
         await update_run_counts(run_id, completed_delta=chunk_persisted, failed_delta=0, client=cli)
-        print(f"[PERSISTENCE] Persisted {chunk_persisted} products ({total_products_persisted} total so far).", flush=True)
+        print(f"[amazon](storing in database) Persisted {chunk_persisted} products ({total_products_persisted} total so far).", flush=True)
 
     try:
         from amazon_scraper.amazon_scraper import run_amazon_scraper
@@ -2908,12 +2365,15 @@ async def scrape_amazon(
         }
         await complete_run(run_id, report=report, client=cli)
 
+        dur_min = int(dur // 60)
+        dur_sec = dur % 60
         print("\n" + "=" * 60)
-        print(f"AMAZON SCRAPING FINISHED: {total_products_persisted} products persisted")
-        print(f"Total Variants Persisted: {total_variants_persisted}")
-        print(f"Price Records Added: {total_prices_added}")
-        print(f"Local Rolling Backup: {export_path.resolve()}")
-        print(f"Database Report Saved to scrape_runs (ID: {run_id})")
+        print(f"[amazon](summary) AMAZON SCRAPING FINISHED: {total_products_persisted} products persisted")
+        print(f"[amazon](summary) Total Variants Persisted: {total_variants_persisted}")
+        print(f"[amazon](summary) Price Records Added: {total_prices_added}")
+        print(f"[amazon](summary) Duration: {dur_min} min {dur_sec:.1f} sec ({dur:.1f}s)")
+        print(f"[amazon](storing in database) Local Rolling Backup: {export_path.resolve()}")
+        print(f"[amazon](storing in database) Database Report Saved to scrape_runs (ID: {run_id})")
         print("=" * 60, flush=True)
 
         return {
@@ -2952,7 +2412,7 @@ async def scrape_amazon(
 # Sequential Pipeline Coordinator (Columbia -> Adventuras -> Tata CLiQ -> Tata CLiQ Luxury -> Amazon -> Myntra)
 # =========================================================================
 
-ORDERED_SCRAPERS = ["columbia", "adv", "tata", "tata_lux", "amazon", "myntra"]
+ORDERED_SCRAPERS = ["columbia", "adv", "tata", "tata_lux", "amazon"]
 
 SCRAPER_KEY_MAP = {
     "columbia": "columbia",
@@ -2961,7 +2421,6 @@ SCRAPER_KEY_MAP = {
     "tata_lux": "tata_lux",
     "lux": "tata_lux",
     "amazon": "amazon",
-    "myntra": "myntra",
 }
 
 SCRAPER_FUNCS = {
@@ -2970,14 +2429,13 @@ SCRAPER_FUNCS = {
     "tata": scrape_tata,
     "tata_lux": scrape_tata_lux,
     "amazon": scrape_amazon,
-    "myntra": scrape_myntra,
 }
 
 
 def normalize_scraper_names(scrapers: Optional[List[str]]) -> List[str]:
     """
     Normalizes scraper aliases and strictly enforces canonical sequential execution order:
-    columbia -> adv -> tata -> tata_lux -> amazon -> myntra.
+    columbia -> adv -> tata -> tata_lux -> amazon.
     """
     if not scrapers:
         return list(ORDERED_SCRAPERS)
@@ -2987,7 +2445,6 @@ def normalize_scraper_names(scrapers: Optional[List[str]]) -> List[str]:
         "columbiasportswear": "columbia",
         "adv": "adv",
         "adventuras": "adv",
-        "myntra": "myntra",
         "tata": "tata",
         "tatacliq": "tata",
         "tata_lux": "tata_lux",
@@ -3026,7 +2483,7 @@ async def run_sequential_pipeline(
     num_scrapers = len(active_scrapers)
     weight_per_scraper = 100.0 / num_scrapers if num_scrapers > 0 else 100.0
 
-    print(f"\n[PIPELINE {job_id}] 🚀 Starting sequential pipeline with scrapers: {active_scrapers}")
+    print(f"\n[pipeline](init) Starting sequential pipeline (Job: {job_id}) with scrapers: {active_scrapers}")
 
     # Mark initial status
     first_scraper = active_scrapers[0]
@@ -3167,8 +2624,10 @@ async def run_sequential_pipeline(
                     }
                 }
             )
-            icon = "✅" if s_status == "completed" else "⚠️"
-            print(f"[JOB {job_id}] {icon} {s_name.upper()} {s_status.upper()} ({prods} products, {vars_cnt} variants, {dur}s)", flush=True)
+            dur_m = int(dur // 60)
+            dur_s = dur % 60
+            dur_disp = f"{dur_m}m {dur_s:.0f}s" if dur_m > 0 else f"{dur:.1f}s"
+            print(f"[{s_name}](completed) {s_status.upper()} ({prods} products, {vars_cnt} variants in {dur_disp})", flush=True)
 
             # Reclaim browser and memory before next scraper
             try:
@@ -3247,11 +2706,13 @@ async def _print_pipeline_summary(
     from jobs import get_job
     job_snapshot = await get_job(job_id)
     job_scrapers = job_snapshot.get("scrapers", {}) if job_snapshot else {}
+    tot_min = int(t_total // 60)
+    tot_sec = t_total % 60
     print("\n" + "=" * 80)
-    print(f"               PIPELINE EXECUTION SUMMARY (Job: {job_id})")
-    print(f"Total Duration: {t_total:.1f}s | Total Products: {cumulative_products:,} | Total Variants: {cumulative_variants:,}")
+    print(f"[pipeline](summary) PIPELINE EXECUTION SUMMARY (Job: {job_id})")
+    print(f"[pipeline](summary) Total Duration: {tot_min} min {tot_sec:.1f} sec ({t_total:.1f}s) | Total Products: {cumulative_products:,} | Total Variants: {cumulative_variants:,}")
     print("-" * 80)
-    print(f"{'Scraper':<16} {'Status':<12} {'Products':<10} {'Variants':<10} {'Duration':<12} {'Error'}")
+    print(f"{'Scraper':<16} {'Status':<12} {'Products':<10} {'Variants':<10} {'Duration':<14} {'Error'}")
     print("-" * 80)
     for s_name in active_scrapers:
         s_key = SCRAPER_KEY_MAP.get(s_name, s_name)
@@ -3260,9 +2721,17 @@ async def _print_pipeline_summary(
         p_c = f"{s_data.get('product_count', 0):,}"
         v_c = f"{s_data.get('variant_count', 0):,}"
         dur_val = s_data.get("duration_seconds", 0.0)
-        d_s = f"{dur_val:.1f}s" if dur_val else "-"
+        if dur_val:
+            s_min = int(dur_val // 60)
+            s_sec = dur_val % 60
+            if s_min > 0:
+                d_s = f"{s_min}m {s_sec:.0f}s"
+            else:
+                d_s = f"{dur_val:.1f}s"
+        else:
+            d_s = "-"
         err = s_data.get("error") or "-"
-        print(f"{s_name:<16} {st:<12} {p_c:<10} {v_c:<10} {d_s:<12} {err}")
+        print(f"[{s_name}](summary) {s_name:<12} {st:<12} {p_c:<10} {v_c:<10} {d_s:<14} {err}")
     print("=" * 80 + "\n", flush=True)
 
 

@@ -253,12 +253,6 @@ SCRAPER_METADATA = {
         "result_file": "adv-test-result.json",
         "display_name": "Adventuras",
     },
-    "myntra": {
-        "job_key": "myntra",
-        "endpoint": "/scrape/myntra",
-        "result_file": "myntra-test-result.json",
-        "display_name": "Myntra",
-    },
     "tata": {
         "job_key": "tatacliq",
         "endpoint": "/scrape/tata",
@@ -270,6 +264,12 @@ SCRAPER_METADATA = {
         "endpoint": "/scrape/tata_lux",
         "result_file": "tata_lux-test-result.json",
         "display_name": "Tata CLiQ Luxury",
+    },
+    "amazon": {
+        "job_key": "amazon",
+        "endpoint": "/scrape/amazon",
+        "result_file": "amazon-test-result.json",
+        "display_name": "Amazon",
     },
 }
 
@@ -908,7 +908,7 @@ def main():
     parser = argparse.ArgumentParser(description="Test deployed web scrapers on Render")
     parser.add_argument("--service-url", default=os.getenv("RENDER_SERVICE_URL", "https://columbia-4-0.onrender.com"))
     parser.add_argument("--source-name", default=os.getenv("SCRAPER_NAME", "columbia"))
-    parser.add_argument("--scrapers", default=os.getenv("SCRAPERS", "columbia,adv,myntra,tata"), help="Comma-separated scrapers to trigger and test (e.g. columbia,adv)")
+    parser.add_argument("--scrapers", default=os.getenv("SCRAPERS", "columbia,adv,tata,tata_lux,amazon"), help="Comma-separated scrapers to trigger and test (e.g. columbia,adv)")
     parser.add_argument("--endpoint", default=None, help="Endpoint path e.g. /scrape or /scrape/tata (runs legacy test)")
     parser.add_argument("--min-products", type=int, default=int(os.getenv("MIN_PRODUCTS", "1")))
     parser.add_argument("--deploy-wait-seconds", type=int, default=int(os.getenv("RENDER_DEPLOY_WAIT_SECONDS", "600")))

@@ -22,7 +22,7 @@ class TestApiEndpoints(unittest.TestCase):
             "message": "All scrapers already completed for today",
             "date": "2026-10-07"
         }
-        res = self.client.post("/deploy-trigger")
+        res = self.client.post("/deploy-trigger?force=true")
         self.assertEqual(res.status_code, 200)
         data = res.json()
         self.assertEqual(data["status"], "already_completed")
@@ -34,17 +34,17 @@ class TestApiEndpoints(unittest.TestCase):
             "message": "All scrapers already completed for today",
             "date": "2026-10-07"
         }
-        res = self.client.get("/deploy-trigger")
+        res = self.client.get("/deploy-trigger?force=true")
         self.assertEqual(res.status_code, 200)
 
     @patch("api.check_and_trigger_scrapers", new_callable=AsyncMock)
     def test_deploy_trigger_starts_job(self, mock_trigger):
         mock_trigger.return_value = {
             "status": "started",
-            "message": "Scraper job queued: missing ['myntra', 'tata']",
+            "message": "Scraper job queued: missing ['tata']",
             "job_id": "scrape_job_12345"
         }
-        res = self.client.post("/deploy-trigger")
+        res = self.client.post("/deploy-trigger?force=true")
         self.assertEqual(res.status_code, 202)
         data = res.json()
         self.assertEqual(data["status"], "started")
@@ -55,8 +55,8 @@ class TestApiEndpoints(unittest.TestCase):
         mock_get_reports.return_value = {
             "business_date": "2026-10-07",
             "reports": {
-                "myntra": {
-                    "scraper": "myntra",
+                "amazon": {
+                    "scraper": "amazon",
                     "status": "completed",
                     "products_scraped": 50
                 }
@@ -66,7 +66,7 @@ class TestApiEndpoints(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         data = res.json()
         self.assertIn("reports", data)
-        self.assertIn("myntra", data["reports"])
+        self.assertIn("amazon", data["reports"])
 
     @patch("api.get_daily_run_report", new_callable=AsyncMock)
     def test_get_specific_scraper_report(self, mock_get_report):
@@ -123,7 +123,7 @@ class TestApiEndpoints(unittest.TestCase):
     def test_reset_scrapers_post(self, mock_reset):
         mock_reset.return_value = {
             "business_date": "2026-10-07",
-            "reset_scrapers": ["columbia", "adv", "myntra", "tata"],
+            "reset_scrapers": ["columbia", "adv", "amazon", "tata"],
             "details": []
         }
         res = self.client.post("/scrape/reset?scrapers=all")
@@ -137,10 +137,10 @@ class TestApiEndpoints(unittest.TestCase):
     def test_reset_scrapers_get(self, mock_reset):
         mock_reset.return_value = {
             "business_date": "2026-10-07",
-            "reset_scrapers": ["myntra"],
+            "reset_scrapers": ["amazon"],
             "details": []
         }
-        res = self.client.get("/scrape/reset?scrapers=myntra")
+        res = self.client.get("/scrape/reset?scrapers=amazon")
         self.assertEqual(res.status_code, 200)
         data = res.json()
         self.assertEqual(data["status"], "reset_completed")

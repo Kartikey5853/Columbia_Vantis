@@ -235,7 +235,6 @@ SCRAPER_KEY_MAP = {
     "columbiasportswear": "columbia",
     "adv": "adv",
     "adventuras": "adv",
-    "myntra": "myntra",
     "tata": "tatacliq",
     "tatacliq": "tatacliq",
     "tata_lux": "tata_lux",
@@ -267,7 +266,6 @@ async def _reconstruct_job_from_supabase(job_id: str) -> Optional[Dict[str, Any]
         canonical_key_map = {
             "columbia": "columbia",
             "adv": "adv",
-            "myntra": "myntra",
             "tata": "tatacliq",
             "tata_lux": "tata_lux",
             "amazon": "amazon",

@@ -73,8 +73,12 @@ def parse_seller_entry(line: str) -> Optional[SellerTarget]:
         if not seller_id:
             return None
 
-        # Try to infer a nice display name
-        seller_name = seller_id
+        KNOWN_SELLER_NAMES = {
+            "A1WYWER0W24N8S": "Cocoblu",
+            "AUEEW31YCNC4K": "Chogori",
+            "A28E8JCZPT1G5K": "Columbia India",
+        }
+        seller_name = KNOWN_SELLER_NAMES.get(seller_id, seller_id)
         return SellerTarget(seller_id=seller_id, name=seller_name, base_url=cleaned)
 
     # Key:Name or Raw Key
