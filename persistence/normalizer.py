@@ -12,33 +12,33 @@ def normalize_sku_and_style(sku: Optional[str], fallback_title: str = "", fallba
     style = None
 
     if clean_sku:
-        # Check standard hyphenated pattern XXXXX-XXX
-        if "-" in clean_sku:
-            parts = clean_sku.split("-")
-            style = parts[0].strip()
-        elif "_" in clean_sku:
-            parts = clean_sku.split("_")
-            style = parts[0].strip()
-        elif "/" in clean_sku:
-            parts = clean_sku.split("/")
-            style = parts[0].strip()
-        else:
-            # Check alphanumeric Columbia pattern: 2 letters + 4 digits (e.g. WE8479, BL0828, FL6087, AE0861)
-            m = re.match(r"^([A-Z]{2}\d{4})", clean_sku)
-            if m:
-                style = m.group(1)
+        is_marketplace_id = clean_sku.startswith("MP0") or (clean_sku.startswith("B0") and len(clean_sku) == 10)
+        if not is_marketplace_id:
+            # Check standard hyphenated pattern XXXXX-XXX
+            if "-" in clean_sku:
+                parts = clean_sku.split("-")
+                style = parts[0].strip()
+            elif "_" in clean_sku:
+                parts = clean_sku.split("_")
+                style = parts[0].strip()
+            elif "/" in clean_sku:
+                parts = clean_sku.split("/")
+                style = parts[0].strip()
             else:
-                # 7-digit Columbia style code (e.g. 2005101, 1987111)
-                m7 = re.match(r"^(\d{7})", clean_sku)
-                if m7:
-                    style = m7.group(1)
+                # Check alphanumeric Columbia pattern: 2 letters + 4 digits (e.g. WE8479, BL0828, FL6087, AE0861)
+                m = re.match(r"^([A-Z]{2}\d{4})", clean_sku)
+                if m:
+                    style = m.group(1)
                 else:
-                    # 5-digit style pattern
-                    m5 = re.match(r"^(\d{5})", clean_sku)
-                    if m5:
-                        style = m5.group(1)
+                    # 7-digit Columbia style code (e.g. 2005101, 1987111)
+                    m7 = re.match(r"^(\d{7})", clean_sku)
+                    if m7:
+                        style = m7.group(1)
                     else:
-                        style = clean_sku[:7] if len(clean_sku) >= 7 else clean_sku
+                        # 5-digit style pattern
+                        m5 = re.match(r"^(\d{5})", clean_sku)
+                        if m5:
+                            style = m5.group(1)
 
     # If no SKU was provided, extract from title or fallback identifier
     if not style:
@@ -72,6 +72,13 @@ def normalize_size(raw_size: Optional[str]) -> str:
 
     # Check for apparel mappings
     apparel_map = {
+        "XXS": "XXS",
+        "XS": "XS",
+        "S": "S",
+        "M": "M",
+        "L": "L",
+        "XL": "XL",
+        "XXL": "XXL",
         "SMALL": "S",
         "MEDIUM": "M",
         "LARGE": "L",
@@ -100,7 +107,11 @@ def normalize_size(raw_size: Optional[str]) -> str:
         if part in apparel_map:
             return apparel_map[part]
         if re.match(r"^\d+(\.\d+)?$", part):
-            return part
+            try:
+                f_val = float(part)
+                return str(int(f_val)) if f_val.is_integer() else str(f_val)
+            except ValueError:
+                return part
 
     # Clean footwear float formats like 8.0 -> 8
     try:

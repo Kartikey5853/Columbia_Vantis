@@ -43,19 +43,34 @@ class NormalizedProduct:
         return d
 
     def to_db_row(self, scraper_id: str) -> Dict[str, Any]:
-        """Maps normalized product to Supabase schema."""
+        """Maps normalized product to Supabase schema cleanly."""
+        style_val = self.style.strip() if self.style else None
+        sku_val = self.sku.strip() if self.sku else None
+        ean_val = self.ean.strip() if self.ean else style_val
+
+        # Enrich variants with normalized style, sku, size, stock, and offers
+        serialized_variants = []
+        for v in self.variants:
+            v_dict = v.to_dict() if isinstance(v, NormalizedVariant) else dict(v)
+            if not v_dict.get("style") and style_val:
+                v_dict["style"] = style_val
+            if not v_dict.get("sku") and sku_val:
+                v_dict["sku"] = sku_val
+            if self.offers:
+                v_dict["offers"] = self.offers
+            serialized_variants.append(v_dict)
+
         return {
             "scraper_id": scraper_id,
             "source_product_id": str(self.source_product_id).strip(),
-            "style": self.style.strip() if self.style else None,
-            "sku": self.sku.strip() if self.sku else None,
-            "ean": self.ean.strip() if self.ean else None,
+            "sku": sku_val or style_val,
+            "ean": ean_val,
             "title": self.title.strip() if self.title else "",
             "url": self.url.strip() if self.url else None,
             "image_url": self.image_url.strip() if self.image_url else None,
             "available": bool(self.available),
             "current_price": float(self.price) if self.price is not None else None,
             "current_mrp": float(self.mrp) if self.mrp is not None else None,
-            "variants": [v.to_dict() if isinstance(v, NormalizedVariant) else v for v in self.variants],
+            "variants": serialized_variants,
             "updated_at": datetime.now(timezone.utc).isoformat()
         }
