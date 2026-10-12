@@ -318,7 +318,6 @@ async def on_startup():
     """
     global keepalive_task
     print("[STARTUP] Server started. Automatic startup scraping is disabled.", flush=True)
-    asyncio.create_task(asyncio.to_thread(catalog_service.load_catalog))
     if keepalive_task is None or keepalive_task.done():
         keepalive_task = asyncio.create_task(_render_keepalive_loop())
 

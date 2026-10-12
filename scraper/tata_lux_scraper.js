@@ -484,7 +484,7 @@
 
     // If running in listings_only phase, exit cleanly after completing Phase 1
     if (typeof window !== "undefined" && window.__PHASE__ === "listings_only") {
-        console.log(`[TATA LUX LISTINGS] Phase 1 listings complete (${cleanProducts.length} products). Stopping before Phase 2.`);
+        console.log(`[tata_lux](checkpoint) Phase 1 listings complete (${cleanProducts.length} products). Stopping before Phase 2.`);
         updateProgress({ stage: "Listings Complete", current: cleanProducts.length, total: cleanProducts.length });
         window.__LISTINGS_DONE__ = true;
         window.__SCRAPER_DONE__ = true;
@@ -574,7 +574,7 @@
             });
 
             console.log(
-                `[Lux Worker ${workerId}] ${completed}/${cleanProducts.length}` +
+                `[tata_lux](collecting data) [Worker ${workerId}] ${completed}/${cleanProducts.length}` +
                 ` | Product ${product.product_id}` +
                 ` | Variants: ${product.variants.length}` +
                 ` | Offers: ${product.offers.length}` +

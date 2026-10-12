@@ -1466,6 +1466,8 @@ async def scrape_tata(
     run = await get_or_create_daily_run("tata", client=cli)
     run_id = run["id"]
     scraper_id = await get_scraper_id("tata", cli)
+    _CURRENT_SCRAPER_RUN_ID = run_id
+    _CURRENT_SCRAPER_NAME = "tata"
     print(f"[tata](init) Tata Scrape Run ID: {run_id} (Date: {run['business_date']}, Status: {run['status']})", flush=True)
 
     # =========================================================================
@@ -1603,14 +1605,14 @@ async def scrape_tata(
     completed_product_ids = await get_completed_product_ids(run_id, client=cli)
     total_catalog_count = len(completed_product_ids) + len(pending_items)
 
-    print(f"\n[TATA RESUME] Catalog: {total_catalog_count} products. Already completed: {len(completed_product_ids)}. Pending: {len(pending_items)}.")
+    print(f"\n[tata](checkpoint) Catalog: {total_catalog_count} products. Already completed: {len(completed_product_ids)}. Pending: {len(pending_items)}.")
     if completed_product_ids:
-        print(f"[TATA RESUME] Resuming from product {len(completed_product_ids) + 1}/{total_catalog_count} (middle checkpoint)!", flush=True)
+        print(f"[tata](checkpoint) Resuming from product {len(completed_product_ids) + 1}/{total_catalog_count} (middle checkpoint)!", flush=True)
 
     if limit:
         limit_val = int(limit)
         pending_items = pending_items[:limit_val]
-        print(f"[TEST MODE] Limited variant fetching to {len(pending_items)} pending products.")
+        print(f"[tata](init) [TEST MODE] Limited variant fetching to {len(pending_items)} pending products.")
 
     total_variants_persisted = 0
     total_products_persisted = len(completed_product_ids)
@@ -1619,10 +1621,10 @@ async def scrape_tata(
 
     try:
         if not pending_items:
-            print("[TATA] All products already have completed variant checkpoints today! Nothing pending.", flush=True)
+            print("[tata](summary) All products already have completed variant checkpoints today! Nothing pending.", flush=True)
         else:
             concurrency = int(os.getenv("TATA_CONCURRENCY", "3"))
-            print(f"[TATA PHASE 2] Starting variant extraction in Python with CONCURRENCY={concurrency} (Browser: CLOSED, RAM: <25MB)...", flush=True)
+            print(f"[tata](collecting data) [Phase 2] Starting variant extraction in Python with CONCURRENCY={concurrency} (Browser: CLOSED, RAM: <25MB)...", flush=True)
 
             queue: asyncio.Queue = asyncio.Queue()
             for item in pending_items:
@@ -1672,10 +1674,11 @@ async def scrape_tata(
                 # Milestone checkpoint every 200 variants
                 if (total_variants_persisted - last_checkpoint_variants >= 200) or (last_checkpoint_variants == 0 and total_variants_persisted > 0):
                     last_checkpoint_variants = total_variants_persisted
-                    print(f"[TATA CHECKPOINT] Saved 200-variant milestone: {total_variants_persisted} total variants in DB ({total_products_persisted}/{total_catalog_count} products).", flush=True)
+                    print(f"[tata](checkpoint) Saved 200-variant milestone: {total_variants_persisted} total variants in DB ({total_products_persisted}/{total_catalog_count} products).", flush=True)
                 else:
-                    print(f"[TATA BATCH] Persisted batch of {len(chunk)} products ({total_variants_persisted} total variants in DB).", flush=True)
+                    print(f"[tata](storing in database) Persisted batch of {len(chunk)} products ({total_variants_persisted} total variants in DB).", flush=True)
 
+                del chunk
                 gc.collect()
 
             async def worker(worker_id: int):
@@ -1726,7 +1729,7 @@ async def scrape_tata(
                                     break
                             except Exception as ex:
                                 if attempt == 2:
-                                    print(f"[TATA] Worker {worker_id}: Variant fetch error for {src_id}: {ex}", flush=True)
+                                    print(f"[tata](collecting data) Worker {worker_id}: Variant fetch error for {src_id}: {ex}", flush=True)
                                 await asyncio.sleep(0.3)
 
                         should_flush = False
@@ -1818,6 +1821,9 @@ async def scrape_tata(
         }
         await fail_run(run_id, error=str(e), report=fail_report, client=cli)
         raise
+    finally:
+        _CURRENT_SCRAPER_RUN_ID = None
+        _CURRENT_SCRAPER_NAME = None
 
 
 # =========================================================================
@@ -2092,6 +2098,8 @@ async def scrape_tata_lux(
     run = await get_or_create_daily_run("tata_lux", client=cli)
     run_id = run["id"]
     scraper_id = await get_scraper_id("tata_lux", cli)
+    _CURRENT_SCRAPER_RUN_ID = run_id
+    _CURRENT_SCRAPER_NAME = "tata_lux"
     print(f"[tata_lux](init) Tata Luxury Scrape Run ID: {run_id} (Date: {run['business_date']}, Status: {run['status']})", flush=True)
 
     # =========================================================================
@@ -2194,7 +2202,7 @@ async def scrape_tata_lux(
     if not pending_items:
         any_prog = await cli.select("scrape_product_progress", columns="id", filters={"scrape_run_id": f"eq.{run_id}"}, limit=1)
         if not any_prog:
-            print("[TATA LUX CHECKPOINT] Initializing product progress tracking from catalog in database...", flush=True)
+            print("[tata_lux](checkpoint) Initializing product progress tracking from catalog in database...", flush=True)
             all_prods = []
             off = 0
             while True:
@@ -2228,14 +2236,14 @@ async def scrape_tata_lux(
     completed_product_ids = await get_completed_product_ids(run_id, client=cli)
     total_catalog_count = len(completed_product_ids) + len(pending_items)
 
-    print(f"\n[TATA LUX RESUME] Catalog: {total_catalog_count} products. Already completed: {len(completed_product_ids)}. Pending: {len(pending_items)}.")
+    print(f"\n[tata_lux](checkpoint) Catalog: {total_catalog_count} products. Already completed: {len(completed_product_ids)}. Pending: {len(pending_items)}.")
     if completed_product_ids:
-        print(f"[TATA LUX RESUME] Resuming from product {len(completed_product_ids) + 1}/{total_catalog_count} (middle checkpoint)!", flush=True)
+        print(f"[tata_lux](checkpoint) Resuming from product {len(completed_product_ids) + 1}/{total_catalog_count} (middle checkpoint)!", flush=True)
 
     if limit:
         limit_val = int(limit)
         pending_items = pending_items[:limit_val]
-        print(f"[TEST MODE] Limited variant fetching to {len(pending_items)} pending products.")
+        print(f"[tata_lux](init) [TEST MODE] Limited variant fetching to {len(pending_items)} pending products.")
 
     total_variants_persisted = 0
     total_products_persisted = len(completed_product_ids)
@@ -2244,10 +2252,10 @@ async def scrape_tata_lux(
 
     try:
         if not pending_items:
-            print("[TATA LUX] All products already have completed variant checkpoints today! Nothing pending.", flush=True)
+            print("[tata_lux](summary) All products already have completed variant checkpoints today! Nothing pending.", flush=True)
         else:
             concurrency = int(os.getenv("TATA_LUX_CONCURRENCY", "3"))
-            print(f"[TATA LUX PHASE 2] Starting variant extraction in Python with CONCURRENCY={concurrency} (Browser: CLOSED, RAM: <30MB)...", flush=True)
+            print(f"[tata_lux](collecting data) [Phase 2] Starting variant extraction in Python with CONCURRENCY={concurrency} (Browser: CLOSED, RAM: <30MB)...", flush=True)
 
             queue: asyncio.Queue = asyncio.Queue()
             for item in pending_items:
@@ -2307,10 +2315,11 @@ async def scrape_tata_lux(
                 # Milestone checkpoint every 200 variants
                 if (total_variants_persisted - last_checkpoint_variants >= 200) or (last_checkpoint_variants == 0 and total_variants_persisted > 0):
                     last_checkpoint_variants = total_variants_persisted
-                    print(f"[TATA LUX CHECKPOINT] Saved 200-variant milestone: {total_variants_persisted} total variants in DB ({total_products_persisted}/{total_catalog_count} products).", flush=True)
+                    print(f"[tata_lux](checkpoint) Saved 200-variant milestone: {total_variants_persisted} total variants in DB ({total_products_persisted}/{total_catalog_count} products).", flush=True)
                 else:
-                    print(f"[TATA LUX BATCH] Persisted batch of {len(chunk)} products ({total_variants_persisted} total variants in DB).", flush=True)
+                    print(f"[tata_lux](storing in database) Persisted batch of {len(chunk)} products ({total_variants_persisted} total variants in DB).", flush=True)
 
+                del chunk
                 gc.collect()
 
             async def worker(worker_id: int):
@@ -2346,7 +2355,7 @@ async def scrape_tata_lux(
                                     break
                             except Exception as ex:
                                 if attempt == 2:
-                                    print(f"[TATA LUX] Worker {worker_id}: Variant fetch error for {src_id}: {ex}", flush=True)
+                                    print(f"[tata_lux](collecting data) Worker {worker_id}: Variant fetch error for {src_id}: {ex}", flush=True)
                                 await asyncio.sleep(0.4)
 
                         should_flush = False
@@ -2826,7 +2835,7 @@ async def run_sequential_pipeline(
                     }
                 },
             )
-            print(f"[JOB {job_id}] ⏩ {s_name.upper()} already completed today ({prev_p} products, {prev_dur}s). Resuming next...", flush=True)
+            print(f"[pipeline](checkpoint) ⏩ {s_name} already completed today ({prev_p} products, {prev_dur}s). Resuming next...", flush=True)
             continue
 
         await update_job(
@@ -2859,7 +2868,7 @@ async def run_sequential_pipeline(
 
         if is_stop_requested():
             reason = get_stop_reason()
-            print(f"[JOB {job_id}] 🛑 Stopping pipeline before starting {s_name}. Reason: {reason}", flush=True)
+            print(f"[pipeline](collecting data) 🛑 Stopping pipeline before starting {s_name}. Reason: {reason}", flush=True)
             await update_job(
                 job_id,
                 status="failed",

@@ -185,7 +185,6 @@ class CatalogService:
             return
 
         start_time = time.time()
-        print("[CATALOG_SERVICE] [INDEXING] Indexing Columbia product intelligence catalog from real data...", flush=True)
 
         source_configs = [
             ("adv", NEW_DATA_DIR / "adventuras_products_with_offers.json"),
@@ -202,7 +201,6 @@ class CatalogService:
 
         for plat_key, file_path in source_configs:
             if not file_path.exists():
-                print(f"[CATALOG_SERVICE] Notice: Source file not found: {file_path}", flush=True)
                 continue
 
             try:
@@ -516,7 +514,7 @@ class CatalogService:
             except Exception as e:
                 print(f"[CATALOG_SERVICE] [WARN] Failed to load Supabase cache: {e}", flush=True)
 
-        print(f"[CATALOG_SERVICE] [SUCCESS] Indexed {len(self.families)} families from {self.raw_records_count} source records in {self.load_time_seconds:.2f}s", flush=True)
+        # Indexed families quietly into memory if called
 
     def search(self, query: str, limit: int = 50) -> List[Dict[str, Any]]:
         self.load_catalog()

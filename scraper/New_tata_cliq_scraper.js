@@ -535,13 +535,20 @@
     }
 
     const cleanProducts = [];
+    window.__TATA_UNSAVED_LISTINGS__ = window.__TATA_UNSAVED_LISTINGS__ || [];
+    window.drainUnsavedListings = function () {
+        const u = window.__TATA_UNSAVED_LISTINGS__ || [];
+        window.__TATA_UNSAVED_LISTINGS__ = [];
+        return u;
+    };
 
-    function processProducts(products) {
+    function processProducts(products, pageNumber = 0) {
         const scrapedAt =
             new Date().toISOString();
+        const pageItems = [];
 
         for (const product of products) {
-            cleanProducts.push({
+            const item = {
                 source: "tatacliq",
 
                 product_id:
@@ -596,8 +603,18 @@
                     product.inStockFlag === true ? true : false,
 
                 scraped_at: scrapedAt
+            };
+            cleanProducts.push(item);
+            pageItems.push(item);
+        }
+
+        if (typeof window.__TATA_UNSAVED_LISTINGS__ !== "undefined") {
+            window.__TATA_UNSAVED_LISTINGS__.push({
+                page: pageNumber,
+                products: pageItems
             });
         }
+        return pageItems;
     }
 
     console.log("Fetching first page...");
@@ -616,7 +633,8 @@
         );
 
     processProducts(
-        first.searchresult || []
+        first.searchresult || [],
+        0
     );
 
     updateProgress({
@@ -647,7 +665,8 @@
                     await fetchPage(page);
 
                 processProducts(
-                    data.searchresult || []
+                    data.searchresult || [],
+                    page
                 );
 
                 updateProgress({
@@ -678,6 +697,18 @@
         await sleep(
             randomDelay()
         );
+    }
+
+    // If running in listings_only phase, exit cleanly after completing Phase 1
+    if (typeof window !== "undefined" && window.__PHASE__ === "listings_only") {
+        console.log(`[tata](checkpoint) Phase 1 listings complete (${cleanProducts.length} products). Stopping before Phase 2.`);
+        updateProgress({ stage: "Listings Complete", current: cleanProducts.length, total: cleanProducts.length });
+        window.__LISTINGS_DONE__ = true;
+        window.__SCRAPER_DONE__ = true;
+        return {
+            total_products: cleanProducts.length,
+            products: cleanProducts
+        };
     }
 
     let nextIndex = 0;
@@ -753,7 +784,7 @@
             });
 
             console.log(
-                `[Worker ${workerId}] ` +
+                `[tata](collecting data) [Worker ${workerId}] ` +
                 `${completed}/${cleanProducts.length}` +
                 ` | Product ${product.product_id}` +
                 ` | Variants: ${product.variants.length}` +
