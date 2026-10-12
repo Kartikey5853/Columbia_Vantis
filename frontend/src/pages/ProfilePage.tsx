@@ -1,31 +1,35 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   User as UserIcon,
-  Mail,
   Shield,
-  Clock,
-  Bell,
-  Sun,
-  Moon,
+  KeyRound,
+  Camera,
+  CheckCircle2,
+  AlertCircle,
   LogOut,
   Save,
-  CheckCircle2,
-  Camera,
 } from "lucide-react";
 import authService from "../services/authService";
 import { User } from "../types";
 
 export const ProfilePage: React.FC = () => {
   const navigate = useNavigate();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const [user, setUser] = useState<User | null>(null);
-  const [displayName, setDisplayName] = useState("");
   const [avatarUrl, setAvatarUrl] = useState("");
-  const [timezone, setTimezone] = useState("Asia/Kolkata");
-  const [notifications, setNotifications] = useState(true);
-  const [theme, setTheme] = useState("light");
-  const [isLoading, setIsLoading] = useState(false);
+  const [displayName, setDisplayName] = useState("");
+
+  // Password reset state
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [isResettingPassword, setIsResettingPassword] = useState(false);
+
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
 
   useEffect(() => {
     loadUser();
@@ -35,40 +39,80 @@ export const ProfilePage: React.FC = () => {
     try {
       const u = await authService.getCurrentUser();
       setUser(u);
-      setDisplayName(u.display_name || "");
       setAvatarUrl(u.avatar_url || "");
-      setTimezone(u.timezone || "Asia/Kolkata");
-      setNotifications(u.notifications_enabled ?? true);
-      setTheme(u.theme || "light");
+      setDisplayName(u.display_name || u.username);
     } catch {
       const saved = authService.getSavedUser();
       if (saved) {
         setUser(saved);
-        setDisplayName(saved.display_name);
         setAvatarUrl(saved.avatar_url || "");
+        setDisplayName(saved.display_name || saved.username);
       }
     }
   };
 
-  const handleSave = async (e: React.FormEvent) => {
+  const handleAvatarFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploadingAvatar(true);
+    setErrorMessage(null);
+    try {
+      const res = await authService.uploadAvatar(file);
+      setAvatarUrl(res.avatar_url);
+      setSuccessMessage("Avatar image successfully updated.");
+      setTimeout(() => setSuccessMessage(null), 3500);
+      loadUser();
+    } catch (err: any) {
+      setErrorMessage(err.message || "Failed to upload avatar image.");
+    } finally {
+      setIsUploadingAvatar(false);
+    }
+  };
+
+  const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsLoading(true);
+    setErrorMessage(null);
     setSuccessMessage(null);
     try {
       const updated = await authService.updateProfile({
         display_name: displayName,
         avatar_url: avatarUrl,
-        timezone,
-        notifications_enabled: notifications,
-        theme,
       });
       setUser(updated);
-      setSuccessMessage("Profile preferences successfully updated.");
+      setSuccessMessage("Profile preferences successfully saved.");
       setTimeout(() => setSuccessMessage(null), 3500);
     } catch (err: any) {
-      alert("Error saving profile: " + err.message);
+      setErrorMessage(err.message || "Failed to save profile.");
+    }
+  };
+
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    if (!newPassword || newPassword.length < 4) {
+      setErrorMessage("New password must be at least 4 characters.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setErrorMessage("New passwords do not match.");
+      return;
+    }
+
+    setIsResettingPassword(true);
+    try {
+      await authService.resetPassword(newPassword, currentPassword || undefined);
+      setSuccessMessage("Password successfully updated!");
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setTimeout(() => setSuccessMessage(null), 3500);
+    } catch (err: any) {
+      setErrorMessage(err.message || "Failed to reset password.");
     } finally {
-      setIsLoading(false);
+      setIsResettingPassword(false);
     }
   };
 
@@ -78,204 +122,232 @@ export const ProfilePage: React.FC = () => {
   };
 
   return (
-    <div className="max-w-4xl mx-auto px-4 sm:px-8 py-8 space-y-8">
-      {/* Title */}
+    <div className="max-w-3xl mx-auto px-4 sm:px-8 py-8 space-y-8 select-none">
+      {/* Page Title */}
       <div>
         <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
-          Account Profile &amp; Settings
+          User Profile &amp; Security
         </h1>
-        <p className="text-xs sm:text-sm text-slate-500 font-medium mt-0.5">
-          Manage your Columbia intelligence account details and system preferences.
+        <p className="text-xs sm:text-sm text-slate-500 font-semibold mt-1">
+          Manage your account profile picture and update your password.
         </p>
       </div>
 
+      {/* Messages */}
       {successMessage && (
-        <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-bold flex items-center gap-2 animate-in fade-in">
-          <CheckCircle2 className="w-4 h-4" />
+        <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs sm:text-sm font-bold flex items-center gap-2 animate-in fade-in">
+          <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
           <span>{successMessage}</span>
         </div>
       )}
+      {errorMessage && (
+        <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs sm:text-sm font-bold flex items-center gap-2 animate-in fade-in">
+          <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+          <span>{errorMessage}</span>
+        </div>
+      )}
 
-      {/* Main Profile Form */}
+      {/* Profile Card */}
       <div className="bg-white rounded-3xl border border-slate-200/90 shadow-sm overflow-hidden">
-        {/* Banner */}
-        <div className="h-28 bg-gradient-to-r from-sky-400 via-[#079FE0] to-blue-600 relative px-6">
-          <div className="absolute -bottom-8 left-8 flex items-end gap-4">
-            <div className="relative w-20 h-20 rounded-2xl bg-white p-1 ring-4 ring-white shadow-md overflow-hidden">
-              <img
-                src={avatarUrl || user?.avatar_url || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80"}
-                alt="Avatar"
-                className="w-full h-full object-cover rounded-xl"
+        {/* Banner with Avatar Overlay */}
+        <div className="h-28 bg-[#079FE0] relative px-6">
+          <div className="absolute -bottom-10 left-8 flex items-end gap-4">
+            <div className="relative group">
+              <div className="w-20 h-20 rounded-2xl bg-white p-1 ring-4 ring-white shadow-md overflow-hidden flex items-center justify-center">
+                {avatarUrl || user?.avatar_url ? (
+                  <img
+                    src={avatarUrl || user?.avatar_url}
+                    alt={user?.username}
+                    className="w-full h-full object-cover rounded-xl"
+                  />
+                ) : (
+                  <div className="w-full h-full bg-sky-100 text-sky-800 font-black text-xl flex items-center justify-center rounded-xl">
+                    {user?.username?.slice(0, 2).toUpperCase() || "CV"}
+                  </div>
+                )}
+              </div>
+
+              {/* Camera Icon Overlay to Upload/Change Avatar */}
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isUploadingAvatar}
+                className="absolute inset-0 rounded-2xl bg-black/40 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                title="Change Avatar Image"
+              >
+                <Camera className="w-6 h-6" />
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handleAvatarFileChange}
+                className="hidden"
               />
             </div>
-            <div className="mb-2">
+
+            <div className="mb-3">
               <h2 className="text-lg font-black text-slate-900 leading-tight">
-                {user?.display_name || "Columbia Administrator"}
+                {user?.display_name || user?.username}
               </h2>
-              <div className="text-xs text-slate-500 font-semibold">{user?.role || "Intelligence Lead"}</div>
+              <div className="text-xs text-slate-500 font-bold">
+                @{user?.username} • {user?.role || "Columbia Specialist"}
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Form Body */}
-        <form onSubmit={handleSave} className="p-8 pt-14 space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            {/* Display Name */}
+        {/* User Details Form */}
+        <form onSubmit={handleSaveProfile} className="p-8 pt-16 space-y-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+            {/* Username (Fixed / Read-only) */}
             <div className="space-y-1.5">
               <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
-                Display Name
+                Username (Primary Key)
               </label>
               <div className="relative">
                 <UserIcon className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
-                />
-              </div>
-            </div>
-
-            {/* Email (Read only) */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
-                Corporate Email
-              </label>
-              <div className="relative">
-                <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                <input
-                  type="email"
-                  value={user?.email || "employee@columbia.com"}
+                  value={user?.username || ""}
                   disabled
-                  className="w-full pl-10 pr-4 py-2.5 bg-slate-100 border border-slate-200 rounded-xl text-xs sm:text-sm font-semibold text-slate-500 cursor-not-allowed"
+                  className="w-full pl-10 pr-4 py-2.5 bg-slate-100 border border-slate-200 rounded-xl text-xs sm:text-sm font-bold text-slate-500 cursor-not-allowed"
                 />
               </div>
+              <p className="text-[11px] text-slate-400 font-medium">Username cannot be changed.</p>
             </div>
 
-            {/* Avatar URL */}
+            {/* Display Name */}
             <div className="space-y-1.5">
               <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
-                Avatar Image URL
+                Display Name
               </label>
-              <div className="relative">
-                <Camera className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#079FE0]/20 focus:border-[#079FE0]"
+              />
+            </div>
+
+            {/* Avatar URL / Direct Link */}
+            <div className="sm:col-span-2 space-y-1.5">
+              <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
+                Avatar Image Link or Upload
+              </label>
+              <div className="flex gap-2">
                 <input
                   type="text"
                   value={avatarUrl}
                   onChange={(e) => setAvatarUrl(e.target.value)}
-                  placeholder="https://..."
-                  className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500"
+                  placeholder="https://... or click avatar icon above to upload"
+                  className="flex-1 px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#079FE0]/20 focus:border-[#079FE0]"
                 />
-              </div>
-            </div>
-
-            {/* Time Zone */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
-                Time Zone
-              </label>
-              <div className="relative">
-                <Clock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                <select
-                  value={timezone}
-                  onChange={(e) => setTimezone(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 cursor-pointer"
-                >
-                  <option value="Asia/Kolkata">Asia/Kolkata (IST - UTC+05:30)</option>
-                  <option value="UTC">UTC (Universal Coordinated Time)</option>
-                  <option value="America/New_York">America/New_York (EST - UTC-05:00)</option>
-                  <option value="America/Los_Angeles">America/Los_Angeles (PST - UTC-08:00)</option>
-                </select>
-              </div>
-            </div>
-          </div>
-
-          {/* Preferences */}
-          <div className="pt-4 border-t border-slate-100 space-y-4">
-            <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-              System Preferences
-            </h3>
-
-            {/* Notifications Toggle */}
-            <label className="flex items-center justify-between p-4 bg-slate-50/70 rounded-2xl border border-slate-200/80 cursor-pointer">
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg bg-sky-100 text-sky-600 flex items-center justify-center">
-                  <Bell className="w-4 h-4" />
-                </div>
-                <div>
-                  <div className="text-xs font-bold text-slate-900">Email Price Alert Notifications</div>
-                  <div className="text-[11px] text-slate-500">
-                    Receive daily digest when competitor prices undercut Columbia listed price.
-                  </div>
-                </div>
-              </div>
-              <input
-                type="checkbox"
-                checked={notifications}
-                onChange={(e) => setNotifications(e.target.checked)}
-                className="w-4 h-4 text-sky-500 rounded focus:ring-sky-500"
-              />
-            </label>
-
-            {/* Theme Preference */}
-            <div className="flex items-center justify-between p-4 bg-slate-50/70 rounded-2xl border border-slate-200/80">
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-600 flex items-center justify-center">
-                  <Sun className="w-4 h-4" />
-                </div>
-                <div>
-                  <div className="text-xs font-bold text-slate-900">Theme Appearance</div>
-                  <div className="text-[11px] text-slate-500">Select dashboard visual theme.</div>
-                </div>
-              </div>
-              <div className="flex gap-1.5">
                 <button
                   type="button"
-                  onClick={() => setTheme("light")}
-                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
-                    theme === "light"
-                      ? "bg-[#079FE0] text-white shadow-2xs"
-                      : "bg-white border text-slate-600"
-                  }`}
+                  onClick={() => fileInputRef.current?.click()}
+                  className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-colors cursor-pointer flex items-center gap-1.5"
                 >
-                  Light
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTheme("dark")}
-                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
-                    theme === "dark"
-                      ? "bg-[#079FE0] text-white shadow-2xs"
-                      : "bg-white border text-slate-600"
-                  }`}
-                >
-                  Dark
+                  <Camera className="w-4 h-4" />
+                  <span>Upload</span>
                 </button>
               </div>
             </div>
           </div>
 
-          {/* Form Actions */}
-          <div className="pt-6 border-t border-slate-100 flex items-center justify-between">
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold transition-colors cursor-pointer"
-            >
-              <LogOut className="w-4 h-4" />
-              <span>Sign Out of VANTIS</span>
-            </button>
-
+          <div className="flex justify-end pt-2">
             <button
               type="submit"
-              disabled={isLoading}
-              className="inline-flex items-center gap-2 px-6 py-2.5 bg-[#079FE0] hover:bg-[#068ec8] text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer"
+              className="px-5 py-2.5 bg-[#079FE0] hover:bg-[#068ec8] text-white text-xs sm:text-sm font-bold rounded-xl transition-colors cursor-pointer shadow-xs flex items-center gap-2"
             >
               <Save className="w-4 h-4" />
-              <span>{isLoading ? "Saving..." : "Save Preferences"}</span>
+              <span>Save Profile</span>
             </button>
           </div>
         </form>
+      </div>
+
+      {/* Password Reset Section */}
+      <div className="bg-white rounded-3xl border border-slate-200/90 shadow-sm p-8 space-y-6">
+        <div className="flex items-center gap-3 pb-4 border-b border-slate-100">
+          <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center border border-amber-100">
+            <KeyRound className="w-5 h-5" />
+          </div>
+          <div>
+            <h2 className="text-base sm:text-lg font-black text-slate-900">
+              Reset Password
+            </h2>
+            <p className="text-xs text-slate-500 font-medium">
+              Update password for @{user?.username || "user"} with secure SHA-256 JWT encryption.
+            </p>
+          </div>
+        </div>
+
+        <form onSubmit={handleResetPassword} className="space-y-4 max-w-md">
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold text-slate-700 block">
+              Current Password (Optional if newly assigned)
+            </label>
+            <input
+              type="password"
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              placeholder="Current password"
+              className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#079FE0]/20 focus:border-[#079FE0]"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold text-slate-700 block">
+              New Password
+            </label>
+            <input
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="New password (min 4 characters)"
+              required
+              className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#079FE0]/20 focus:border-[#079FE0]"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold text-slate-700 block">
+              Confirm New Password
+            </label>
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              placeholder="Confirm new password"
+              required
+              className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#079FE0]/20 focus:border-[#079FE0]"
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={isResettingPassword}
+            className="mt-2 px-6 py-2.5 bg-slate-900 hover:bg-slate-800 text-white text-xs sm:text-sm font-bold rounded-xl transition-colors cursor-pointer shadow-xs disabled:opacity-50"
+          >
+            {isResettingPassword ? "Updating..." : "Update Password"}
+          </button>
+        </form>
+      </div>
+
+      {/* Sign Out Card */}
+      <div className="flex justify-between items-center p-6 bg-rose-50/50 rounded-3xl border border-rose-100">
+        <div>
+          <h3 className="text-sm font-bold text-rose-900">Sign Out</h3>
+          <p className="text-xs text-rose-600 font-medium">Terminate current authenticated session.</p>
+        </div>
+        <button
+          onClick={handleLogout}
+          className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer flex items-center gap-1.5 shadow-xs"
+        >
+          <LogOut className="w-4 h-4" />
+          <span>Sign Out</span>
+        </button>
       </div>
     </div>
   );

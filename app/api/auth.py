@@ -1,59 +1,56 @@
-from fastapi import APIRouter, HTTPException, Depends, status
-from typing import Dict, Any
-from app.schemas.models import LoginRequest, LoginResponse, UserResponse, ProfileUpdateRequest
-from app.core.security import hash_password, verify_password, create_access_token, get_current_user
+import shutil
+from pathlib import Path
+from typing import Dict, Any, Optional
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, status
+from app.schemas.models import (
+    LoginRequest, LoginResponse, UserResponse,
+    ResetPasswordRequest, ProfileUpdateRequest
+)
+from app.core.security import create_access_token, get_current_user
+from app.services.user_service import user_service
+from app.core.config import DATA_DIR
 
 router = APIRouter(prefix="/api", tags=["Authentication & Profile"])
 
-# In-memory user store (can be persisted or updated)
-_CURRENT_USER = {
-    "id": "usr_vantis_001",
-    "email": "employee@columbia.com",
-    "password_hash": hash_password("vantis2026"),
-    "display_name": "Kartikey Columbia Admin",
-    "role": "Product Intelligence Lead",
-    "avatar_url": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
-    "timezone": "Asia/Kolkata",
-    "notifications_enabled": True,
-    "theme": "light"
-}
+AVATARS_DIR = DATA_DIR / "avatars"
+AVATARS_DIR.mkdir(parents=True, exist_ok=True)
+
+def user_to_response(u: Dict[str, Any]) -> UserResponse:
+    return UserResponse(
+        id=f"usr_{u['username']}",
+        username=u["username"],
+        display_name=u["display_name"],
+        role=u["role"],
+        avatar_url=u.get("avatar_url"),
+        timezone=u.get("timezone", "Asia/Kolkata"),
+        notifications_enabled=bool(u.get("notifications_enabled", 1)),
+        theme=u.get("theme", "light"),
+        has_master_excel=bool(u.get("has_master_excel", 0)),
+        master_excel_filename=u.get("master_excel_filename")
+    )
 
 @router.post("/auth/login", response_model=LoginResponse)
 async def login(req: LoginRequest):
-    # Support any valid email with default or existing demo password, or create demo employee
-    email = req.email.strip().lower()
+    username = req.username.strip().lower()
+    user = user_service.authenticate(username, req.password)
     
-    # Check if matches current user or allow valid corporate login
-    if email == _CURRENT_USER["email"] and not verify_password(req.password, _CURRENT_USER["password_hash"]):
-        # Also allow if password is "vantis2026" or "admin123"
-        if req.password not in ("vantis2026", "admin123", "password"):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid email or password"
-            )
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid username or password"
+        )
 
     token_data = {
-        "sub": _CURRENT_USER["id"],
-        "email": email,
-        "role": _CURRENT_USER["role"]
+        "sub": f"usr_{user['username']}",
+        "username": user["username"],
+        "role": user["role"]
     }
     access_token = create_access_token(token_data)
-
-    user_resp = UserResponse(
-        id=_CURRENT_USER["id"],
-        email=email,
-        display_name=_CURRENT_USER["display_name"],
-        role=_CURRENT_USER["role"],
-        avatar_url=_CURRENT_USER["avatar_url"],
-        timezone=_CURRENT_USER["timezone"],
-        notifications_enabled=_CURRENT_USER["notifications_enabled"],
-        theme=_CURRENT_USER["theme"]
-    )
 
     return LoginResponse(
         access_token=access_token,
         token_type="bearer",
-        user=user_resp
+        user=user_to_response(user)
     )
 
 @router.post("/auth/logout")
@@ -61,46 +58,72 @@ async def logout():
     return {"status": "success", "message": "Successfully logged out"}
 
 @router.get("/auth/me", response_model=UserResponse)
-async def get_me(user: Dict[str, Any] = Depends(get_current_user)):
-    return UserResponse(
-        id=_CURRENT_USER["id"],
-        email=user.get("email", _CURRENT_USER["email"]),
-        display_name=_CURRENT_USER["display_name"],
-        role=_CURRENT_USER["role"],
-        avatar_url=_CURRENT_USER["avatar_url"],
-        timezone=_CURRENT_USER["timezone"],
-        notifications_enabled=_CURRENT_USER["notifications_enabled"],
-        theme=_CURRENT_USER["theme"]
-    )
+async def get_me(token_payload: Dict[str, Any] = Depends(get_current_user)):
+    username = token_payload.get("username", "kartikey")
+    user = user_service.get_user(username)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user_to_response(user)
 
 @router.get("/profile", response_model=UserResponse)
-async def get_profile(user: Dict[str, Any] = Depends(get_current_user)):
-    return await get_me(user)
+async def get_profile(token_payload: Dict[str, Any] = Depends(get_current_user)):
+    return await get_me(token_payload)
 
 @router.patch("/profile", response_model=UserResponse)
 async def update_profile(
     req: ProfileUpdateRequest,
-    user: Dict[str, Any] = Depends(get_current_user)
+    token_payload: Dict[str, Any] = Depends(get_current_user)
 ):
-    global _CURRENT_USER
-    if req.display_name is not None:
-        _CURRENT_USER["display_name"] = req.display_name.strip()
-    if req.avatar_url is not None:
-        _CURRENT_USER["avatar_url"] = req.avatar_url.strip()
-    if req.timezone is not None:
-        _CURRENT_USER["timezone"] = req.timezone.strip()
-    if req.notifications_enabled is not None:
-        _CURRENT_USER["notifications_enabled"] = req.notifications_enabled
-    if req.theme is not None:
-        _CURRENT_USER["theme"] = req.theme.strip()
-
-    return UserResponse(
-        id=_CURRENT_USER["id"],
-        email=user.get("email", _CURRENT_USER["email"]),
-        display_name=_CURRENT_USER["display_name"],
-        role=_CURRENT_USER["role"],
-        avatar_url=_CURRENT_USER["avatar_url"],
-        timezone=_CURRENT_USER["timezone"],
-        notifications_enabled=_CURRENT_USER["notifications_enabled"],
-        theme=_CURRENT_USER["theme"]
+    username = token_payload.get("username", "kartikey")
+    updated = user_service.update_profile(
+        username=username,
+        display_name=req.display_name,
+        avatar_url=req.avatar_url,
+        timezone=req.timezone,
+        notifications_enabled=req.notifications_enabled,
+        theme=req.theme
     )
+    if not updated:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user_to_response(updated)
+
+@router.post("/auth/reset-password")
+async def reset_password(
+    req: ResetPasswordRequest,
+    token_payload: Dict[str, Any] = Depends(get_current_user)
+):
+    username = token_payload.get("username", "kartikey")
+    if not req.new_password or len(req.new_password.strip()) < 4:
+        raise HTTPException(status_code=400, detail="Password must be at least 4 characters long")
+
+    # If current_password is provided, verify it first
+    if req.current_password:
+        auth_check = user_service.authenticate(username, req.current_password)
+        if not auth_check:
+            raise HTTPException(status_code=401, detail="Current password is incorrect")
+
+    success = user_service.reset_password(username, req.new_password.strip())
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to update password")
+
+    return {"status": "success", "message": "Password successfully updated"}
+
+@router.post("/auth/avatar")
+async def upload_avatar(
+    file: UploadFile = File(...),
+    token_payload: Dict[str, Any] = Depends(get_current_user)
+):
+    username = token_payload.get("username", "kartikey")
+    ext = Path(file.filename or "avatar.png").suffix.lower()
+    if ext not in (".png", ".jpg", ".jpeg", ".webp", ".svg"):
+        ext = ".png"
+
+    dest_file = AVATARS_DIR / f"{username}{ext}"
+    with open(dest_file, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    # Convert to data URL or relative URL
+    avatar_url = f"/api/avatars/{username}{ext}"
+    user_service.update_profile(username=username, avatar_url=avatar_url)
+
+    return {"status": "success", "avatar_url": avatar_url}

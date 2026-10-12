@@ -17,14 +17,14 @@ export const VantisLogo: React.FC<VantisLogoProps> = ({
       {variant === "big" ? (
         <img
           src="/vantis_big_logo.png"
-          alt="Columbia VANTIS"
-          className="h-20 sm:h-24 w-auto object-contain max-w-full drop-shadow-xs"
+          alt="Columbia Sportswear"
+          className="h-24 sm:h-32 md:h-40 w-auto object-contain max-w-full"
         />
       ) : (
         <img
           src="/vantis_header_logo.png"
-          alt="Columbia VANTIS"
-          className="h-12 sm:h-14 w-auto object-contain max-w-full"
+          alt="Columbia Sportswear"
+          className="h-14 sm:h-16 md:h-20 w-auto object-contain max-w-full"
         />
       )}
     </div>

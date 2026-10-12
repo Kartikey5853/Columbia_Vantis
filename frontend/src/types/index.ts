@@ -1,12 +1,14 @@
 export interface User {
   id: string;
-  email: string;
+  username: string;
   display_name: string;
   role: string;
   avatar_url?: string;
   timezone: string;
   notifications_enabled: boolean;
   theme: string;
+  has_master_excel?: boolean;
+  master_excel_filename?: string | null;
 }
 
 export interface ProductOffer {

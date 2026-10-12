@@ -163,7 +163,7 @@ export const HomePage: React.FC = () => {
     <>
       {/* Animated Splash Screen if just logged in */}
       {showSplash && (
-        <SplashScreen onComplete={() => setShowSplash(false)} durationMs={1800} />
+        <SplashScreen onComplete={() => setShowSplash(false)} maxWaitSeconds={40} />
       )}
 
       <div className="max-w-7xl mx-auto px-4 sm:px-8 py-8 sm:py-12">
@@ -306,35 +306,7 @@ export const HomePage: React.FC = () => {
                 </button>
               </div>
 
-              {/* Popular Search Suggestions (shown before searching) */}
-              {!hasSearched && (
-                <div className="pt-6 space-y-2.5 animate-in fade-in duration-300">
-                  <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block">
-                    Popular Columbia Categories & Collections
-                  </span>
-                  <div className="flex flex-wrap items-center justify-center gap-2 max-w-xl mx-auto">
-                    {[
-                      "Jackets",
-                      "Shoes & Boots",
-                      "Omni-Heat",
-                      "Silver Ridge",
-                      "Bugaboo",
-                      "Fleece",
-                      "Peakfreak",
-                      "Waterproof",
-                      "Backpack",
-                    ].map((term) => (
-                      <button
-                        key={term}
-                        onClick={() => handleChipClick(term)}
-                        className="px-3.5 py-1.5 rounded-full text-xs font-semibold bg-white border border-slate-200 text-slate-700 hover:border-sky-300 hover:text-sky-600 hover:bg-sky-50/50 shadow-2xs transition-all cursor-pointer"
-                      >
-                        {term}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
+
             </div>
 
             {/* Results Section (only displayed once user searches) */}

@@ -8,9 +8,9 @@ export interface LoginResponseData {
 }
 
 export const authService = {
-  async login(email: string, password: string, rememberMe: boolean = false): Promise<User> {
+  async login(username: string, password: string, rememberMe: boolean = false): Promise<User> {
     const response = await apiClient.post<LoginResponseData>("/api/auth/login", {
-      email,
+      username: username.trim(),
       password,
       remember_me: rememberMe,
     });
@@ -40,6 +40,25 @@ export const authService = {
   async updateProfile(updates: Partial<User>): Promise<User> {
     const response = await apiClient.patch<User>("/api/profile", updates);
     localStorage.setItem("vantis_user", JSON.stringify(response.data));
+    return response.data;
+  },
+
+  async resetPassword(newPassword: string, currentPassword?: string): Promise<{ status: string; message: string }> {
+    const response = await apiClient.post<{ status: string; message: string }>("/api/auth/reset-password", {
+      new_password: newPassword,
+      current_password: currentPassword,
+    });
+    return response.data;
+  },
+
+  async uploadAvatar(file: File): Promise<{ status: string; avatar_url: string }> {
+    const formData = new FormData();
+    formData.append("file", file);
+    const response = await apiClient.post<{ status: string; avatar_url: string }>("/api/auth/avatar", formData, {
+      headers: {
+        "Content-Type": "multipart/form-data",
+      },
+    });
     return response.data;
   },
 

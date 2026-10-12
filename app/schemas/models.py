@@ -3,24 +3,30 @@ from typing import List, Optional, Dict, Any
 
 # --- Auth Schemas ---
 class LoginRequest(BaseModel):
-    email: str
+    username: str
     password: str
     remember_me: Optional[bool] = False
 
 class UserResponse(BaseModel):
     id: str
-    email: str
+    username: str
     display_name: str
     role: str
     avatar_url: Optional[str] = None
     timezone: str = "Asia/Kolkata"
     notifications_enabled: bool = True
     theme: str = "light"
+    has_master_excel: bool = False
+    master_excel_filename: Optional[str] = None
 
 class LoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserResponse
+
+class ResetPasswordRequest(BaseModel):
+    new_password: str
+    current_password: Optional[str] = None
 
 class ProfileUpdateRequest(BaseModel):
     display_name: Optional[str] = None

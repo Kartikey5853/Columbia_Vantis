@@ -78,13 +78,24 @@ app.include_router(system_router)
 
 @app.get("/healthz")
 @app.get("/api/health")
-async def health_check():
+async def api_health_check():
     return {
         "status": "healthy",
         "service": "Columbia VANTIS Intelligence API",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "database": "connected"
+        "database": "connected",
+        "pipeline_running": is_pipeline_running()
     }
+
+from fastapi.responses import FileResponse
+from app.core.config import DATA_DIR
+@app.get("/api/avatars/{filename}")
+async def get_avatar(filename: str):
+    av_path = DATA_DIR / "avatars" / filename
+    if av_path.exists():
+        return FileResponse(str(av_path))
+    raise HTTPException(status_code=404, detail="Avatar not found")
+
 
 
 def _format_product_payload(source: str, raw_products: list) -> dict:
