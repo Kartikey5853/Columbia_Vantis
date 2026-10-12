@@ -1736,30 +1736,49 @@ async def scrape_tata(
 
 def normalize_tata_lux_js_product(raw_p: Dict[str, Any]) -> NormalizedProduct:
     pid = str(raw_p.get("product_id") or "").strip()
+    title = str(raw_p.get("title") or "").strip()
+    raw_sku = raw_p.get("sku")
+    style_code, norm_sku = normalize_sku_and_style(raw_sku, fallback_title=title, fallback_id=pid)
+
     raw_vars = raw_p.get("variants") or []
-    norm_vars = [
-        NormalizedVariant(
-            size=str(v.get("size") or ""),
-            sku=v.get("sku"),
-            available=bool(v.get("available")),
-            stock=int(v.get("stock") or 0),
-            url=v.get("url"),
+    norm_vars = []
+    for v in raw_vars:
+        v_raw_sku = v.get("sku")
+        v_style, v_sku = normalize_sku_and_style(v_raw_sku, fallback_title=title, fallback_id=pid)
+        v_size = normalize_size(str(v.get("size") or ""))
+        norm_vars.append(
+            NormalizedVariant(
+                size=v_size,
+                sku=v_sku or v_raw_sku,
+                style=v_style or style_code,
+                available=bool(v.get("available")),
+                stock=int(v.get("stock") or 0) if v.get("stock") is not None else 0,
+                url=v.get("url"),
+            )
         )
-        for v in raw_vars
-    ]
+
+    raw_offers = raw_p.get("offers") or []
+    norm_offers = [normalize_offer(o, platform="tata_lux") for o in raw_offers] if raw_offers else []
+
+    seller_stock = raw_p.get("seller_available_stock")
+    general_stock = raw_p.get("stock")
+    stock_count = int(seller_stock) if seller_stock is not None else (int(general_stock) if isinstance(general_stock, (int, float)) else (1 if raw_p.get("available") else 0))
 
     return NormalizedProduct(
         source="tata_lux",
         source_product_id=pid,
-        title=str(raw_p.get("title") or "").strip(),
-        sku=None,
+        title=title,
+        style=style_code,
+        sku=norm_sku,
         ean=None,
         price=float(raw_p.get("price") or 0.0),
         mrp=float(raw_p.get("mrp") or 0.0) if raw_p.get("mrp") else None,
         available=bool(raw_p.get("available")),
+        stock=stock_count,
         image_url=raw_p.get("image_url"),
         url=raw_p.get("url"),
         variants=norm_vars,
+        offers=norm_offers,
         scraped_at=datetime.now(timezone.utc).isoformat(),
     )
 
@@ -1807,10 +1826,11 @@ def _extract_tata_lux_pdp_variants_and_price(
                         raw_vars = json.loads(html[start:i+1])
                         for v in raw_vars:
                             sl = v.get("sizelink") or v.get("sizeLink") or v or {}
-                            sku = str(sl.get("productCode") or "")
-                            size = str(sl.get("size") or sl.get("brandSize") or "")
+                            raw_sku_code = str(sl.get("productCode") or "")
+                            v_style, v_sku = normalize_sku_and_style(raw_sku_code)
+                            v_size = normalize_size(str(sl.get("size") or sl.get("brandSize") or ""))
                             url_part = str(sl.get("url") or "")
-                            if not sku and not size and not url_part:
+                            if not raw_sku_code and not v_size and not url_part:
                                 continue
                             if url_part and not url_part.startswith("http"):
                                 url_part = "https://luxury.tatacliq.com" + ("" if url_part.startswith("/") else "/") + url_part
@@ -1821,8 +1841,9 @@ def _extract_tata_lux_pdp_variants_and_price(
                                 pass
                             variants.append(
                                 NormalizedVariant(
-                                    size=size,
-                                    sku=sku or None,
+                                    size=v_size,
+                                    sku=v_sku or (raw_sku_code if raw_sku_code else None),
+                                    style=v_style,
                                     available=bool(sl.get("isAvailable")),
                                     stock=stock_cnt,
                                     url=url_part or None
@@ -1865,17 +1886,19 @@ def _extract_tata_lux_pdp_variants_and_price(
                                 color_link = grp.get("colorLink") or grp.get("colorlink") or {}
                                 size_opts = grp.get("sizeOptions") or []
                                 for sz in size_opts:
-                                    sku = str(sz.get("productCode") or "")
-                                    size = str(sz.get("size") or sz.get("brandSize") or "")
+                                    raw_sku_code = str(sz.get("productCode") or "")
+                                    v_style, v_sku = normalize_sku_and_style(raw_sku_code)
+                                    v_size = normalize_size(str(sz.get("size") or sz.get("brandSize") or ""))
                                     url_part = str(sz.get("url") or color_link.get("colorurl") or "")
-                                    if not sku and not size and not url_part:
+                                    if not raw_sku_code and not v_size and not url_part:
                                         continue
                                     if url_part and not url_part.startswith("http"):
                                         url_part = "https://luxury.tatacliq.com" + ("" if url_part.startswith("/") else "/") + url_part
                                     variants.append(
                                         NormalizedVariant(
-                                            size=size,
-                                            sku=sku or None,
+                                            size=v_size,
+                                            sku=v_sku or (raw_sku_code if raw_sku_code else None),
+                                            style=v_style,
                                             available=bool(sz.get("isAvailable")),
                                             stock=int(sz.get("stockCount") or 0) if sz.get("stockCount") is not None else 0,
                                             url=url_part or None
