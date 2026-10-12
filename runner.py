@@ -2361,41 +2361,73 @@ async def scrape_tata_lux(
 # =========================================================================
 
 def normalize_amazon_product(raw_p: Dict[str, Any]) -> NormalizedProduct:
-    """Converts extracted Amazon card item to NormalizedProduct."""
+    """Converts extracted Amazon card item to NormalizedProduct with style & size normalization."""
     asin = str(raw_p.get("asin") or "").strip()
     title = str(raw_p.get("title") or "").strip()
+    raw_sku = raw_p.get("sku") or asin
+    style_code, norm_sku = normalize_sku_and_style(raw_sku, fallback_title=title, fallback_id=asin)
+
     p_num = raw_p.get("price_numeric")
     m_num = raw_p.get("mrp_numeric")
     image_url = raw_p.get("image") or None
     url = raw_p.get("href") or f"https://www.amazon.in/dp/{asin}"
     family = raw_p.get("family", [asin])
 
+    raw_vars = raw_p.get("variants") or []
     variants = []
-    for var_asin in family:
-        variants.append(
-            NormalizedVariant(
-                size="",
-                sku=var_asin,
-                ean=None,
-                available=True,
-                price=p_num,
-                mrp=m_num,
-                url=f"https://www.amazon.in/dp/{var_asin}",
+    if raw_vars:
+        for v in raw_vars:
+            v_sku = v.get("sku") or v.get("asin") or asin
+            v_style, v_norm_sku = normalize_sku_and_style(v_sku, fallback_title=title, fallback_id=asin)
+            v_size = normalize_size(str(v.get("size") or ""))
+            variants.append(
+                NormalizedVariant(
+                    size=v_size,
+                    sku=v_norm_sku or v_sku,
+                    style=v_style or style_code,
+                    ean=None,
+                    available=bool(v.get("available", True)),
+                    stock=int(v.get("stock") or 1),
+                    price=float(v.get("price") or p_num or 0.0) if (v.get("price") or p_num) else None,
+                    mrp=float(v.get("mrp") or m_num or 0.0) if (v.get("mrp") or m_num) else None,
+                    url=v.get("url") or f"https://www.amazon.in/dp/{v_sku}",
+                )
             )
-        )
+    else:
+        for var_asin in family:
+            v_style, v_norm_sku = normalize_sku_and_style(var_asin, fallback_title=title, fallback_id=asin)
+            variants.append(
+                NormalizedVariant(
+                    size="ONESIZE",
+                    sku=v_norm_sku or var_asin,
+                    style=v_style or style_code,
+                    ean=None,
+                    available=True,
+                    stock=1,
+                    price=p_num,
+                    mrp=m_num,
+                    url=f"https://www.amazon.in/dp/{var_asin}",
+                )
+            )
+
+    raw_offers = raw_p.get("offers") or []
+    norm_offers = [normalize_offer(o, platform="amazon") for o in raw_offers] if raw_offers else []
 
     return NormalizedProduct(
         source="amazon",
         source_product_id=asin,
         title=title,
-        sku=asin,
+        style=style_code,
+        sku=norm_sku or asin,
         ean=None,
         price=p_num,
         mrp=m_num,
         available=bool(p_num or title),
+        stock=int(raw_p.get("stock") or 1 if (p_num or title) else 0),
         image_url=image_url,
         url=url,
         variants=variants,
+        offers=norm_offers,
         scraped_at=datetime.now(timezone.utc).isoformat(),
     )
 
