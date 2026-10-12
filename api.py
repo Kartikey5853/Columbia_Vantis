@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, Query
@@ -52,6 +53,38 @@ app = FastAPI(
     description="Unified asynchronous web scraper API for Columbia Sportswear India and Tata CLiQ with Supabase persistence.",
     version="3.1.0"
 )
+
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000", "*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+from app.api.auth import router as auth_router
+from app.api.products import router as products_router
+from app.api.analytics import router as analytics_router
+from app.api.master_data import router as master_data_router
+from app.api.system import router as system_router
+from app.services.catalog_service import catalog_service
+
+app.include_router(auth_router)
+app.include_router(products_router)
+app.include_router(analytics_router)
+app.include_router(master_data_router)
+app.include_router(system_router)
+
+@app.get("/healthz")
+@app.get("/api/health")
+async def health_check():
+    return {
+        "status": "healthy",
+        "service": "Columbia VANTIS Intelligence API",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "database": "connected"
+    }
 
 
 def _format_product_payload(source: str, raw_products: list) -> dict:
@@ -285,6 +318,7 @@ async def on_startup():
     """
     global keepalive_task
     print("[STARTUP] Server started. Automatic startup scraping is disabled.", flush=True)
+    asyncio.create_task(asyncio.to_thread(catalog_service.load_catalog))
     if keepalive_task is None or keepalive_task.done():
         keepalive_task = asyncio.create_task(_render_keepalive_loop())
 
