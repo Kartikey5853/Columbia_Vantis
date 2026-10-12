@@ -155,70 +155,55 @@ async def get_servers_status():
 
 @router.get("/recent-runs")
 async def get_recent_runs():
-    return {
-        "runs": [
-            {
-                "timestamp": "11 Oct 2026, 04:30 PM",
-                "platform": "Amazon",
-                "job_id": "job_20261011_amazon_001",
-                "status": "Completed",
-                "products_fetched": 1997,
-                "duration": "14m 20s",
-                "message": "Full product catalog scraped and normalized."
-            },
-            {
-                "timestamp": "11 Oct 2026, 03:50 PM",
-                "platform": "Tata CLiQ",
-                "job_id": "job_20261011_tata_002",
-                "status": "Completed",
-                "products_fetched": 2108,
-                "duration": "18m 45s",
-                "message": "All product variants and offers extracted."
-            },
-            {
-                "timestamp": "11 Oct 2026, 03:20 PM",
-                "platform": "Tata CLiQ Luxury",
-                "job_id": "job_20261011_tatalux_003",
-                "status": "Completed",
-                "products_fetched": 2244,
-                "duration": "22m 10s",
-                "message": "Bank offers and stock counters updated."
-            },
-            {
-                "timestamp": "11 Oct 2026, 02:40 PM",
-                "platform": "Columbia Sportswear India",
-                "job_id": "job_20261011_columbia_004",
-                "status": "Completed",
-                "products_fetched": 5408,
-                "duration": "08m 12s",
-                "message": "Full Shopify catalog and Snapmint offers synchronized."
-            },
-            {
-                "timestamp": "11 Oct 2026, 02:15 PM",
-                "platform": "Advaatars (Adventuras)",
-                "job_id": "job_20261011_adv_005",
-                "status": "Completed",
-                "products_fetched": 4906,
-                "duration": "12m 05s",
-                "message": "All SKU variants and pricing verified."
-            },
-            {
-                "timestamp": "11 Oct 2026, 01:30 PM",
-                "platform": "Myntra",
-                "job_id": "job_20261011_myntra_006",
-                "status": "Completed",
-                "products_fetched": 1704,
-                "duration": "35m 18s",
-                "message": "Browser session authenticated and prices tracked."
-            },
-            {
-                "timestamp": "11 Oct 2026, 12:45 PM",
-                "platform": "AJIO",
-                "job_id": "job_20261011_ajio_007",
-                "status": "Completed",
-                "products_fetched": 2210,
-                "duration": "26m 40s",
-                "message": "Coupons and stock availability indexed."
-            }
-        ]
-    }
+    try:
+        from persistence.supabase_client import get_supabase_client
+        cli = get_supabase_client()
+        scrapers = await cli.select("scrapers", columns="id,name,source")
+        s_map = {s["id"]: s["name"] for s in scrapers}
+        raw_runs = await cli.select("scrape_runs", columns="*", order="started_at.desc", limit=25)
+        
+        runs = []
+        name_pretty = {
+            "amazon": "Amazon",
+            "columbia": "Columbia India",
+            "adv": "Adventuras",
+            "tata": "Tata CLiQ",
+            "tata_lux": "Tata CLiQ Luxury",
+            "myntra": "Myntra",
+            "ajio": "AJIO"
+        }
+        for r in raw_runs:
+            raw_name = s_map.get(r.get("scraper_id")) or (r.get("report") or {}).get("scraper") or "columbia"
+            p_name = name_pretty.get(raw_name, raw_name.title())
+            
+            st_raw = r.get("started_at") or r.get("updated_at")
+            ts_str = "Recent"
+            if st_raw and len(st_raw) >= 16:
+                try:
+                    dt = datetime.fromisoformat(st_raw.replace("Z", "+00:00"))
+                    ts_str = dt.strftime("%d %b %Y, %I:%M %p")
+                except Exception:
+                    ts_str = st_raw[:16].replace("T", " ")
+
+            rep = r.get("report") or {}
+            dur_sec = rep.get("duration_seconds")
+            dur_str = f"{int(dur_sec // 60)}m {int(dur_sec % 60)}s" if dur_sec else "Completed"
+            
+            p_count = r.get("completed_products") or rep.get("completed_products") or r.get("total_products") or 0
+
+            runs.append({
+                "id": str(r.get("id")),
+                "timestamp": ts_str,
+                "platform": p_name,
+                "platform_key": raw_name,
+                "business_date": r.get("business_date") or "2026-10-12",
+                "job_id": str(r.get("id"))[:12],
+                "status": (r.get("status") or "completed").capitalize(),
+                "products_fetched": int(p_count),
+                "duration": dur_str,
+                "message": rep.get("error") or f"Successfully extracted {p_count} product listings and variants."
+            })
+        return {"runs": runs}
+    except Exception as e:
+        print(f"[SYSTEM_API] Error querying Supabase scrape_runs: {e}", flush=True)
+        return {"runs": []}

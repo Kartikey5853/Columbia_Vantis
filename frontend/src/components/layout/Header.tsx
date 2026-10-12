@@ -15,6 +15,7 @@ export const Header: React.FC<HeaderProps> = ({ user: propUser, onRefresh }) => 
   const navigate = useNavigate();
   const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [avatarLoadError, setAvatarLoadError] = useState(false);
 
   const user = propUser || authService.getSavedUser();
 
@@ -25,9 +26,9 @@ export const Header: React.FC<HeaderProps> = ({ user: propUser, onRefresh }) => 
 
   return (
     <>
-      <header className="sticky top-0 z-40 w-full bg-white border-b border-slate-100 px-4 sm:px-8 py-2.5">
+      <header className="sticky top-0 z-40 w-full bg-white border-b border-slate-100 px-4 sm:px-8 py-2">
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
-          {/* Left: Brand Logo (clean, enlarged, no shadows, white background) */}
+          {/* Left: Brand Logo */}
           <div className="flex items-center">
             <VantisLogo variant="header" />
           </div>
@@ -37,7 +38,7 @@ export const Header: React.FC<HeaderProps> = ({ user: propUser, onRefresh }) => 
             {/* Master Excel Button */}
             <button
               onClick={() => setIsExcelModalOpen(true)}
-              className="inline-flex items-center gap-2 px-3 sm:px-4 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs sm:text-sm font-semibold transition-all group"
+              className="inline-flex items-center gap-2 px-3 sm:px-4 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs sm:text-sm font-semibold transition-all group"
             >
               <div className="w-5 h-5 rounded bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0 border border-emerald-100">
                 <FileSpreadsheet className="w-3.5 h-3.5" />
@@ -52,13 +53,14 @@ export const Header: React.FC<HeaderProps> = ({ user: propUser, onRefresh }) => 
             <div className="relative">
               <button
                 onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
-                className="w-10 h-10 rounded-full border-2 border-slate-200 hover:border-[#079FE0] transition-all overflow-hidden flex items-center justify-center bg-sky-50 text-sky-800 font-extrabold text-xs"
+                className="w-9 h-9 rounded-full border border-slate-200 hover:border-[#079FE0] transition-all overflow-hidden flex items-center justify-center bg-sky-50 text-sky-800 font-extrabold text-xs"
               >
-                {user?.avatar_url ? (
+                {user?.avatar_url && !avatarLoadError ? (
                   <img
                     src={user.avatar_url}
                     alt={user.username || user.display_name}
                     className="w-full h-full object-cover"
+                    onError={() => setAvatarLoadError(true)}
                   />
                 ) : (
                   <span>{user?.username?.slice(0, 2).toUpperCase() || "CV"}</span>

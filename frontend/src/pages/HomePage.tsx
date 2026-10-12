@@ -166,147 +166,155 @@ export const HomePage: React.FC = () => {
         <SplashScreen onComplete={() => setShowSplash(false)} maxWaitSeconds={40} />
       )}
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-8 py-8 sm:py-12">
+      <div className={`max-w-7xl mx-auto px-4 sm:px-8 ${!hasSearched ? "py-4 sm:py-6" : "py-8 sm:py-12"}`}>
         {/* FIRST-TIME MASTER EXCEL UPLOAD SECTION */}
         {!hasMasterExcel && !skippedExcel ? (
-          <div className="max-w-2xl mx-auto bg-white rounded-3xl border border-slate-200/90 shadow-sm p-8 sm:p-10 space-y-6 animate-in fade-in zoom-in-95 duration-300">
-            <div className="text-center space-y-2">
-              <div className="w-16 h-16 rounded-2xl bg-sky-50 text-sky-600 flex items-center justify-center mx-auto mb-4 border border-sky-100 shadow-2xs">
-                <FileSpreadsheet className="w-8 h-8" />
-              </div>
-              <h2 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
-                Upload Master Excel Catalogue
-              </h2>
-              <p className="text-sm text-slate-500 font-medium max-w-md mx-auto">
-                First-time setup: Upload your Columbia Master Excel sheet (.xlsx, .xls) to map SKUs, EANs, and Style Codes across all 7 partner platforms.
-              </p>
-            </div>
-
-            {/* Error & Success Banners */}
-            {excelError && (
-              <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 shrink-0" />
-                <span>{excelError}</span>
-              </div>
-            )}
-            {excelSuccess && (
-              <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-semibold flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 shrink-0" />
-                <span>{excelSuccess}</span>
-              </div>
-            )}
-
-            {/* Drag & Drop Area */}
-            <div className="relative border-2 border-dashed border-slate-200 hover:border-sky-400 rounded-2xl p-8 sm:p-10 text-center transition-colors bg-slate-50/50 hover:bg-sky-50/20 group">
-              <input
-                type="file"
-                accept=".xlsx,.xls"
-                onChange={handleExcelFileUpload}
-                disabled={isUploadingExcel}
-                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
-              />
-              <div className="space-y-3">
-                <FileUp className="w-10 h-10 text-slate-400 group-hover:text-sky-500 mx-auto transition-colors" />
-                <div>
-                  <span className="text-sm font-bold text-slate-800 group-hover:text-sky-600 transition-colors">
-                    Click to select file or drag & drop
-                  </span>
-                  <p className="text-xs text-slate-400 mt-1">
-                    Accepts official Columbia master Excel sheet (.xlsx, .xls)
-                  </p>
+          <div className="min-h-[calc(100vh-180px)] flex flex-col items-center justify-center -mt-6 sm:-mt-8">
+            <div className="max-w-2xl w-full bg-white rounded-3xl border border-slate-200/90 shadow-sm p-8 sm:p-10 space-y-6 animate-in fade-in zoom-in-95 duration-300">
+              <div className="text-center space-y-2">
+                <div className="w-16 h-16 rounded-2xl bg-sky-50 text-sky-600 flex items-center justify-center mx-auto mb-4 border border-sky-100 shadow-2xs">
+                  <FileSpreadsheet className="w-8 h-8" />
                 </div>
-              </div>
-            </div>
-
-            {/* Upload Progress Bar */}
-            {isUploadingExcel && (
-              <div className="space-y-2">
-                <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
-                  <div
-                    className="bg-[#079FE0] h-full rounded-full transition-all duration-300"
-                    style={{ width: `${excelUploadProgress}%` }}
-                  />
-                </div>
-                <p className="text-xs text-center font-medium text-slate-500">
-                  Parsing and validating catalogue ({excelUploadProgress}%)...
+                <h2 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
+                  Upload Master Excel Catalogue
+                </h2>
+                <p className="text-sm text-slate-500 font-medium max-w-md mx-auto">
+                  First-time setup: Upload your Columbia Master Excel sheet (.xlsx, .xls) to map SKUs, EANs, and Style Codes across all 7 partner platforms.
                 </p>
               </div>
-            )}
 
-            {/* Skip Button */}
-            <div className="pt-2 text-center">
-              <button
-                type="button"
-                onClick={() => setSkippedExcel(true)}
-                className="text-xs font-bold text-slate-500 hover:text-sky-600 transition-colors cursor-pointer"
-              >
-                Or skip and browse existing scraped intelligence directly →
-              </button>
+              {/* Error & Success Banners */}
+              {excelError && (
+                <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{excelError}</span>
+                </div>
+              )}
+              {excelSuccess && (
+                <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-semibold flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>{excelSuccess}</span>
+                </div>
+              )}
+
+              {/* Drag & Drop Area */}
+              <div className="relative border-2 border-dashed border-slate-200 hover:border-sky-400 rounded-2xl p-8 sm:p-10 text-center transition-colors bg-slate-50/50 hover:bg-sky-50/20 group">
+                <input
+                  type="file"
+                  accept=".xlsx,.xls"
+                  onChange={handleExcelFileUpload}
+                  disabled={isUploadingExcel}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+                />
+                <div className="space-y-3">
+                  <FileUp className="w-10 h-10 text-slate-400 group-hover:text-sky-500 mx-auto transition-colors" />
+                  <div>
+                    <span className="text-sm font-bold text-slate-800 group-hover:text-sky-600 transition-colors">
+                      Click to select file or drag & drop
+                    </span>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Accepts official Columbia master Excel sheet (.xlsx, .xls)
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Upload Progress Bar */}
+              {isUploadingExcel && (
+                <div className="space-y-2">
+                  <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+                    <div
+                      className="bg-[#079FE0] h-full rounded-full transition-all duration-300"
+                      style={{ width: `${excelUploadProgress}%` }}
+                    />
+                  </div>
+                  <p className="text-xs text-center font-medium text-slate-500">
+                    Parsing and validating catalogue ({excelUploadProgress}%)...
+                  </p>
+                </div>
+              )}
+
+              {/* Skip Button */}
+              <div className="pt-2 text-center">
+                <button
+                  type="button"
+                  onClick={() => setSkippedExcel(true)}
+                  className="text-xs font-bold text-slate-500 hover:text-sky-600 transition-colors cursor-pointer"
+                >
+                  Or skip and browse existing scraped intelligence directly →
+                </button>
+              </div>
             </div>
           </div>
         ) : (
           /* PRODUCT SEARCH VIEW (REPLACES EXCEL UPLOAD SECTION) */
           <>
             {/* Hero Section */}
-            <div className="text-center max-w-3xl mx-auto space-y-4 mb-10">
-              <h1 className="text-4xl sm:text-5xl font-black text-slate-900 tracking-tight">
-                Find your product.
-                <br />
-                <span className="text-[#079FE0]">Compare everything.</span>
-              </h1>
-              <p className="text-sm sm:text-base text-slate-500 font-medium">
-                Search across 7 platforms to get prices, variants, offers and availability in one place.
-              </p>
+            <div
+              className={`text-center max-w-3xl mx-auto space-y-4 transition-all duration-300 ${
+                !hasSearched
+                  ? "min-h-[calc(100vh-180px)] flex flex-col items-center justify-center -mt-6 sm:-mt-8"
+                  : "mb-10"
+              }`}
+            >
+              <div className="w-full space-y-4">
+                <h1 className="text-4xl sm:text-5xl font-black text-slate-900 tracking-tight">
+                  Find your product.
+                  <br />
+                  <span className="text-[#079FE0]">Compare everything.</span>
+                </h1>
+                <p className="text-sm sm:text-base text-slate-500 font-medium">
+                  Search across 7 platforms to get prices, variants, offers and availability in one place.
+                </p>
 
-              {/* Large Search Bar (starts blank as requested) */}
-              <div className="pt-3">
-                <div className="relative flex items-center bg-white rounded-full border border-slate-200/90 shadow-lg shadow-slate-200/60 p-2 sm:p-2.5 focus-within:ring-3 focus-within:ring-sky-500/20 focus-within:border-sky-500 transition-all max-w-3xl mx-auto">
-                  <Search className="w-6 h-6 text-sky-500 ml-4 shrink-0" />
-                  <input
-                    type="text"
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    placeholder="Search by SKU, EAN, Style or product name..."
-                    className="w-full px-4 py-2.5 sm:py-3 text-base sm:text-lg text-slate-900 placeholder:text-slate-400 focus:outline-none bg-transparent font-medium"
-                  />
+                {/* Large Search Bar (starts blank as requested) */}
+                <div className="pt-3">
+                  <div className="relative flex items-center bg-white rounded-full border border-slate-200/90 shadow-lg shadow-slate-200/60 p-2 sm:p-2.5 focus-within:ring-3 focus-within:ring-sky-500/20 focus-within:border-sky-500 transition-all max-w-3xl mx-auto">
+                    <Search className="w-6 h-6 text-sky-500 ml-4 shrink-0" />
+                    <input
+                      type="text"
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      placeholder="Search by SKU, EAN, Style or product name..."
+                      className="w-full px-4 py-2.5 sm:py-3 text-base sm:text-lg text-slate-900 placeholder:text-slate-400 focus:outline-none bg-transparent font-medium"
+                    />
+                    <button
+                      onClick={() => handleSearch()}
+                      disabled={isLoading || !searchTerm.trim()}
+                      className="px-8 py-3 bg-[#079FE0] hover:bg-[#068ec8] active:bg-[#057ea0] disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm sm:text-base font-bold rounded-full transition-all flex items-center gap-2 shrink-0 shadow-md cursor-pointer"
+                    >
+                      <span>Search</span>
+                      <ArrowRight className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Action Pills below Search */}
+                <div className="flex items-center justify-center gap-4 text-xs font-medium text-slate-600 pt-2">
                   <button
-                    onClick={() => handleSearch()}
-                    disabled={isLoading || !searchTerm.trim()}
-                    className="px-8 py-3 bg-[#079FE0] hover:bg-[#068ec8] active:bg-[#057ea0] disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm sm:text-base font-bold rounded-full transition-all flex items-center gap-2 shrink-0 shadow-md cursor-pointer"
+                    onClick={() => {
+                      setBulkModalMode("paste");
+                      setIsBulkModalOpen(true);
+                    }}
+                    className="inline-flex items-center gap-1.5 hover:text-sky-600 transition-colors cursor-pointer"
                   >
-                    <span>Search</span>
-                    <ArrowRight className="w-4 h-4" />
+                    <ClipboardList className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Paste multiple SKUs / EANs</span>
+                  </button>
+                  <span className="text-slate-300">|</span>
+                  <button
+                    onClick={() => {
+                      setBulkModalMode("csv");
+                      setIsBulkModalOpen(true);
+                    }}
+                    className="inline-flex items-center gap-1.5 hover:text-sky-600 transition-colors cursor-pointer"
+                  >
+                    <UploadCloud className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Upload CSV</span>
                   </button>
                 </div>
               </div>
-
-              {/* Action Pills below Search */}
-              <div className="flex items-center justify-center gap-4 text-xs font-medium text-slate-600 pt-2">
-                <button
-                  onClick={() => {
-                    setBulkModalMode("paste");
-                    setIsBulkModalOpen(true);
-                  }}
-                  className="inline-flex items-center gap-1.5 hover:text-sky-600 transition-colors cursor-pointer"
-                >
-                  <ClipboardList className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Paste multiple SKUs / EANs</span>
-                </button>
-                <span className="text-slate-300">|</span>
-                <button
-                  onClick={() => {
-                    setBulkModalMode("csv");
-                    setIsBulkModalOpen(true);
-                  }}
-                  className="inline-flex items-center gap-1.5 hover:text-sky-600 transition-colors cursor-pointer"
-                >
-                  <UploadCloud className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Upload CSV</span>
-                </button>
-              </div>
-
-
             </div>
 
             {/* Results Section (only displayed once user searches) */}

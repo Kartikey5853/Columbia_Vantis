@@ -326,11 +326,15 @@ async def on_startup():
     Server startup hook.
     Automatic background scraping on boot is disabled to prevent unwanted scrapes/OOM.
     Starts background keepalive loop to keep Render awake during active jobs.
+    Loads real Supabase product intelligence catalog in background so search and viewer are ready.
     """
     global keepalive_task
     print("[STARTUP] Server started. Automatic startup scraping is disabled.", flush=True)
     if keepalive_task is None or keepalive_task.done():
         keepalive_task = asyncio.create_task(_render_keepalive_loop())
+
+    # Pre-index real Supabase catalog in background thread
+    asyncio.create_task(asyncio.to_thread(catalog_service.load_catalog))
 
 
 @app.on_event("shutdown")

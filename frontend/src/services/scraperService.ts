@@ -36,11 +36,15 @@ export const scraperService = {
     return response.data;
   },
 
-  async resetScraper(scraper: string = "all"): Promise<any> {
-    const response = await apiClient.post("/scrape/reset", null, {
-      params: { scrapers: scraper },
-    });
-    return response.data;
+  async checkHealth(): Promise<{ status: string; service: string; timestamp: string; database: string; pipeline_running: boolean; latency_ms: number; endpoint: string }> {
+    const start = performance.now();
+    const response = await apiClient.get<{ status: string; service: string; timestamp: string; database: string; pipeline_running: boolean }>("/api/health");
+    const latency_ms = Math.round(performance.now() - start);
+    return {
+      ...response.data,
+      latency_ms,
+      endpoint: "/api/health",
+    };
   },
 };
 

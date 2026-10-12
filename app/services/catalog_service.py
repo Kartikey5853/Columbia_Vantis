@@ -180,12 +180,137 @@ class CatalogService:
         }
         self.supabase_cache: Dict[str, Any] = {}
 
+    def _fetch_from_supabase(self) -> List[Tuple[str, Dict[str, Any]]]:
+        """Fetches all scraped products from Supabase directly via PostgREST."""
+        import httpx
+        url = (os.getenv("SUPABASE_URL", "") or "https://saeekkbjnnksgyikrchk.supabase.co").rstrip("/")
+        key = (
+            os.getenv("SUPABASE_SECRET_KEY")
+            or os.getenv("SUPABASE_KEY")
+            or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+            or os.getenv("SUPABASE_PUBLISHABLE_KEY")
+            or os.getenv("SUPABASE_ANON_KEY", "")
+        )
+        if not url or not key:
+            return []
+
+        headers = {"apikey": key, "Authorization": f"Bearer {key}"}
+        records = []
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                r_sc = client.get(f"{url}/rest/v1/scrapers?select=id,name,source", headers=headers)
+                s_map = {}
+                if r_sc.status_code == 200:
+                    s_map = {s["id"]: s["name"] for s in r_sc.json()}
+
+                offset = 0
+                limit = 1000
+                while True:
+                    r = client.get(
+                        f"{url}/rest/v1/products",
+                        params={
+                            "select": "id,scraper_id,source_product_id,title,style,sku,ean,current_price,current_mrp,stock,image_url,url,available,variants,offers",
+                            "limit": limit,
+                            "offset": offset
+                        },
+                        headers=headers
+                    )
+                    if r.status_code != 200:
+                        break
+                    batch = r.json()
+                    if not batch:
+                        break
+                    for p in batch:
+                        sc_id = p.get("scraper_id")
+                        plat_key = s_map.get(sc_id) or "columbia"
+                        records.append((plat_key, p))
+                    offset += len(batch)
+                    if len(batch) < limit:
+                        break
+            print(f"[CATALOG_SERVICE] [SUPABASE] Successfully fetched {len(records)} products from live Supabase database.", flush=True)
+            return records
+        except Exception as e:
+            print(f"[CATALOG_SERVICE] ⚠️ Error fetching products from Supabase: {e}", flush=True)
+            return []
+
+    def _build_indices(self):
+        self.families_list = list(self.families.values())
+        self.families_list.sort(key=lambda x: (x.get("platforms_count", 0), -x.get("lowest_price", 0)), reverse=True)
+        self.index_by_sku.clear()
+        self.index_by_ean.clear()
+        self.index_by_style.clear()
+        self.index_by_pid.clear()
+
+        cats = set()
+        gens = set()
+        for fam in self.families_list:
+            fid = fam["family_id"]
+            if fam.get("category"):
+                cats.add(fam["category"])
+            if fam.get("gender"):
+                gens.add(fam["gender"])
+            if fam.get("style"):
+                self.index_by_style[fam["style"].lower()] = fid
+            if fam.get("ean"):
+                self.index_by_ean[fam["ean"].lower()] = fid
+            if fam.get("sku"):
+                self.index_by_sku[fam["sku"].lower()] = fid
+            for p in fam.get("platforms", []):
+                if p.get("product_id"):
+                    self.index_by_pid[p["product_id"].lower()] = fid
+            for v in fam.get("variants", []):
+                if v.get("sku"):
+                    self.index_by_sku[v["sku"].lower()] = fid
+                if v.get("ean"):
+                    self.index_by_ean[v["ean"].lower()] = fid
+        self.all_categories = sorted(list(cats))
+        self.all_genders = sorted(list(gens))
+
     def load_catalog(self, force: bool = False):
         if self.is_loaded and not force:
             return
 
         start_time = time.time()
+        cache_file = DATA_DIR / "supabase_catalog_cache.json"
 
+        # Check fast disk cache
+        if not force and cache_file.exists():
+            try:
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    cached = json.load(f)
+                if cached and "families" in cached and cached["families"]:
+                    self.families = cached["families"]
+                    self.raw_records_count = cached.get("raw_records_count", len(self.families))
+                    self._build_indices()
+                    self.is_loaded = True
+                    self.load_time_seconds = round(time.time() - start_time, 2)
+                    print(f"[CATALOG_SERVICE] Loaded {len(self.families)} product families from disk cache in {self.load_time_seconds}s.", flush=True)
+                    return
+            except Exception as e:
+                print(f"[CATALOG_SERVICE] Cache read error: {e}, falling back to fresh load", flush=True)
+
+        raw_items_by_family: Dict[str, List[Tuple[str, Dict[str, Any]]]] = {}
+        total_raw = 0
+
+        # 1. Primary data source: Supabase live database
+        supabase_records = self._fetch_from_supabase()
+        for plat_key, item in supabase_records:
+            total_raw += 1
+            pid = str(item.get("product_id") or item.get("source_product_id") or "").strip()
+            title = str(item.get("title") or "").strip()
+            if not title:
+                continue
+            sku = str(item.get("sku") or "").strip()
+            ean = str(item.get("ean") or "").strip()
+            url = str(item.get("url") or "").strip()
+            style = item.get("style") or extract_style_code(title, sku, url, pid)
+            fkey = get_canonical_family_key(title, style, ean)
+
+            if fkey not in raw_items_by_family:
+                raw_items_by_family[fkey] = []
+            raw_items_by_family[fkey].append((plat_key, item))
+
+        # 2. Supplementary: Local files if present
         source_configs = [
             ("adv", NEW_DATA_DIR / "adventuras_products_with_offers.json"),
             ("ajio", NEW_DATA_DIR / "ajio_columbia_products_2210.json"),
@@ -196,9 +321,6 @@ class CatalogService:
             ("amazon", AMAZON_DATA_DIR / "amazon_data.json"),
         ]
 
-        raw_items_by_family: Dict[str, List[Tuple[str, Dict[str, Any]]]] = {}
-        total_raw = 0
-
         for plat_key, file_path in source_configs:
             if not file_path.exists():
                 continue
@@ -207,8 +329,6 @@ class CatalogService:
                 with open(file_path, "r", encoding="utf-8") as f:
                     content = json.load(f)
                     items = content.get("products") or []
-                    total_raw += len(items)
-
                     for item in items:
                         if not isinstance(item, dict):
                             continue
@@ -238,6 +358,7 @@ class CatalogService:
                         if fkey not in raw_items_by_family:
                             raw_items_by_family[fkey] = []
                         raw_items_by_family[fkey].append((plat_key, item))
+                        total_raw += 1
 
             except Exception as e:
                 print(f"[CATALOG_SERVICE] ⚠️ Error loading {plat_key} ({file_path}): {e}", flush=True)
@@ -503,6 +624,19 @@ class CatalogService:
         self.all_genders = sorted(list(genders_set))
         self.load_time_seconds = time.time() - start_time
         self.is_loaded = True
+
+        # Save to disk cache for ultra-fast startup
+        try:
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            with open(cache_file, "w", encoding="utf-8") as f:
+                json.dump({
+                    "families": self.families,
+                    "raw_records_count": self.raw_records_count,
+                    "saved_at": time.time()
+                }, f)
+            print(f"[CATALOG_SERVICE] Saved {len(self.families)} families to disk cache ({cache_file}).", flush=True)
+        except Exception as e:
+            print(f"[CATALOG_SERVICE] [WARN] Failed to write disk cache: {e}", flush=True)
 
         # Load Supabase real price history cache if available
         cache_path = BASE_DIR / "data" / "supabase_price_history_cache.json"

@@ -2,13 +2,14 @@ import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   User as UserIcon,
-  Shield,
   KeyRound,
   Camera,
   CheckCircle2,
   AlertCircle,
   LogOut,
   Save,
+  Trash2,
+  Upload,
 } from "lucide-react";
 import authService from "../services/authService";
 import { User } from "../types";
@@ -20,6 +21,7 @@ export const ProfilePage: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [avatarUrl, setAvatarUrl] = useState("");
   const [displayName, setDisplayName] = useState("");
+  const [avatarLoadError, setAvatarLoadError] = useState(false);
 
   // Password reset state
   const [currentPassword, setCurrentPassword] = useState("");
@@ -41,12 +43,14 @@ export const ProfilePage: React.FC = () => {
       setUser(u);
       setAvatarUrl(u.avatar_url || "");
       setDisplayName(u.display_name || u.username);
+      setAvatarLoadError(false);
     } catch {
       const saved = authService.getSavedUser();
       if (saved) {
         setUser(saved);
         setAvatarUrl(saved.avatar_url || "");
         setDisplayName(saved.display_name || saved.username);
+        setAvatarLoadError(false);
       }
     }
   };
@@ -57,16 +61,69 @@ export const ProfilePage: React.FC = () => {
 
     setIsUploadingAvatar(true);
     setErrorMessage(null);
-    try {
-      const res = await authService.uploadAvatar(file);
-      setAvatarUrl(res.avatar_url);
-      setSuccessMessage("Avatar image successfully updated.");
-      setTimeout(() => setSuccessMessage(null), 3500);
-      loadUser();
-    } catch (err: any) {
-      setErrorMessage(err.message || "Failed to upload avatar image.");
-    } finally {
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = async () => {
+        // Downscale image to max 256x256 to create lightweight base64 data URL
+        const canvas = document.createElement("canvas");
+        const maxDim = 256;
+        let w = img.width;
+        let h = img.height;
+        if (w > h) {
+          if (w > maxDim) {
+            h = Math.round((h * maxDim) / w);
+            w = maxDim;
+          }
+        } else {
+          if (h > maxDim) {
+            w = Math.round((w * maxDim) / h);
+            h = maxDim;
+          }
+        }
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, w, h);
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+          setAvatarUrl(dataUrl);
+          setAvatarLoadError(false);
+          try {
+            const updated = await authService.updateProfile({ avatar_url: dataUrl });
+            setUser(updated);
+            setSuccessMessage("Profile photo updated and saved successfully!");
+            setTimeout(() => setSuccessMessage(null), 3500);
+          } catch (err: any) {
+            setErrorMessage(err.message || "Failed to save avatar to profile.");
+          }
+        }
+        setIsUploadingAvatar(false);
+      };
+      img.onerror = () => {
+        setErrorMessage("Invalid image format. Please select a PNG or JPG.");
+        setIsUploadingAvatar(false);
+      };
+      img.src = event.target?.result as string;
+    };
+    reader.onerror = () => {
+      setErrorMessage("Error reading file from disk.");
       setIsUploadingAvatar(false);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemoveAvatar = async () => {
+    setAvatarUrl("");
+    setAvatarLoadError(false);
+    try {
+      const updated = await authService.updateProfile({ avatar_url: "" });
+      setUser(updated);
+      setSuccessMessage("Profile photo removed.");
+      setTimeout(() => setSuccessMessage(null), 3500);
+    } catch (err: any) {
+      setErrorMessage(err.message || "Failed to remove photo.");
     }
   };
 
@@ -80,7 +137,7 @@ export const ProfilePage: React.FC = () => {
         avatar_url: avatarUrl,
       });
       setUser(updated);
-      setSuccessMessage("Profile preferences successfully saved.");
+      setSuccessMessage("Profile details successfully saved.");
       setTimeout(() => setSuccessMessage(null), 3500);
     } catch (err: any) {
       setErrorMessage(err.message || "Failed to save profile.");
@@ -121,15 +178,17 @@ export const ProfilePage: React.FC = () => {
     navigate("/login");
   };
 
+  const userInitial = user?.username ? user.username.charAt(0).toUpperCase() : "U";
+
   return (
     <div className="max-w-3xl mx-auto px-4 sm:px-8 py-8 space-y-8 select-none">
       {/* Page Title */}
       <div>
         <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
-          User Profile &amp; Security
+          User Profile &amp; Settings
         </h1>
         <p className="text-xs sm:text-sm text-slate-500 font-semibold mt-1">
-          Manage your account profile picture and update your password.
+          Update profile information, upload avatar picture, and manage your password.
         </p>
       </div>
 
@@ -154,15 +213,16 @@ export const ProfilePage: React.FC = () => {
           <div className="absolute -bottom-10 left-8 flex items-end gap-4">
             <div className="relative group">
               <div className="w-20 h-20 rounded-2xl bg-white p-1 ring-4 ring-white shadow-md overflow-hidden flex items-center justify-center">
-                {avatarUrl || user?.avatar_url ? (
+                {avatarUrl && !avatarLoadError ? (
                   <img
-                    src={avatarUrl || user?.avatar_url}
+                    src={avatarUrl}
                     alt={user?.username}
                     className="w-full h-full object-cover rounded-xl"
+                    onError={() => setAvatarLoadError(true)}
                   />
                 ) : (
-                  <div className="w-full h-full bg-sky-100 text-sky-800 font-black text-xl flex items-center justify-center rounded-xl">
-                    {user?.username?.slice(0, 2).toUpperCase() || "CV"}
+                  <div className="w-full h-full bg-gradient-to-br from-sky-400 to-[#079FE0] text-white font-black text-2xl flex items-center justify-center rounded-xl shadow-inner">
+                    {userInitial}
                   </div>
                 )}
               </div>
@@ -172,7 +232,7 @@ export const ProfilePage: React.FC = () => {
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={isUploadingAvatar}
-                className="absolute inset-0 rounded-2xl bg-black/40 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                className="absolute inset-0 rounded-2xl bg-black/50 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
                 title="Change Avatar Image"
               >
                 <Camera className="w-6 h-6" />
@@ -191,7 +251,7 @@ export const ProfilePage: React.FC = () => {
                 {user?.display_name || user?.username}
               </h2>
               <div className="text-xs text-slate-500 font-bold">
-                @{user?.username} • {user?.role || "Columbia Specialist"}
+                @{user?.username} • {user?.role || "Columbia Lead"}
               </div>
             </div>
           </div>
@@ -214,7 +274,7 @@ export const ProfilePage: React.FC = () => {
                   className="w-full pl-10 pr-4 py-2.5 bg-slate-100 border border-slate-200 rounded-xl text-xs sm:text-sm font-bold text-slate-500 cursor-not-allowed"
                 />
               </div>
-              <p className="text-[11px] text-slate-400 font-medium">Username cannot be changed.</p>
+              <p className="text-[11px] text-slate-400 font-medium">Username is fixed.</p>
             </div>
 
             {/* Display Name */}
@@ -230,35 +290,42 @@ export const ProfilePage: React.FC = () => {
               />
             </div>
 
-            {/* Avatar URL / Direct Link */}
-            <div className="sm:col-span-2 space-y-1.5">
+            {/* Avatar Photo Actions */}
+            <div className="sm:col-span-2 space-y-2 pt-1">
               <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
-                Avatar Image Link or Upload
+                Profile Photo
               </label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={avatarUrl}
-                  onChange={(e) => setAvatarUrl(e.target.value)}
-                  placeholder="https://... or click avatar icon above to upload"
-                  className="flex-1 px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#079FE0]/20 focus:border-[#079FE0]"
-                />
+              <div className="flex flex-wrap items-center gap-3">
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
-                  className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-colors cursor-pointer flex items-center gap-1.5"
+                  disabled={isUploadingAvatar}
+                  className="px-4 py-2.5 bg-[#079FE0] hover:bg-[#068ec8] text-white text-xs sm:text-sm font-bold rounded-xl transition-colors cursor-pointer flex items-center gap-2 shadow-xs"
                 >
-                  <Camera className="w-4 h-4" />
-                  <span>Upload</span>
+                  <Upload className="w-4 h-4" />
+                  <span>{isUploadingAvatar ? "Processing..." : "Upload New Photo"}</span>
                 </button>
+                {avatarUrl && (
+                  <button
+                    type="button"
+                    onClick={handleRemoveAvatar}
+                    className="px-3.5 py-2.5 border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 text-xs sm:text-sm font-semibold rounded-xl transition-colors cursor-pointer flex items-center gap-1.5"
+                  >
+                    <Trash2 className="w-4 h-4 text-rose-500" />
+                    <span>Reset to Initials</span>
+                  </button>
+                )}
               </div>
+              <p className="text-[11px] text-slate-400 font-medium">
+                Supports PNG, JPG, or WEBP. Image is automatically compressed and saved directly to your account.
+              </p>
             </div>
           </div>
 
           <div className="flex justify-end pt-2">
             <button
               type="submit"
-              className="px-5 py-2.5 bg-[#079FE0] hover:bg-[#068ec8] text-white text-xs sm:text-sm font-bold rounded-xl transition-colors cursor-pointer shadow-xs flex items-center gap-2"
+              className="px-6 py-2.5 bg-[#079FE0] hover:bg-[#068ec8] text-white text-xs sm:text-sm font-bold rounded-xl transition-colors cursor-pointer shadow-xs flex items-center gap-2"
             >
               <Save className="w-4 h-4" />
               <span>Save Profile</span>
@@ -286,7 +353,7 @@ export const ProfilePage: React.FC = () => {
         <form onSubmit={handleResetPassword} className="space-y-4 max-w-md">
           <div className="space-y-1.5">
             <label className="text-xs font-bold text-slate-700 block">
-              Current Password (Optional if newly assigned)
+              Current Password (Optional)
             </label>
             <input
               type="password"
