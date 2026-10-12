@@ -458,11 +458,11 @@ class ScraperPersistenceTestSuite(unittest.IsolatedAsyncioTestCase):
     # ---------------------------------------------------------------------
     async def test_11_run_report_storage(self):
         """Verifies structured JSON report is persisted in scrape_runs and readable via run_store."""
-        run = await get_or_create_daily_run("myntra", client=self.client)
+        run = await get_or_create_daily_run("columbia", client=self.client)
         run_id = run["id"]
 
         test_report = {
-            "scraper": "myntra",
+            "scraper": "columbia",
             "status": "completed",
             "products_scraped": 42,
             "resumed_from_page": 5,
@@ -474,23 +474,23 @@ class ScraperPersistenceTestSuite(unittest.IsolatedAsyncioTestCase):
         await save_run_report(run_id, test_report, client=self.client)
 
         # Retrieve specific report
-        rep = await get_daily_run_report("myntra", client=self.client)
+        rep = await get_daily_run_report("columbia", client=self.client)
         self.assertIsNotNone(rep)
-        self.assertEqual(rep["scraper"], "myntra")
+        self.assertEqual(rep["scraper"], "columbia")
         self.assertEqual(rep["products_scraped"], 42)
         self.assertEqual(rep["resumed_from_page"], 5)
 
         # Retrieve all daily reports
         all_reps = await get_all_daily_reports(client=self.client)
-        self.assertIn("myntra", all_reps["reports"])
-        self.assertEqual(all_reps["reports"]["myntra"]["products_scraped"], 42)
+        self.assertIn("columbia", all_reps["reports"])
+        self.assertEqual(all_reps["reports"]["columbia"]["products_scraped"], 42)
 
     # ---------------------------------------------------------------------
     # TEST 12 — Checkpoint-based page resume calculation
     # ---------------------------------------------------------------------
     async def test_12_page_checkpoint_resume(self):
         """Verifies that if 5 pages (1..5) are completed, resume calculates next start page as 6."""
-        run = await get_or_create_daily_run("myntra", client=self.client)
+        run = await get_or_create_daily_run("columbia", client=self.client)
         run_id = run["id"]
 
         # Simulate 5 pages completed
