@@ -17,10 +17,17 @@
 
     window.output = [];
     window.__ADVENTURAS_UNSAVED__ = [];
+    window.__COMPLETED_PAGES__ = [];
 
     window.drainUnsavedProducts = function () {
         const chunk = window.__ADVENTURAS_UNSAVED__ || [];
         window.__ADVENTURAS_UNSAVED__ = [];
+        return chunk;
+    };
+
+    window.drainCompletedPages = function () {
+        const chunk = window.__COMPLETED_PAGES__ || [];
+        window.__COMPLETED_PAGES__ = [];
         return chunk;
     };
 
@@ -238,12 +245,17 @@
             if (limitReached) break;
         }
 
-        console.log(`Page ${page}: ${data.products.length} products (${pageColumbiaCount} Columbia). Total SKUs: ${totalItemsEmitted}`);
+        window.__COMPLETED_PAGES__.push(page);
+        if (window.__IS_PLAYWRIGHT__ === true) {
+            window.output = []; // Free V8 memory immediately
+        }
+
+        console.log(`[adv](collecting data) Page ${page}: ${data.products.length} products (${pageColumbiaCount} Columbia). Total SKUs: ${totalItemsEmitted}`);
 
         if (limitReached) break;
 
         if (data.products.length < LIMIT) {
-            console.log(`Page ${page} returned less than ${LIMIT} products. Finished pagination.`);
+            console.log(`[adv](collecting data) Page ${page} returned less than ${LIMIT} products. Finished pagination.`);
             break;
         }
 
@@ -252,7 +264,7 @@
     }
 
     const totalPages = Math.max(1, page);
-    console.log(`SCRAPING COMPLETE. Collected ${window.output.length} products (${totalItemsEmitted} SKUs) across ${totalPages} pages.`);
+    console.log(`[adv](summary) SCRAPING COMPLETE. Collected ${totalItemsEmitted} SKUs across ${totalPages} pages.`);
     window.updateProgress({ stage: "Completed", current: totalPages, total: totalPages, variant_count: totalItemsEmitted });
     window.__SCRAPER_DONE__ = true;
 

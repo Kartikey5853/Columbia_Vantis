@@ -86,8 +86,9 @@ def log_console(msg):
         "Page", "error", "Error", "Network", "Halting", "Stopping", "[ADV]", "[SCRAPER]"
     )
     if any(kw in text for kw in scraper_keywords):
+        tag = f"[{_CURRENT_SCRAPER_NAME or 'scraper'}](browser)"
         try:
-            print(f"[SCRAPER] {text}", flush=True)
+            print(f"{tag} {text}", flush=True)
         except Exception:
             pass
 
@@ -548,16 +549,14 @@ async def scrape_columbia(
         raise RuntimeError("SHOPIFY_TOKEN is missing from .env or environment")
 
     cli = client or get_supabase_client()
-    print("\n" + "=" * 60)
-    print("STARTING COLUMBIA SPORTSWEAR INDIA SCRAPER (LEAN NATIVE GRAPHQL ENGINE)")
-    print("=" * 60, flush=True)
+    print("[columbia](init) STARTING COLUMBIA SPORTSWEAR INDIA SCRAPER (LEAN NATIVE GRAPHQL ENGINE)", flush=True)
 
     # 1. Initialize or resume daily scrape run
     run = await get_or_create_daily_run("columbia", client=cli)
     run_id = run["id"]
     _CURRENT_SCRAPER_RUN_ID = run_id
     _CURRENT_SCRAPER_NAME = "columbia"
-    print(f"[RUN] Columbia Scrape Run ID: {run_id} (Date: {run['business_date']}, Status: {run['status']})")
+    print(f"[columbia](init) Columbia Scrape Run ID: {run_id} (Date: {run['business_date']}, Status: {run['status']})", flush=True)
 
     await update_run_stage(run_id, "products", client=cli)
 
@@ -581,10 +580,10 @@ async def scrape_columbia(
             while has_next_page:
                 if is_stop_requested():
                     reason = get_stop_reason()
-                    print(f"[COLUMBIA] 🛑 Stopping scraper due to stop signal: {reason}", flush=True)
+                    print(f"[columbia](collecting data) 🛑 Stopping scraper due to stop signal: {reason}", flush=True)
                     break
 
-                print(f"[SCRAPER] Fetching Page {page} (cursor: {cursor or 'start'})...", flush=True)
+                print(f"[columbia](collecting data) Fetching Page {page} (cursor: {cursor or 'start'})...", flush=True)
                 if progress_callback:
                     try:
                         await progress_callback({
@@ -604,14 +603,14 @@ async def scrape_columbia(
                     try:
                         resp = await http_client.post(COLUMBIA_GRAPHQL_ENDPOINT, headers=headers, json=req_body)
                         if resp.status_code != 200:
-                            print(f"[SCRAPER] HTTP {resp.status_code} on Columbia page {page}, attempt {attempt}/4", flush=True)
+                            print(f"[columbia](collecting data) HTTP {resp.status_code} on Columbia page {page}, attempt {attempt}/4", flush=True)
                             if attempt < 4:
                                 await asyncio.sleep(attempt * 2.0)
                                 continue
                             break
                         res_json = resp.json()
                         if "errors" in res_json:
-                            print(f"[SCRAPER] GraphQL errors on page {page}, attempt {attempt}/4: {res_json['errors']}", flush=True)
+                            print(f"[columbia](collecting data) GraphQL errors on page {page}, attempt {attempt}/4: {res_json['errors']}", flush=True)
                             if attempt < 4:
                                 await asyncio.sleep(attempt * 2.0)
                                 continue
@@ -620,17 +619,17 @@ async def scrape_columbia(
                         if data is not None:
                             break
                     except Exception as err:
-                        print(f"[SCRAPER] Network error on Columbia page {page}, attempt {attempt}/4: {err}", flush=True)
+                        print(f"[columbia](collecting data) Network error on Columbia page {page}, attempt {attempt}/4: {err}", flush=True)
                         if attempt < 4:
                             await asyncio.sleep(attempt * 2.0)
 
                 if not data:
-                    print(f"[SCRAPER] Stopping Columbia pagination at page {page} due to persistent error.", flush=True)
+                    print(f"[columbia](collecting data) Stopping Columbia pagination at page {page} due to persistent error.", flush=True)
                     break
 
                 edges = data.get("edges") or []
                 if not edges:
-                    print(f"[SCRAPER] Page {page} returned 0 products. Reached end of catalog.", flush=True)
+                    print(f"[columbia](collecting data) Page {page} returned 0 products. Reached end of catalog.", flush=True)
                     break
 
                 norm_chunk: List[NormalizedProduct] = []
@@ -797,14 +796,14 @@ async def scrape_columbia(
                     total_persisted_products += len(norm_chunk)
                     total_variants_persisted += chunk_variants
                     await update_run_counts(run_id, completed_delta=len(norm_chunk), client=cli)
-                    print(f"[SCRAPER] Page {page}: fetched {len(edges)} products. Total SKUs so far: {total_variants_persisted}", flush=True)
+                    print(f"[columbia](storing in database) Persisted {len(norm_chunk)} products ({total_persisted_products} total so far, {total_variants_persisted} SKUs).", flush=True)
 
                 del norm_chunk
                 import gc
                 gc.collect()
 
                 if limit_reached:
-                    print(f"[SCRAPER] Product limit {limit_val} reached. Stopping Columbia pagination.", flush=True)
+                    print(f"[columbia](collecting data) Product limit {limit_val} reached. Stopping Columbia pagination.", flush=True)
                     break
 
                 page_info = data.get("pageInfo") or {}
@@ -815,9 +814,7 @@ async def scrape_columbia(
                     await asyncio.sleep(0.3)
 
         total_pages = max(1, page - 1)
-        print(f"[SCRAPER] Collected {total_variants_persisted} products across {total_pages} pages", flush=True)
-        print("[SCRAPER] Done!", flush=True)
-        print(f"[SCRAPER] Total SKUs: {total_variants_persisted}", flush=True)
+        print(f"[columbia](collecting data) Collected {total_variants_persisted} variants across {total_pages} pages.", flush=True)
 
         # Finalize run and export local rolling backup
         await update_run_stage(run_id, "finalizing", client=cli)
@@ -849,12 +846,12 @@ async def scrape_columbia(
             except Exception:
                 pass
 
-        print("\n" + "=" * 60)
-        print(f"COLUMBIA SCRAPING FINISHED: {total_persisted_products} products persisted")
-        print(f"Total Variants Persisted: {total_variants_persisted}")
-        print(f"Price Records Added: {total_prices_added}")
-        print(f"Local Rolling Backup: {export_path.resolve()}")
-        print("=" * 60 + "\n", flush=True)
+        print(f"[columbia](summary) COLUMBIA SCRAPING FINISHED: {total_persisted_products} products persisted", flush=True)
+        print(f"[columbia](summary) Total Variants Persisted: {total_variants_persisted}", flush=True)
+        print(f"[columbia](summary) Price Records Added: {total_prices_added}", flush=True)
+        print(f"[columbia](summary) Duration: {dur:.1f}s", flush=True)
+        print(f"[columbia](storing in database) Local Rolling Backup: {export_path.resolve()}", flush=True)
+        print(f"[columbia](storing in database) Database Report Saved to scrape_runs (ID: {run_id})", flush=True)
 
         return {
             "status": "completed",
@@ -1089,142 +1086,255 @@ async def scrape_adv(
     client=None
 ) -> Dict[str, Any]:
     """
-    Executes Adventuras scraper via Playwright tab running adv_scraper.js.
-    Batches database updates in 3-4 pages, draining the browser window buffer
-    to prevent memory spikes, and resumes seamlessly from scrape_listing_pages checkpoints.
+    Executes Adventuras scraper via lean native async HTTP engine (~15MB RAM, zero browser processes).
+    Streams page-by-page directly into Supabase, checkpoints every page,
+    deletes memory buffers after each page to prevent RAM spikes, and resumes seamlessly.
     """
     global _CURRENT_SCRAPER_RUN_ID, _CURRENT_SCRAPER_NAME
     cli = client or get_supabase_client()
 
-    print("\n" + "=" * 60)
-    print("STARTING ADVENTURAS SCRAPER (3-4 PAGE BATCH PLAYWRIGHT ENGINE)")
+    print("[adv](init) STARTING ADVENTURAS SCRAPER (LEAN STREAMING ENGINE, ULTRA-LOW RAM)", flush=True)
     if limit:
-        print(f"TEST MODE: Limited to {limit} products")
-    print("=" * 60, flush=True)
+        print(f"[adv](init) TEST MODE: Limited to {limit} products", flush=True)
 
     run = await get_or_create_daily_run("adv", client=cli)
     run_id = run["id"]
     _CURRENT_SCRAPER_RUN_ID = run_id
     _CURRENT_SCRAPER_NAME = "adv"
-    print(f"[RUN] Adventuras Scrape Run ID: {run_id} (Date: {run['business_date']}, Status: {run['status']})")
+    print(f"[adv](init) Adventuras Scrape Run ID: {run_id} (Date: {run['business_date']}, Status: {run['status']})", flush=True)
 
     completed_pages = await get_completed_listing_pages(run_id, client=cli)
     start_page = max(completed_pages) + 1 if completed_pages else 1
     if completed_pages:
-        print(f"[ADV CHECKPOINT] Resuming Adventuras from page {start_page} ({len(completed_pages)} pages already completed in DB).", flush=True)
+        print(f"[adv](checkpoint) Resuming Adventuras from page {start_page} ({len(completed_pages)} pages already completed in DB).", flush=True)
 
     await update_run_stage(run_id, "products", client=cli)
-
-    scraper_path = SCRAPER_DIR / "New_adv_scraper.js" if (SCRAPER_DIR / "New_adv_scraper.js").exists() else SCRAPER_DIR / "adv_scraper.js"
-    scraper_code = scraper_path.read_text(encoding="utf-8")
 
     total_persisted_products = run.get("completed_products") or 0
     total_persisted_variants = 0
     total_prices_recorded = 0
     all_pages_done = set(completed_pages)
     t_start = time.perf_counter()
+    limit_val = int(limit) if limit else 0
+    limit_reached = False
 
-    async def handle_adv_batch(page_obj):
-        nonlocal total_persisted_products, total_persisted_variants, total_prices_recorded
-        raw_items = await page_obj.evaluate("() => typeof window.drainUnsavedProducts === 'function' ? window.drainUnsavedProducts() : []")
-        pages_chunk = await page_obj.evaluate("() => typeof window.drainCompletedPages === 'function' ? window.drainCompletedPages() : []")
-
-        if raw_items:
-            norm_products = group_adv_products(raw_items)
-            db_products = await upsert_canonical_products_batch(norm_products, client=cli, batch_size=200)
-            id_by_src = {p["source_product_id"]: p["id"] for p in db_products if "source_product_id" in p and "id" in p}
-
-            price_entries = []
-            progress_items = []
-            chunk_variants = 0
-            for prod in norm_products:
-                pid = id_by_src.get(prod.source_product_id)
-                if pid:
-                    price_entries.append({
-                        "product_id": pid,
-                        "price": prod.price,
-                        "mrp": prod.mrp
-                    })
-                    progress_items.append({
-                        "product_id": pid,
-                        "source_product_id": prod.source_product_id,
-                        "variant_count": len(prod.variants)
-                    })
-                    chunk_variants += len(prod.variants)
-
-            if price_entries:
-                added = await batch_record_prices_if_changed(
-                    price_entries, scrape_run_id=run_id, client=cli, batch_size=200
-                )
-                total_prices_recorded += added
-
-            if progress_items:
-                await batch_record_product_progress(
-                    run_id, progress_items, status="completed", client=cli, batch_size=200
-                )
-
-            total_persisted_products += len(norm_products)
-            total_persisted_variants += chunk_variants
-            await update_run_counts(run_id, completed_delta=len(norm_products), failed_delta=0, client=cli)
-
-        for p_num in pages_chunk:
-            await record_listing_page_completed(run_id, p_num, product_count=len(raw_items) if len(pages_chunk) == 1 else 0, client=cli)
-            all_pages_done.add(p_num)
-
-        if raw_items or pages_chunk:
-            await export_canonical_backup("adv", client=cli)
-            print(f"[ADV BATCH] Persisted batch of {len(pages_chunk)} pages ({len(raw_items)} raw items, total persisted: {total_persisted_products}). Browser memory cleared.", flush=True)
-
-        import gc
-        gc.collect()
-
-        # Acknowledge to JS scraper so it advances to next page
-        try:
-            await page_obj.evaluate("() => { window.__BATCH_SAVED__ = true; }")
-        except Exception:
-            pass
+    page = start_page
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"}
 
     try:
-        async with _SCRAPER_LOCK:
-            browser = await get_shared_browser()
-            page = None
-            try:
-                print("Opening lean tab for Adventuras scraper (Playwright)...", flush=True)
-                page = await _create_lean_tab(browser, "https://adventuras.in/")
+        async with httpx.AsyncClient(timeout=35.0, headers=headers) as http_client:
+            while True:
+                if is_stop_requested():
+                    reason = get_stop_reason()
+                    print(f"[adv](collecting data) 🛑 Stopping Adventuras due to stop signal: {reason}", flush=True)
+                    break
 
-                limit_val = int(limit) if limit else 0
-                batch_page_size = 3  # 3 pages per batch as requested by user
-                print(f"Injecting Adventuras JS scraper (startPage={start_page}, batchPageSize={batch_page_size}, limit={limit_val})...", flush=True)
-                await page.evaluate(
-                    """([code, limit, startPage, batchSize]) => {
-                        window.__IS_PLAYWRIGHT__ = true;
-                        window.__START_PAGE__ = startPage;
-                        window.__BATCH_PAGE_SIZE__ = batchSize;
-                        if (limit > 0) window.__PRODUCT_LIMIT__ = limit;
-                        window.eval(code);
-                    }""",
-                    [scraper_code, limit_val, start_page, batch_page_size]
-                )
+                print(f"[adv](collecting data) Fetching Page {page}...", flush=True)
+                if progress_callback:
+                    try:
+                        await progress_callback({
+                            "stage": "Collecting Products",
+                            "current": page,
+                            "total": page + 1,
+                            "variant_count": total_persisted_variants
+                        })
+                    except Exception:
+                        pass
 
-                print("Adventuras scraper is running. Waiting for completion while syncing 3-4 page batches...", flush=True)
-                await _wait_and_poll_progress(
-                    page,
-                    done_flag="__SCRAPER_DONE__",
-                    progress_flag="__SCRAPER_PROGRESS__",
-                    timeout_ms=1800_000,
-                    poll_interval=1.5,
-                    callback=progress_callback,
-                    on_batch_sync=handle_adv_batch
-                )
+                raw_products = []
+                for attempt in range(1, 5):
+                    try:
+                        resp = await http_client.get(f"https://adventuras.in/products.json?limit=250&page={page}")
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            raw_products = data.get("products", [])
+                            break
+                        elif resp.status_code == 429:
+                            print(f"[adv](collecting data) HTTP 429 Rate limited on page {page}. Sleeping {attempt * 3}s...", flush=True)
+                            await asyncio.sleep(attempt * 3.0)
+                        else:
+                            print(f"[adv](collecting data) HTTP {resp.status_code} on page {page} (attempt {attempt}/4)", flush=True)
+                            if attempt < 4:
+                                await asyncio.sleep(attempt * 2.0)
+                    except Exception as err:
+                        print(f"[adv](collecting data) Network error on page {page} (attempt {attempt}/4): {err}", flush=True)
+                        if attempt < 4:
+                            await asyncio.sleep(attempt * 2.0)
 
-                # Final flush of any pending batch
-                await handle_adv_batch(page)
+                if not raw_products:
+                    print(f"[adv](collecting data) Page {page} returned 0 products. Reached end of catalog.", flush=True)
+                    break
 
-            finally:
-                await close_shared_browser()
+                columbia_products = [p for p in raw_products if str(p.get("vendor") or "").strip().lower() == "columbia"]
+                print(f"[adv](collecting data) Page {page}: {len(raw_products)} total products ({len(columbia_products)} Columbia).", flush=True)
+
+                if columbia_products:
+                    norm_products: List[NormalizedProduct] = []
+                    for prod in columbia_products:
+                        pid = str(prod.get("id") or "").strip()
+                        title = str(prod.get("title") or "").strip()
+                        handle = str(prod.get("handle") or "").strip()
+                        p_url = f"https://adventuras.in/products/{handle}" if handle else "https://adventuras.in"
+                        images = prod.get("images") or []
+                        image_url = images[0].get("src") if images else ""
+
+                        variants: List[NormalizedVariant] = []
+                        min_price = None
+                        max_mrp = None
+                        first_style = None
+                        first_sku = None
+                        first_ean = None
+                        total_stock = 0
+
+                        for v in (prod.get("variants") or []):
+                            v_raw_sku = v.get("sku")
+                            v_style, v_sku = normalize_sku_and_style(v_raw_sku, title, pid)
+                            v_size = normalize_size(str(v.get("title") or ""))
+                            v_barcode = str(v.get("barcode") or "").strip() or None
+                            v_avail = bool(v.get("available", True))
+                            v_stock = int(v.get("inventory_quantity") or (10 if v_avail else 0))
+                            total_stock += v_stock
+
+                            try:
+                                v_price = float(v.get("price") or 0.0)
+                            except Exception:
+                                v_price = 0.0
+                            try:
+                                v_comp = v.get("compare_at_price")
+                                v_mrp = float(v_comp) if v_comp else v_price
+                            except Exception:
+                                v_mrp = v_price
+
+                            if not first_style and v_style:
+                                first_style = v_style
+                            if not first_sku and v_sku:
+                                first_sku = v_sku
+                            if not first_ean and v_barcode:
+                                first_ean = v_barcode
+                            if v_price > 0 and (min_price is None or v_price < min_price):
+                                min_price = v_price
+                            if v_mrp > 0 and (max_mrp is None or v_mrp > max_mrp):
+                                max_mrp = v_mrp
+
+                            variants.append(
+                                NormalizedVariant(
+                                    size=v_size,
+                                    sku=v_sku,
+                                    style=v_style,
+                                    ean=v_barcode,
+                                    available=v_avail,
+                                    stock=v_stock,
+                                    price=v_price,
+                                    mrp=v_mrp,
+                                    url=p_url
+                                )
+                            )
+
+                        adv_offers = []
+                        curr_p = min_price or 0.0
+                        if curr_p >= 1000:
+                            adv_offers.append(normalize_offer({
+                                "code": "SNAPMINT_3EMI",
+                                "title": "Pay in 3 with Snapmint (0% Interest)",
+                                "kind": "emi",
+                                "discount_percent": 0.0,
+                                "minimum_transaction_amount": 1000.0,
+                                "issuer": "Snapmint"
+                            }, "adv"))
+                        if curr_p >= 3000:
+                            adv_offers.append(normalize_offer({
+                                "code": "BANK_EMI",
+                                "title": "Credit Card EMI Available (3, 6, 9, 12 Months)",
+                                "kind": "card_offer",
+                                "discount_percent": 5.0,
+                                "minimum_transaction_amount": 3000.0,
+                                "issuer": "Major Banks"
+                            }, "adv"))
+
+                        norm_products.append(
+                            NormalizedProduct(
+                                source="adv",
+                                source_product_id=pid,
+                                title=title,
+                                style=first_style,
+                                sku=first_sku or (variants[0].sku if variants else None),
+                                ean=first_ean or (variants[0].ean if variants else None),
+                                price=min_price or 0.0,
+                                mrp=max_mrp or min_price,
+                                available=any(v.available for v in variants) if variants else True,
+                                stock=total_stock,
+                                image_url=image_url,
+                                url=p_url,
+                                variants=variants,
+                                offers=adv_offers,
+                                scraped_at=datetime.now(timezone.utc).isoformat()
+                            )
+                        )
+
+                        if limit_val > 0 and (total_persisted_products + len(norm_products)) >= limit_val:
+                            limit_reached = True
+                            break
+
+                    if norm_products:
+                        print(f"[adv](storing in database) Streaming {len(norm_products)} Adventuras products to Supabase...", flush=True)
+                        db_products = await upsert_canonical_products_batch(norm_products, client=cli, batch_size=200)
+                        id_by_src = {p["source_product_id"]: p["id"] for p in db_products if "source_product_id" in p and "id" in p}
+
+                        price_entries = []
+                        progress_items = []
+                        chunk_variants = 0
+                        for prod in norm_products:
+                            pid = id_by_src.get(prod.source_product_id)
+                            if pid:
+                                price_entries.append({
+                                    "product_id": pid,
+                                    "price": prod.price,
+                                    "mrp": prod.mrp
+                                })
+                                progress_items.append({
+                                    "product_id": pid,
+                                    "source_product_id": prod.source_product_id,
+                                    "variant_count": len(prod.variants)
+                                })
+                            chunk_variants += len(prod.variants)
+
+                        if price_entries:
+                            added = await batch_record_prices_if_changed(
+                                price_entries, scrape_run_id=run_id, client=cli, batch_size=200
+                            )
+                            total_prices_recorded += added
+
+                        if progress_items:
+                            await batch_record_product_progress(
+                                run_id, progress_items, status="completed", client=cli, batch_size=200
+                            )
+
+                        total_persisted_products += len(norm_products)
+                        total_persisted_variants += chunk_variants
+                        await update_run_counts(run_id, completed_delta=len(norm_products), client=cli)
+                        print(f"[adv](storing in database) Persisted {len(norm_products)} products ({total_persisted_products} total so far).", flush=True)
+
+                    del norm_products
+
+                await record_listing_page_completed(run_id, page, product_count=len(columbia_products), client=cli)
+                all_pages_done.add(page)
+                print(f"[adv](checkpoint) Page {page} checkpointed.", flush=True)
+
+                page_len = len(raw_products)
+                del raw_products, columbia_products
                 import gc
                 gc.collect()
-                print("[BROWSER] Adventuras browser closed. Memory reclaimed.", flush=True)
+
+                if limit_reached:
+                    print(f"[adv](collecting data) Reached product limit of {limit_val}. Stopping pagination.", flush=True)
+                    break
+
+                if page_len < 250:
+                    print(f"[adv](collecting data) Page {page} returned {page_len} < 250 products. Reached end of catalog.", flush=True)
+                    break
+
+                page += 1
+                await asyncio.sleep(0.5)
 
     finally:
         _CURRENT_SCRAPER_RUN_ID = None
@@ -1236,6 +1346,8 @@ async def scrape_adv(
         return {"status": "stopped", "run_id": run_id}
 
     dur = round(time.perf_counter() - t_start, 1)
+    dur_min = int(dur // 60)
+    dur_sec = dur % 60
     await update_run_stage(run_id, "finalizing", client=cli)
     export_path = await export_canonical_backup("adv", client=cli)
 
@@ -1255,31 +1367,12 @@ async def scrape_adv(
     }
     await complete_run(run_id, report=adv_report, client=cli)
 
-    print("\n" + "=" * 60)
-    print(f"ADVENTURAS SCRAPING FINISHED: {total_persisted_products} products persisted across {len(all_pages_done)} pages")
-    print(f"Total Variants Persisted: {total_persisted_variants}")
-    print(f"Price Records Added: {total_prices_recorded}")
-    print(f"Local Rolling Backup: {export_path.resolve()}")
-    print("=" * 60 + "\n", flush=True)
-
-    return {
-        "status": "completed",
-        "run_id": run_id,
-        "completed_products": total_persisted_products,
-        "failed_products": 0,
-        "total_variants": total_persisted_variants,
-        "price_records_added": total_prices_recorded,
-        "export_file": str(export_path),
-        "completed_pages": sorted(list(all_pages_done)),
-    }
-    await complete_run(run_id, report=adv_report, client=cli)
-
-    print("\n" + "=" * 60)
-    print(f"ADVENTURAS SCRAPING FINISHED: {total_persisted_products} products persisted across {len(all_pages_done)} pages")
-    print(f"Total Variants Persisted: {total_persisted_variants}")
-    print(f"Price Records Added: {total_prices_recorded}")
-    print(f"Local Rolling Backup: {export_path.resolve()}")
-    print("=" * 60 + "\n", flush=True)
+    print(f"[adv](summary) ADVENTURAS SCRAPING FINISHED: {total_persisted_products} products persisted across {len(all_pages_done)} pages", flush=True)
+    print(f"[adv](summary) Total Variants Persisted: {total_persisted_variants}", flush=True)
+    print(f"[adv](summary) Price Records Added: {total_prices_recorded}", flush=True)
+    print(f"[adv](summary) Duration: {dur_min} min {dur_sec:.1f} sec ({dur:.1f}s)", flush=True)
+    print(f"[adv](storing in database) Local Rolling Backup: {export_path.resolve()}", flush=True)
+    print(f"[adv](storing in database) Database Report Saved to scrape_runs (ID: {run_id})", flush=True)
 
     return {
         "status": "completed",
@@ -1366,16 +1459,14 @@ async def scrape_tata(
     cli = client or get_supabase_client()
     t_start = time.perf_counter()
 
-    print("\n" + "=" * 60)
-    print("STARTING TATA CLIQ COLUMBIA SCRAPER (ZERO-LEAK TWO-PHASE CHECKPOINTED)")
+    print("[tata](init) STARTING TATA CLIQ COLUMBIA SCRAPER (ZERO-LEAK TWO-PHASE CHECKPOINTED)", flush=True)
     if limit:
-        print(f"TEST MODE: Limited to {limit} products")
-    print("=" * 60, flush=True)
+        print(f"[tata](init) TEST MODE: Limited to {limit} products", flush=True)
 
     run = await get_or_create_daily_run("tata", client=cli)
     run_id = run["id"]
     scraper_id = await get_scraper_id("tata", cli)
-    print(f"[RUN] Tata Scrape Run ID: {run_id} (Date: {run['business_date']}, Status: {run['status']})")
+    print(f"[tata](init) Tata Scrape Run ID: {run_id} (Date: {run['business_date']}, Status: {run['status']})", flush=True)
 
     # =========================================================================
     # Phase 1: Listing Pages & Base Products
@@ -1393,9 +1484,9 @@ async def scrape_tata(
     phase1_needed = not (len(completed_listing_pages) >= 50 or (has_full_catalog and not limit))
 
     if not phase1_needed:
-        print(f"[TATA CHECKPOINT] Phase 1 already complete ({len(completed_listing_pages)} pages in DB, full catalog detected). Skipping listing browser.", flush=True)
+        print(f"[tata](checkpoint) Phase 1 already complete ({len(completed_listing_pages)} pages in DB, full catalog detected). Skipping listing browser.", flush=True)
     else:
-        print(f"[TATA PHASE 1] Starting listing page collection (starting from page {len(completed_listing_pages)})...", flush=True)
+        print(f"[tata](collecting data) [Phase 1] Starting listing page collection (starting from page {len(completed_listing_pages)})...", flush=True)
         await update_run_stage(run_id, "listings", client=cli)
         scraper_path = SCRAPER_DIR / "New_tata_cliq_scraper.js" if (SCRAPER_DIR / "New_tata_cliq_scraper.js").exists() else SCRAPER_DIR / "tata_scraper.js"
         scraper_code = scraper_path.read_text(encoding="utf-8")
@@ -1429,7 +1520,7 @@ async def scrape_tata(
                 await record_listing_page_completed(run_id, p_num, len(raw_prods), client=cli)
                 completed_listing_pages.add(p_num)
                 await export_canonical_backup("tata", client=cli)
-                print(f"[TATA CHECKPOINT] Listing Page {p_num + 1} persisted ({len(raw_prods)} products).", flush=True)
+                print(f"[tata](checkpoint) Listing Page {p_num + 1} persisted ({len(raw_prods)} products).", flush=True)
 
         async with _SCRAPER_LOCK:
             browser = await get_shared_browser()
@@ -1464,7 +1555,7 @@ async def scrape_tata(
             finally:
                 await close_shared_browser()
                 gc.collect()
-                print("[BROWSER] Phase 1 browser closed. All RAM freed.", flush=True)
+                print("[tata](cleanup) Phase 1 browser closed. All RAM freed.", flush=True)
 
     # =========================================================================
     # Phase 2: Middle Resumption & Concurrency=3 Python Variant Fetcher
@@ -1478,7 +1569,7 @@ async def scrape_tata(
     if not pending_items:
         any_prog = await cli.select("scrape_product_progress", columns="id", filters={"scrape_run_id": f"eq.{run_id}"}, limit=1)
         if not any_prog:
-            print("[TATA CHECKPOINT] Initializing product progress tracking from catalog in database...", flush=True)
+            print("[tata](checkpoint) Initializing product progress tracking from catalog in database...", flush=True)
             all_prods = []
             off = 0
             while True:
@@ -1694,13 +1785,12 @@ async def scrape_tata(
         }
         await complete_run(run_id, report=report, client=cli)
 
-        print("\n" + "=" * 60)
-        print(f"TATA CLIQ SCRAPING FINISHED: {total_products_persisted} products persisted")
-        print(f"Total Variants Persisted: {total_variants_persisted}")
-        print(f"Price Records Added: {total_prices_added}")
-        print(f"Local Rolling Backup: {export_path.resolve()}")
-        print(f"Database Report Saved to scrape_runs (ID: {run_id})")
-        print("=" * 60 + "\n", flush=True)
+        print(f"[tata](summary) TATA CLIQ SCRAPING FINISHED: {total_products_persisted} products persisted", flush=True)
+        print(f"[tata](summary) Total Variants Persisted: {total_variants_persisted}", flush=True)
+        print(f"[tata](summary) Price Records Added: {total_prices_added}", flush=True)
+        print(f"[tata](summary) Duration: {dur:.1f}s", flush=True)
+        print(f"[tata](storing in database) Local Rolling Backup: {export_path.resolve()}", flush=True)
+        print(f"[tata](storing in database) Database Report Saved to scrape_runs (ID: {run_id})", flush=True)
 
         return {
             "status": "completed",
@@ -1995,16 +2085,14 @@ async def scrape_tata_lux(
     cli = client or get_supabase_client()
     t_start = time.perf_counter()
 
-    print("\n" + "=" * 60)
-    print("STARTING TATA CLIQ LUXURY SCRAPER (ZERO-LEAK TWO-PHASE CHECKPOINTED)")
+    print("[tata_lux](init) STARTING TATA CLIQ LUXURY SCRAPER (ZERO-LEAK TWO-PHASE CHECKPOINTED)", flush=True)
     if limit:
-        print(f"TEST MODE: Limited to {limit} products")
-    print("=" * 60, flush=True)
+        print(f"[tata_lux](init) TEST MODE: Limited to {limit} products", flush=True)
 
     run = await get_or_create_daily_run("tata_lux", client=cli)
     run_id = run["id"]
     scraper_id = await get_scraper_id("tata_lux", cli)
-    print(f"[RUN] Tata Luxury Scrape Run ID: {run_id} (Date: {run['business_date']}, Status: {run['status']})")
+    print(f"[tata_lux](init) Tata Luxury Scrape Run ID: {run_id} (Date: {run['business_date']}, Status: {run['status']})", flush=True)
 
     # =========================================================================
     # Phase 1: Listing Pages & Base Products
@@ -2022,9 +2110,9 @@ async def scrape_tata_lux(
     phase1_needed = not (len(completed_listing_pages) >= 90 or (has_full_catalog and not limit))
 
     if not phase1_needed:
-        print(f"[TATA LUX CHECKPOINT] Phase 1 already complete ({len(completed_listing_pages)} pages in DB, full catalog detected). Skipping listing browser.", flush=True)
+        print(f"[tata_lux](checkpoint) Phase 1 already complete ({len(completed_listing_pages)} pages in DB, full catalog detected). Skipping listing browser.", flush=True)
     else:
-        print(f"[TATA LUX PHASE 1] Starting listing page collection (starting from page {len(completed_listing_pages)})...", flush=True)
+        print(f"[tata_lux](collecting data) [Phase 1] Starting listing page collection (starting from page {len(completed_listing_pages)})...", flush=True)
         await update_run_stage(run_id, "listings", client=cli)
         scraper_path = SCRAPER_DIR / "New_tata_lux_scraper.js" if (SCRAPER_DIR / "New_tata_lux_scraper.js").exists() else SCRAPER_DIR / "tata_lux_scraper.js"
         scraper_code = scraper_path.read_text(encoding="utf-8")
@@ -2058,7 +2146,7 @@ async def scrape_tata_lux(
                 await record_listing_page_completed(run_id, p_num, len(raw_prods), client=cli)
                 completed_listing_pages.add(p_num)
                 await export_canonical_backup("tata_lux", client=cli)
-                print(f"[TATA LUX CHECKPOINT] Listing Page {p_num + 1} persisted ({len(raw_prods)} products).", flush=True)
+                print(f"[tata_lux](checkpoint) Listing Page {p_num + 1} persisted ({len(raw_prods)} products).", flush=True)
 
         async with _SCRAPER_LOCK:
             await close_shared_browser()
@@ -2318,13 +2406,12 @@ async def scrape_tata_lux(
         }
         await complete_run(run_id, report=report, client=cli)
 
-        print("\n" + "=" * 60)
-        print(f"TATA CLIQ LUXURY SCRAPING FINISHED: {total_products_persisted} products persisted")
-        print(f"Total Variants Persisted: {total_variants_persisted}")
-        print(f"Price Records Added: {total_prices_added}")
-        print(f"Local Rolling Backup: {export_path.resolve()}")
-        print(f"Database Report Saved to scrape_runs (ID: {run_id})")
-        print("=" * 60, flush=True)
+        print(f"[tata_lux](summary) TATA CLIQ LUXURY SCRAPING FINISHED: {total_products_persisted} products persisted", flush=True)
+        print(f"[tata_lux](summary) Total Variants Persisted: {total_variants_persisted}", flush=True)
+        print(f"[tata_lux](summary) Price Records Added: {total_prices_added}", flush=True)
+        print(f"[tata_lux](summary) Duration: {dur:.1f}s", flush=True)
+        print(f"[tata_lux](storing in database) Local Rolling Backup: {export_path.resolve()}", flush=True)
+        print(f"[tata_lux](storing in database) Database Report Saved to scrape_runs (ID: {run_id})", flush=True)
 
         return {
             "source": "tata_lux",
