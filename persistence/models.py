@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
+from persistence.normalizer import normalize_sku_and_style, normalize_size
 
 
 @dataclass
@@ -53,15 +54,17 @@ class NormalizedProduct:
         if computed_stock == 0 and self.variants:
             computed_stock = sum(int(v.stock or 0) for v in self.variants if isinstance(v, NormalizedVariant))
 
-        # Enrich variants with normalized style, sku, size, stock, and offers
+        # Enrich and strictly normalize variants with style, sku, size, stock, and offers
         serialized_variants = []
         for v in self.variants:
             v_dict = v.to_dict() if isinstance(v, NormalizedVariant) else dict(v)
-            if not v_dict.get("style") and style_val:
-                v_dict["style"] = style_val
-            if not v_dict.get("sku") and sku_val:
-                v_dict["sku"] = sku_val
-            if self.offers:
+            v_raw_sku = v_dict.get("sku")
+            v_st, v_norm_sku = normalize_sku_and_style(v_raw_sku, self.title, self.source_product_id)
+            v_dict["sku"] = v_norm_sku or sku_val or v_raw_sku
+            v_dict["style"] = v_st or style_val
+            if v_dict.get("size"):
+                v_dict["size"] = normalize_size(v_dict["size"])
+            if self.offers and not v_dict.get("offers"):
                 v_dict["offers"] = self.offers
             serialized_variants.append(v_dict)
 

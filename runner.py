@@ -1397,7 +1397,7 @@ async def scrape_tata(
     else:
         print(f"[TATA PHASE 1] Starting listing page collection (starting from page {len(completed_listing_pages)})...", flush=True)
         await update_run_stage(run_id, "listings", client=cli)
-        scraper_path = SCRAPER_DIR / "tata_scraper.js"
+        scraper_path = SCRAPER_DIR / "New_tata_cliq_scraper.js" if (SCRAPER_DIR / "New_tata_cliq_scraper.js").exists() else SCRAPER_DIR / "tata_scraper.js"
         scraper_code = scraper_path.read_text(encoding="utf-8")
         timeout_ms = int(os.getenv("TATA_SCRAPE_TIMEOUT_SECONDS", "3600")) * 1000
 
@@ -2026,7 +2026,7 @@ async def scrape_tata_lux(
     else:
         print(f"[TATA LUX PHASE 1] Starting listing page collection (starting from page {len(completed_listing_pages)})...", flush=True)
         await update_run_stage(run_id, "listings", client=cli)
-        scraper_path = SCRAPER_DIR / "tata_lux_scraper.js"
+        scraper_path = SCRAPER_DIR / "New_tata_lux_scraper.js" if (SCRAPER_DIR / "New_tata_lux_scraper.js").exists() else SCRAPER_DIR / "tata_lux_scraper.js"
         scraper_code = scraper_path.read_text(encoding="utf-8")
         timeout_ms = int(os.getenv("TATA_LUX_SCRAPE_TIMEOUT_SECONDS", "3600")) * 1000
 

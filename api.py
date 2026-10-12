@@ -441,16 +441,30 @@ async def reset_single_scraper_endpoint(
 
 
 @app.post("/deploy-trigger")
-@app.get("/deploy-trigger")
 @app.post("/trigger")
-async def deploy_trigger_endpoint(
-    force: bool = Query(False, description="Force run even if already completed today"),
-    wait_seconds: int = Query(0, ge=0, description="Optional seconds to wait before returning status (default 0 returns immediately)")
+@app.post("/scrape/trigger")
+async def deploy_trigger_endpoint_post(
+    force: bool = Query(True, description="Force run even if already completed today"),
+    wait_seconds: int = Query(0, ge=0, description="Optional seconds to wait before returning status")
 ):
     """
-    Endpoint called upon deployment or wakeup.
-    Automatic background scraping on deployment is disabled to prevent unwanted jobs.
-    Scrapers must be triggered explicitly via POST /scrape (or POST /deploy-trigger?force=true).
+    Trigger pipeline explicitly via POST request (defaults to force=True).
+    Executes sequential queue scraper in background and returns HTTP 202.
+    """
+    res = await check_and_trigger_scrapers(force=force, wait_seconds=wait_seconds)
+    status_code = 200 if res.get("status") in ("already_completed", "already_running") else 202
+    return JSONResponse(status_code=status_code, content=res)
+
+
+@app.get("/deploy-trigger")
+@app.get("/trigger")
+async def deploy_trigger_endpoint_get(
+    force: bool = Query(False, description="Force run even if already completed today"),
+    wait_seconds: int = Query(0, ge=0, description="Optional seconds to wait before returning status")
+):
+    """
+    GET probe endpoint for deployment or wakeup status check.
+    Pass ?force=true to trigger scraping via GET.
     """
     if not force:
         b_date = get_business_date()
@@ -460,7 +474,7 @@ async def deploy_trigger_endpoint(
             content={
                 "status": "idle",
                 "business_date": b_date,
-                "message": "Deployment auto-trigger is disabled. Trigger pipeline explicitly via POST /scrape.",
+                "message": "Deployment trigger status probe. Send POST /deploy-trigger or pass ?force=true to trigger pipeline.",
                 "summary": summary,
             }
         )

@@ -31,6 +31,7 @@ async def upsert_canonical_product(
         )
     except Exception as e:
         if any(col in str(e) for col in ("style", "stock", "offers")):
+            print("[PERSISTENCE WARNING] Supabase products table missing style/stock/offers columns. Falling back without them. Run migration 003 in Supabase SQL editor.", flush=True)
             row_data.pop("style", None)
             row_data.pop("stock", None)
             row_data.pop("offers", None)
@@ -87,6 +88,7 @@ async def upsert_canonical_products_batch(
             )
         except Exception as e:
             if any(col in str(e) for col in ("style", "stock", "offers")):
+                print("[PERSISTENCE WARNING] Supabase products table missing style/stock/offers columns. Falling back without them. Run migration 003 in Supabase SQL editor.", flush=True)
                 for r in rows:
                     r.pop("style", None)
                     r.pop("stock", None)
