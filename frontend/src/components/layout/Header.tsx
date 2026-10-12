@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { FileSpreadsheet, Plus, Table2, BarChart2, LogOut, User as UserIcon } from "lucide-react";
+import { FileSpreadsheet, Plus, LogOut, User as UserIcon } from "lucide-react";
 import VantisLogo from "../brand/VantisLogo";
 import MasterExcelModal from "./MasterExcelModal";
 import authService from "../../services/authService";
@@ -12,7 +12,6 @@ interface HeaderProps {
 }
 
 export const Header: React.FC<HeaderProps> = ({ user: propUser, onRefresh }) => {
-  const location = useLocation();
   const navigate = useNavigate();
   const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
@@ -24,46 +23,14 @@ export const Header: React.FC<HeaderProps> = ({ user: propUser, onRefresh }) => 
     navigate("/login");
   };
 
-  const isCatalogue = location.pathname === "/catalogue";
-  const isAnalysis = location.pathname === "/analysis";
-  const showCenterTabs = isCatalogue || isAnalysis;
-
   return (
     <>
-      <header className="sticky top-0 z-40 w-full bg-white/95 backdrop-blur-md border-b border-slate-200/80 px-4 sm:px-8 py-3">
+      <header className="sticky top-0 z-40 w-full bg-white border-b border-slate-200/80 px-4 sm:px-8 py-3">
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
           {/* Left: Brand Logo */}
           <div className="flex items-center gap-3">
             <VantisLogo variant="header" />
           </div>
-
-          {/* Center: View Data / Data Analysis Switcher (Only on Catalogue or Analysis view) */}
-          {showCenterTabs && (
-            <div className="hidden sm:flex items-center bg-slate-100 p-1 rounded-full border border-slate-200/70 shadow-2xs">
-              <Link
-                to="/catalogue"
-                className={`flex items-center gap-2 px-5 py-1.5 rounded-full text-xs font-semibold transition-all ${
-                  isCatalogue
-                    ? "bg-[#079FE0] text-white shadow-xs"
-                    : "text-slate-600 hover:text-slate-900 hover:bg-slate-200/50"
-                }`}
-              >
-                <Table2 className="w-3.5 h-3.5" />
-                <span>View Data</span>
-              </Link>
-              <Link
-                to="/analysis"
-                className={`flex items-center gap-2 px-5 py-1.5 rounded-full text-xs font-semibold transition-all ${
-                  isAnalysis
-                    ? "bg-[#079FE0] text-white shadow-xs"
-                    : "text-slate-600 hover:text-slate-900 hover:bg-slate-200/50"
-                }`}
-              >
-                <BarChart2 className="w-3.5 h-3.5" />
-                <span>Data Analysis</span>
-              </Link>
-            </div>
-          )}
 
           {/* Right: Master Excel Control & User Avatar */}
           <div className="flex items-center gap-3 sm:gap-4">

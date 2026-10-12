@@ -176,8 +176,7 @@ export const SystemStatusPage: React.FC = () => {
                 <th className="py-3 px-4">Last Run</th>
                 <th className="py-3 px-4">Next Scheduled Run</th>
                 <th className="py-3 px-4">Products Fetched</th>
-                <th className="py-3 px-4">Duration</th>
-                <th className="py-3 px-4 text-right">Actions</th>
+                <th className="py-3 px-4 text-right">Duration</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
@@ -197,18 +196,7 @@ export const SystemStatusPage: React.FC = () => {
                   <td className="py-3.5 px-4 font-mono font-bold text-slate-900">
                     {item.products_fetched.toLocaleString("en-IN")}
                   </td>
-                  <td className="py-3.5 px-4 font-mono text-slate-500">{item.duration}</td>
-                  <td className="py-3.5 px-4 text-right">
-                    <div className="inline-flex items-center gap-2">
-                      <button
-                        onClick={() => handleRunScraper(item.platform)}
-                        className="px-2.5 py-1 rounded-lg bg-sky-50 hover:bg-sky-100 text-sky-700 font-bold text-[11px] border border-sky-200 transition-colors inline-flex items-center gap-1 cursor-pointer"
-                      >
-                        <Play className="w-3 h-3 fill-sky-600" />
-                        <span>Run</span>
-                      </button>
-                    </div>
-                  </td>
+                  <td className="py-3.5 px-4 font-mono text-slate-500 text-right">{item.duration}</td>
                 </tr>
               ))}
             </tbody>

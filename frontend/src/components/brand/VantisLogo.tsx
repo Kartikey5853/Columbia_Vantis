@@ -24,7 +24,7 @@ export const VantisLogo: React.FC<VantisLogoProps> = ({
         <img
           src="/vantis_header_logo.png"
           alt="Columbia VANTIS"
-          className="h-9 sm:h-10 w-auto object-contain max-w-full drop-shadow-2xs"
+          className="h-12 sm:h-14 w-auto object-contain max-w-full"
         />
       )}
     </div>
