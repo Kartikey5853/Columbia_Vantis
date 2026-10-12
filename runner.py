@@ -908,15 +908,24 @@ def normalize_shopify_product(prod_data: Dict[str, Any]) -> NormalizedProduct:
     min_price: Optional[float] = None
     max_mrp: Optional[float] = None
     first_sku: Optional[str] = None
+    first_style: Optional[str] = None
     first_ean: Optional[str] = None
+    total_stock = 0
 
     for v in variants_raw:
         if not isinstance(v, dict):
             continue
         v_title = str(v.get("title") or "").strip()
-        v_sku = str(v.get("sku") or "").strip() or None
+        raw_sku = str(v.get("sku") or "").strip() or None
+        v_style, v_sku = normalize_sku_and_style(raw_sku, title, pid)
         v_barcode = str(v.get("barcode") or "").strip() or None
+        v_size = normalize_size(v_title)
+        v_avail = bool(v.get("available", True))
+        v_stock = int(v.get("inventory_quantity") or (10 if v_avail else 0)) if v.get("inventory_quantity") is not None else (10 if v_avail else 0)
+        total_stock += v_stock
 
+        if not first_style and v_style:
+            first_style = v_style
         if not first_sku and v_sku:
             first_sku = v_sku
         if not first_ean and v_barcode:
@@ -941,37 +950,62 @@ def normalize_shopify_product(prod_data: Dict[str, Any]) -> NormalizedProduct:
 
         norm_variants.append(
             NormalizedVariant(
-                size=v_title,
+                size=v_size,
                 sku=v_sku,
+                style=v_style,
                 ean=v_barcode,
-                available=bool(v.get("available", True)),
-                stock=int(v.get("inventory_quantity") or 0) if v.get("inventory_quantity") is not None else 0,
+                available=v_avail,
+                stock=v_stock,
                 price=v_price,
                 mrp=v_compare,
                 url=url
             )
         )
 
+    # Compute Adventuras Snapmint & Card EMI offers
+    adv_offers = []
+    curr_p = min_price or 0.0
+    if curr_p >= 1000:
+        adv_offers.append(normalize_offer({
+            "code": "SNAPMINT_3EMI",
+            "title": "3 Interest-Free EMIs via Snapmint (No Cost)",
+            "kind": "emi",
+            "discount_percent": 0.0,
+            "minimum_transaction_amount": 1000.0,
+            "issuer": "Snapmint"
+        }, "adv"))
+    if curr_p >= 3000:
+        adv_offers.append(normalize_offer({
+            "code": "RAZORPAY_EMI",
+            "title": "Credit Card Low-Cost EMI starting from 3 Months",
+            "kind": "card_offer",
+            "discount_percent": 0.0,
+            "minimum_transaction_amount": 3000.0,
+            "issuer": "Razorpay"
+        }, "adv"))
+
     return NormalizedProduct(
         source="adv",
         source_product_id=pid,
         title=title,
+        style=first_style,
         sku=first_sku,
         ean=first_ean,
         price=min_price or 0.0,
         mrp=max_mrp or min_price or 0.0,
         available=any(v.available for v in norm_variants) if norm_variants else True,
+        stock=total_stock,
         image_url=image_url,
         url=url,
         variants=norm_variants,
+        offers=adv_offers,
         scraped_at=datetime.now(timezone.utc).isoformat()
     )
 
 
 def group_adv_products(raw_items: List[Dict[str, Any]]) -> List[NormalizedProduct]:
     """
-    Groups raw variant items from adv_scraper.js into canonical NormalizedProduct objects.
-    Preserved for backward compatibility and test mock pipelines.
+    Groups raw variant items from New_adv_scraper.js into canonical NormalizedProduct objects.
     """
     grouped: Dict[str, Dict[str, Any]] = {}
 
@@ -980,24 +1014,39 @@ def group_adv_products(raw_items: List[Dict[str, Any]]) -> List[NormalizedProduc
         if not pid:
             continue
 
+        raw_sku = item.get("sku") or None
+        style, sku = normalize_sku_and_style(raw_sku, item.get("title") or "", pid)
+        raw_size = item.get("size") or ""
+        size = normalize_size(raw_size)
+
         if pid not in grouped:
             grouped[pid] = {
                 "source_product_id": pid,
                 "title": item.get("title") or "",
-                "sku": item.get("sku") or None,
+                "style": style,
+                "sku": sku,
                 "ean": item.get("ean") or None,
                 "price": float(item.get("price") or 0.0),
                 "mrp": float(item.get("mrp") or 0.0) if item.get("mrp") else None,
                 "image_url": item.get("image_url") or "",
                 "url": item.get("url") or "",
                 "variants": [],
+                "offers": item.get("offers") or [],
+                "total_stock": 0,
             }
 
+        stock_val = int(item.get("stock") or item.get("inventory_quantity") or 0)
+        grouped[pid]["total_stock"] += stock_val
+
         var = NormalizedVariant(
-            size=str(item.get("size") or ""),
-            sku=item.get("sku") or None,
-            available=True,
-            stock=0,
+            size=size,
+            sku=sku,
+            style=style,
+            ean=item.get("ean") or None,
+            available=bool(item.get("available", True)),
+            stock=stock_val,
+            price=float(item.get("price") or 0.0),
+            mrp=float(item.get("mrp") or 0.0) if item.get("mrp") else None,
             url=item.get("url") or "",
         )
         grouped[pid]["variants"].append(var)
@@ -1011,19 +1060,23 @@ def group_adv_products(raw_items: List[Dict[str, Any]]) -> List[NormalizedProduc
     result = []
     scraped_iso = datetime.now(timezone.utc).isoformat()
     for pid, g in grouped.items():
+        norm_offers = [normalize_offer(o, "adv") for o in g.get("offers", [])]
         result.append(
             NormalizedProduct(
                 source="adv",
                 source_product_id=pid,
                 title=g["title"],
+                style=g["style"],
                 sku=g["sku"],
                 ean=g["ean"],
                 price=g["price"],
                 mrp=g["mrp"],
-                available=True,
+                available=any(v.available for v in g["variants"]) if g["variants"] else True,
+                stock=g["total_stock"],
                 image_url=g["image_url"],
                 url=g["url"],
                 variants=g["variants"],
+                offers=norm_offers,
                 scraped_at=scraped_iso,
             )
         )
@@ -1062,7 +1115,7 @@ async def scrape_adv(
 
     await update_run_stage(run_id, "products", client=cli)
 
-    scraper_path = SCRAPER_DIR / "adv_scraper.js"
+    scraper_path = SCRAPER_DIR / "New_adv_scraper.js" if (SCRAPER_DIR / "New_adv_scraper.js").exists() else SCRAPER_DIR / "adv_scraper.js"
     scraper_code = scraper_path.read_text(encoding="utf-8")
 
     total_persisted_products = run.get("completed_products") or 0

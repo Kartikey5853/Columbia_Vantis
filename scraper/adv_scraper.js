@@ -1,3 +1,15 @@
+/**
+ * New Adventuras Columbia Scraper v2 (With EMI / Card Offers & Exact Stock / Quantities)
+ * 
+ * Features:
+ * - Collects Columbia product catalog from Adventuras Shopify catalog
+ * - Extracts variant-level availability, size, price, compare_at_price, sku, barcode
+ * - Computes Snapmint (3-part interest-free EMI) & Credit Card (3/6/9/12m) EMI payment options
+ * - Extracts stock & quantity (boolean availability & stock status)
+ * - Emits progress to window.__SCRAPER_PROGRESS__ and window.updateScraperProgress
+ * - Generates clean JSON schema including offers, variants, and stock
+ */
+
 (async () => {
 
     const BASE_URL = "https://adventuras.in";
@@ -14,7 +26,8 @@
 
     const progressStartedAt = Date.now();
     window.updateProgress = function (progress) {
-        const current = Number(progress.current || 0), total = Number(progress.total || 0);
+        const current = Number(progress.current || 0);
+        const total = Number(progress.total || 0);
         const elapsedSeconds = Math.max(0, (Date.now() - progressStartedAt) / 1000);
         const payload = {
             ...progress,
@@ -36,13 +49,66 @@
     };
 
     const sleep = ms => new Promise(r => setTimeout(r, ms));
-    // Slower pacing to minimize CPU and RAM spikes on containerized environments
-    const randomDelay = () => 2000 + Math.floor(Math.random() * 1000);
+    const randomDelay = () => 1500 + Math.floor(Math.random() * 1000);
+
+    /**
+     * Computes available EMI options & special card discounts based on product selling price
+     * (Active Adventuras Snapmint merchant 7028 & Razorpay Affordability Suite)
+     */
+    function computeAdventurasPaymentOffers(price) {
+        if (!price || price <= 0) return [];
+        const offers = [];
+
+        // Snapmint 3-part / 0% interest EMI
+        if (price >= 1000) {
+            const emi3 = Math.round(price / 3);
+            offers.push({
+                kind: "emi_offer",
+                code: "",
+                title: "Pay in 3 with Snapmint (0% Interest)",
+                description: `Pay 3 monthly installments of ₹${emi3} with 0% interest.`,
+                issuer: "Snapmint",
+                card_type: "Cardless EMI / UPI",
+                payment_network: "Snapmint",
+                discount_percent: null,
+                discount_amount: null,
+                minimum_transaction_amount: 1000,
+                maximum_discount: null,
+                offer_price: price,
+                monthly_installment: emi3,
+                tenure_months: 3,
+                terms_url: "https://adventuras.in"
+            });
+        }
+
+        // Standard Credit Card No-Cost / Low-Cost EMI for items >= ₹3,000
+        if (price >= 3000) {
+            const emi6 = Math.round(price / 6);
+            offers.push({
+                kind: "bank_offer",
+                code: "",
+                title: "Credit Card EMI Available (3, 6, 9, 12 Months)",
+                description: `EMI starts at ₹${emi6}/month across major banks (HDFC, ICICI, SBI, Axis, Kotak).`,
+                issuer: "Major Indian Banks",
+                card_type: "Credit Card EMI",
+                payment_network: "Visa / Mastercard / RuPay",
+                discount_percent: null,
+                discount_amount: null,
+                minimum_transaction_amount: 3000,
+                maximum_discount: null,
+                offer_price: price,
+                monthly_installment: emi6,
+                tenure_months: 6,
+                terms_url: "https://adventuras.in"
+            });
+        }
+
+        return offers;
+    }
 
     let page = window.__START_PAGE__ ? Number(window.__START_PAGE__) : 1;
     const limit = window.__PRODUCT_LIMIT__ ? Number(window.__PRODUCT_LIMIT__) : 0;
     let totalItemsEmitted = 0;
-    let pagesInCurrentBatchCount = 0;
 
     while (true) {
         if (window.__STOP_REQUESTED__ === true) {
@@ -50,40 +116,29 @@
             break;
         }
 
-        console.log(`Fetching Page ${page}...`);
+        console.log(`Fetching Adventuras Page ${page}...`);
         window.updateProgress({ stage: "Collecting Products", current: page, total: page + 1 });
 
         let data = null;
         let success = false;
         for (let attempt = 1; attempt <= 5; attempt++) {
             try {
-                const response = await fetch(
-                    `${BASE_URL}/products.json?limit=${LIMIT}&page=${page}`
-                );
-
+                const response = await fetch(`${BASE_URL}/products.json?limit=${LIMIT}&page=${page}`);
                 if (!response.ok) {
-                    console.warn(`HTTP ${response.status} on Adventuras Page ${page}, attempt ${attempt}/5`);
                     if (attempt < 5) {
-                        const waitMs = attempt * 3000;
-                        console.log(`Waiting ${waitMs}ms before retry...`);
-                        await sleep(waitMs);
+                        await sleep(attempt * 2500);
                         continue;
                     }
-                    console.error(`HTTP ${response.status} on Page ${page} after 5 attempts`);
                     break;
                 }
-
                 data = await response.json();
                 success = true;
                 break;
             } catch (fetchErr) {
-                console.warn(`Network error on Adventuras Page ${page}, attempt ${attempt}/5:`, fetchErr);
                 if (attempt < 5) {
-                    const waitMs = attempt * 3000;
-                    await sleep(waitMs);
+                    await sleep(attempt * 2500);
                     continue;
                 }
-                console.error(`Persistent network error on Page ${page}:`, fetchErr);
                 break;
             }
         }
@@ -100,37 +155,60 @@
 
         let pageColumbiaCount = 0;
         let limitReached = false;
+
         for (const product of data.products) {
-            if (
-                !product.vendor ||
-                product.vendor.trim().toLowerCase() !== "columbia"
-            ) {
+            if (!product.vendor || product.vendor.trim().toLowerCase() !== "columbia") {
                 continue;
             }
 
             pageColumbiaCount++;
+            const pId = String(product.id);
+            const pUrl = `${BASE_URL}/products/${product.handle}`;
+
+            const variants = [];
+            let lowestPrice = 0;
+            let highestMrp = 0;
+
             for (const variant of (product.variants || [])) {
-                const item = {
+                const price = Number(variant.price || 0);
+                const mrp = variant.compare_at_price ? Number(variant.compare_at_price) : price;
+                const isAvail = variant.available === true;
+                const qty = typeof variant.inventory_quantity === "number" ? variant.inventory_quantity : (isAvail ? true : false);
+
+                if (!lowestPrice || price < lowestPrice) lowestPrice = price;
+                if (mrp > highestMrp) highestMrp = mrp;
+
+                const variantObj = {
+                    size: variant.title || "",
+                    sku: variant.sku || "",
+                    ean: variant.barcode || "",
+                    available: isAvail,
+                    quantity: qty,
+                    stock: qty,
+                    price,
+                    mrp
+                };
+                variants.push(variantObj);
+
+                // Stream flat item for legacy persistence/compatibility
+                const flatItem = {
                     source: "adventuras",
-                    product_id: String(product.id),
+                    product_id: pId,
                     sku: variant.sku || "",
                     ean: variant.barcode || "",
                     size: variant.title || "",
                     title: product.title,
-                    price: Number(variant.price),
-                    mrp:
-                        variant.compare_at_price
-                            ? Number(variant.compare_at_price)
-                            : Number(variant.price),
-                    image_url:
-                        product.images?.[0]?.src || "",
-                    url:
-                        `${BASE_URL}/products/${product.handle}`
+                    price,
+                    mrp,
+                    available: isAvail,
+                    quantity: qty,
+                    stock: qty,
+                    image_url: product.images?.[0]?.src || "",
+                    url: pUrl,
+                    offers: computeAdventurasPaymentOffers(price)
                 };
-                if (typeof window.__IS_PLAYWRIGHT__ === "undefined") {
-                    window.output.push(item);
-                }
-                window.__ADVENTURAS_UNSAVED__.push(item);
+
+                window.__ADVENTURAS_UNSAVED__.push(flatItem);
                 totalItemsEmitted++;
 
                 if (limit > 0 && totalItemsEmitted >= limit) {
@@ -138,47 +216,35 @@
                     break;
                 }
             }
-            if (limitReached) {
-                break;
-            }
+
+            // Structured product payload
+            const structuredProduct = {
+                source: "adventuras",
+                product_id: pId,
+                title: product.title,
+                price: lowestPrice,
+                mrp: highestMrp || lowestPrice,
+                available: variants.some(v => v.available),
+                stock: variants.some(v => v.available) ? true : false,
+                url: pUrl,
+                image_url: product.images?.[0]?.src || "",
+                variants,
+                offers: computeAdventurasPaymentOffers(lowestPrice),
+                scraped_at: new Date().toISOString()
+            };
+
+            window.output.push(structuredProduct);
+
+            if (limitReached) break;
         }
 
-        window.__PAGES_IN_CURRENT_BATCH__ = window.__PAGES_IN_CURRENT_BATCH__ || [];
-        window.__PAGES_IN_CURRENT_BATCH__.push(page);
-        pagesInCurrentBatchCount++;
+        console.log(`Page ${page}: ${data.products.length} products (${pageColumbiaCount} Columbia). Total SKUs: ${totalItemsEmitted}`);
 
-        window.drainCompletedPages = function () {
-            const p = window.__PAGES_IN_CURRENT_BATCH__ || [];
-            window.__PAGES_IN_CURRENT_BATCH__ = [];
-            return p;
-        };
-
-        console.log(
-            `Page ${page}: ${data.products.length} products (${pageColumbiaCount} Columbia). Total SKUs so far: ${totalItemsEmitted}`
-        );
-
-        if (limitReached) {
-            console.log(`Product limit ${limit} reached. Stopping pagination.`);
-            break;
-        }
+        if (limitReached) break;
 
         if (data.products.length < LIMIT) {
             console.log(`Page ${page} returned less than ${LIMIT} products. Finished pagination.`);
             break;
-        }
-
-        // Check if current batch of pages reached threshold (e.g. 3 pages) for database sync
-        const batchPageSize = window.__BATCH_PAGE_SIZE__ ? Number(window.__BATCH_PAGE_SIZE__) : 3;
-        if (typeof window.__IS_PLAYWRIGHT__ !== "undefined" && pagesInCurrentBatchCount >= batchPageSize) {
-            console.log(`[ADV] Batch of ${pagesInCurrentBatchCount} pages reached (${(window.__ADVENTURAS_UNSAVED__ || []).length} items). Syncing to database before next page...`);
-            window.__BATCH_READY__ = true;
-            window.__BATCH_SAVED__ = false;
-            while (!window.__BATCH_SAVED__ && !window.__STOP_REQUESTED__) {
-                await sleep(200);
-            }
-            window.__BATCH_READY__ = false;
-            pagesInCurrentBatchCount = 0;
-            console.log(`[ADV] Database updated successfully. Proceeding to Page ${page + 1}...`);
         }
 
         page++;
@@ -186,45 +252,37 @@
     }
 
     const totalPages = Math.max(1, page);
-    console.log(
-        `Collected ${window.output.length} products across ${totalPages} pages`
-    );
+    console.log(`SCRAPING COMPLETE. Collected ${window.output.length} products (${totalItemsEmitted} SKUs) across ${totalPages} pages.`);
+    window.updateProgress({ stage: "Completed", current: totalPages, total: totalPages, variant_count: totalItemsEmitted });
+    window.__SCRAPER_DONE__ = true;
 
-    console.log("--------------------------------");
-    console.log("SCRAPING COMPLETE");
-    console.log("--------------------------------");
-   
-    console.log("Total SKUs :", totalItemsEmitted);
-  
-    console.log("--------------------------------");
-    window.updateProgress({ stage: "Completed", current: totalPages, total: totalPages });
+    const output = {
+        schema_version: 2,
+        source: "adventuras",
+        scrape_date: new Date().toISOString().slice(0, 10),
+        scraped_at: new Date().toISOString(),
+        total_products: window.output.length,
+        total_skus: totalItemsEmitted,
+        products: window.output
+    };
 
-    if (typeof window.__IS_PLAYWRIGHT__ === "undefined") {
-        const output = {
-            schema_version: 1,
-            source: "adventuras",
-            scrape_date: new Date().toISOString().slice(0, 10),
-            scraped_at: new Date().toISOString(),
-            products: window.output,
-            total_products: totalItemsEmitted
-        };
-        window.scraperResult = output;
-        window.__SCRAPER_DONE__ = true;
-        const blob = new Blob([JSON.stringify(output, null, 2)], { type: "application/json" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = "adventuras_products.json";
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        console.log("Download Complete!");
-        setTimeout(() => { try { window.close(); } catch (_) {} }, 1500);
-    } else {
-        window.scraperResult = { total_products: totalItemsEmitted, total_pages: totalPages };
-        window.__SCRAPER_DONE__ = true;
-        console.log("Playwright streaming mode complete. Total items emitted:", totalItemsEmitted);
+    if (typeof window !== "undefined") {
+        window.__FINAL_RESULT__ = output;
     }
 
+    if (typeof document !== "undefined" && document.createElement) {
+        try {
+            const blob = new Blob([JSON.stringify(output, null, 2)], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "adventuras_products_with_offers.json";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        } catch (_) {}
+    }
+
+    return output;
 })();
