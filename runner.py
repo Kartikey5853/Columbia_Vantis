@@ -1302,30 +1302,49 @@ async def scrape_adv(
 
 def normalize_tata_js_product(raw_p: Dict[str, Any]) -> NormalizedProduct:
     pid = str(raw_p.get("product_id") or "").strip()
+    title = str(raw_p.get("title") or "").strip()
+    raw_sku = raw_p.get("sku")
+    style_code, norm_sku = normalize_sku_and_style(raw_sku, fallback_title=title, fallback_id=pid)
+
     raw_vars = raw_p.get("variants") or []
-    norm_vars = [
-        NormalizedVariant(
-            size=str(v.get("size") or ""),
-            sku=v.get("sku"),
-            available=bool(v.get("available")),
-            stock=int(v.get("stock") or 0),
-            url=v.get("url"),
+    norm_vars = []
+    for v in raw_vars:
+        v_raw_sku = v.get("sku")
+        v_style, v_sku = normalize_sku_and_style(v_raw_sku, fallback_title=title, fallback_id=pid)
+        v_size = normalize_size(str(v.get("size") or ""))
+        norm_vars.append(
+            NormalizedVariant(
+                size=v_size,
+                sku=v_sku or v_raw_sku,
+                style=v_style or style_code,
+                available=bool(v.get("available")),
+                stock=int(v.get("stock") or 0) if v.get("stock") is not None else 0,
+                url=v.get("url"),
+            )
         )
-        for v in raw_vars
-    ]
+
+    raw_offers = raw_p.get("offers") or []
+    norm_offers = [normalize_offer(o, platform="tatacliq") for o in raw_offers] if raw_offers else []
+
+    seller_stock = raw_p.get("seller_available_stock")
+    general_stock = raw_p.get("stock")
+    stock_count = int(seller_stock) if seller_stock is not None else (int(general_stock) if isinstance(general_stock, (int, float)) else (1 if raw_p.get("available") else 0))
 
     return NormalizedProduct(
         source="tata",
         source_product_id=pid,
-        title=str(raw_p.get("title") or "").strip(),
-        sku=None,
+        title=title,
+        style=style_code,
+        sku=norm_sku,
         ean=None,
         price=float(raw_p.get("price") or 0.0),
         mrp=float(raw_p.get("mrp") or 0.0) if raw_p.get("mrp") else None,
         available=bool(raw_p.get("available")),
+        stock=stock_count,
         image_url=raw_p.get("image_url"),
         url=raw_p.get("url"),
         variants=norm_vars,
+        offers=norm_offers,
         scraped_at=datetime.now(timezone.utc).isoformat(),
     )
 
@@ -1597,16 +1616,22 @@ async def scrape_tata(
                                 if resp.status_code == 200 and resp.text:
                                     data = resp.json()
                                     raw_vars = data.get("variantOptions") or []
-                                    variants = [
-                                        NormalizedVariant(
-                                            size=str(v.get("sizelink", {}).get("size") or v.get("sizelink", {}).get("brandSize") or ""),
-                                            sku=v.get("sizelink", {}).get("productCode") or "",
-                                            available=bool(v.get("sizelink", {}).get("isAvailable")),
-                                            stock=int(v.get("sizelink", {}).get("stockCount") or 0) if v.get("sizelink", {}).get("stockCount") is not None else 0,
-                                            url=("https://www.tatacliq.com" + v.get("sizelink", {}).get("url")) if v.get("sizelink", {}).get("url") else ""
+                                    variants = []
+                                    for v in raw_vars:
+                                        slink = v.get("sizelink") or {}
+                                        v_raw_sku = slink.get("productCode") or ""
+                                        v_style, v_sku = normalize_sku_and_style(v_raw_sku, fallback_id=src_id)
+                                        v_size = normalize_size(str(slink.get("size") or slink.get("brandSize") or ""))
+                                        variants.append(
+                                            NormalizedVariant(
+                                                size=v_size,
+                                                sku=v_sku or v_raw_sku,
+                                                style=v_style,
+                                                available=bool(slink.get("isAvailable")),
+                                                stock=int(slink.get("stockCount") or 0) if slink.get("stockCount") is not None else 0,
+                                                url=("https://www.tatacliq.com" + slink.get("url")) if slink.get("url") else ""
+                                            )
                                         )
-                                        for v in raw_vars
-                                    ]
                                     break
                             except Exception as ex:
                                 if attempt == 2:
