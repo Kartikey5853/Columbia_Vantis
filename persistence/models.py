@@ -7,6 +7,7 @@ from typing import List, Optional, Dict, Any
 class NormalizedVariant:
     size: str = ""
     sku: Optional[str] = None
+    style: Optional[str] = None
     ean: Optional[str] = None
     available: bool = True
     stock: int = 0
@@ -20,17 +21,20 @@ class NormalizedVariant:
 
 @dataclass
 class NormalizedProduct:
-    source: str  # "tata" or "columbia"
+    source: str  # "tata", "columbia", "adv", "tata_lux", "amazon"
     source_product_id: str
     title: str
+    style: Optional[str] = None
     sku: Optional[str] = None
     ean: Optional[str] = None
     price: Optional[float] = None
     mrp: Optional[float] = None
     available: bool = True
+    stock: int = 0
     image_url: Optional[str] = None
     url: Optional[str] = None
     variants: List[NormalizedVariant] = field(default_factory=list)
+    offers: List[Dict[str, Any]] = field(default_factory=list)
     scraped_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def to_dict(self) -> Dict[str, Any]:
@@ -39,10 +43,11 @@ class NormalizedProduct:
         return d
 
     def to_db_row(self, scraper_id: str) -> Dict[str, Any]:
-        """Maps normalized product to Supabase 'products' table schema."""
+        """Maps normalized product to Supabase schema."""
         return {
             "scraper_id": scraper_id,
             "source_product_id": str(self.source_product_id).strip(),
+            "style": self.style.strip() if self.style else None,
             "sku": self.sku.strip() if self.sku else None,
             "ean": self.ean.strip() if self.ean else None,
             "title": self.title.strip() if self.title else "",

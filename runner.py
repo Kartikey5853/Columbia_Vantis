@@ -28,6 +28,7 @@ if hasattr(sys.stderr, "reconfigure"):
 load_dotenv()
 
 from persistence.models import NormalizedProduct, NormalizedVariant
+from persistence.normalizer import normalize_sku_and_style, normalize_size, normalize_offer
 from persistence.supabase_client import get_supabase_client
 from persistence.run_store import (
     get_or_create_daily_run,
@@ -503,14 +504,20 @@ query GetProducts($first:Int!, $after:String){
         variants(first:100){
           edges{
             node{
+              id
               sku
               barcode
               availableForSale
+              quantityAvailable
               price{
                 amount
               }
               compareAtPrice{
                 amount
+              }
+              selectedOptions{
+                name
+                value
               }
             }
           }
@@ -643,11 +650,28 @@ async def scrape_columbia(
                     max_mrp = None
 
                     variant_edges = (node.get("variants") or {}).get("edges") or []
+                    first_style = None
+                    total_stock = 0
+
                     for v_edge in variant_edges:
                         v_node = v_edge.get("node") or {}
-                        v_sku = str(v_node.get("sku") or "").strip() or None
+                        raw_v_sku = str(v_node.get("sku") or "").strip() or None
+                        v_style, v_sku = normalize_sku_and_style(raw_v_sku, title, pid)
                         v_barcode = str(v_node.get("barcode") or "").strip() or None
                         v_avail = bool(v_node.get("availableForSale", True))
+                        v_stock = int(v_node.get("quantityAvailable") or (10 if v_avail else 0))
+                        total_stock += v_stock
+
+                        # Extract and normalize size from selectedOptions
+                        raw_size = ""
+                        for opt in v_node.get("selectedOptions") or []:
+                            opt_name = str(opt.get("name") or "").lower()
+                            if "size" in opt_name:
+                                raw_size = opt.get("value") or ""
+                                break
+                            elif not raw_size:
+                                raw_size = opt.get("value") or ""
+                        v_size = normalize_size(raw_size)
 
                         try:
                             v_price = float((v_node.get("price") or {}).get("amount") or 0.0)
@@ -663,6 +687,8 @@ async def scrape_columbia(
                         except Exception:
                             v_mrp = v_price
 
+                        if not first_style and v_style:
+                            first_style = v_style
                         if not first_sku and v_sku:
                             first_sku = v_sku
                         if not first_ean and v_barcode:
@@ -676,29 +702,56 @@ async def scrape_columbia(
 
                         variants.append(
                             NormalizedVariant(
-                                size="",
+                                size=v_size,
                                 sku=v_sku,
+                                style=v_style,
                                 ean=v_barcode,
                                 available=v_avail,
+                                stock=v_stock,
                                 price=v_price,
                                 mrp=v_mrp if v_mrp > 0 else None,
                                 url=product_url,
                             )
                         )
 
+                    # Compute Columbia Snapmint & Card EMI offers
+                    columbia_offers = []
+                    curr_p = min_price or 0.0
+                    if curr_p >= 1000:
+                        columbia_offers.append(normalize_offer({
+                            "code": "SNAPMINT_3EMI",
+                            "title": "3 Interest-Free EMIs via Snapmint (No Cost)",
+                            "kind": "emi",
+                            "discount_percent": 0.0,
+                            "minimum_transaction_amount": 1000.0,
+                            "issuer": "Snapmint"
+                        }, "columbia"))
+                    if curr_p >= 3000:
+                        columbia_offers.append(normalize_offer({
+                            "code": "BANK_EMI",
+                            "title": "Up to 12-Month Low-Cost Bank EMI on Credit Cards",
+                            "kind": "card_offer",
+                            "discount_percent": 5.0,
+                            "minimum_transaction_amount": 3000.0,
+                            "issuer": "Major Banks"
+                        }, "columbia"))
+
                     norm_chunk.append(
                         NormalizedProduct(
                             source="columbia",
                             source_product_id=pid,
                             title=title,
+                            style=first_style,
                             sku=first_sku or (variants[0].sku if variants else None),
                             ean=first_ean or (variants[0].ean if variants else None),
                             price=min_price or (variants[0].price if variants else 0.0),
                             mrp=max_mrp or (variants[0].mrp if variants else None),
                             available=any(v.available for v in variants) if variants else True,
+                            stock=total_stock,
                             image_url=image_url,
                             url=product_url,
                             variants=variants,
+                            offers=columbia_offers,
                             scraped_at=datetime.now(timezone.utc).isoformat(),
                         )
                     )
