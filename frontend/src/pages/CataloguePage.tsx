@@ -262,7 +262,7 @@ export const CataloguePage: React.FC = () => {
                 <th className="py-3 px-3 text-center">Variants</th>
                 <th className="py-3 px-3 text-center">Sizes</th>
                 <th className="py-3 px-3 text-center">Platforms</th>
-                <th className="py-3 px-4">Lowest Price</th>
+                <th className="py-3 px-4">MRP</th>
                 <th className="py-3 px-3 text-right">Actions</th>
               </tr>
             </thead>
@@ -361,16 +361,14 @@ export const CataloguePage: React.FC = () => {
                           {product.platforms_count}
                         </td>
 
-                        {/* Lowest Price */}
+                        {/* MRP */}
                         <td className="py-3.5 px-4 whitespace-nowrap">
                           <div className="font-extrabold text-slate-900">
-                            ₹{product.lowest_price.toLocaleString("en-IN")}
+                            ₹{(product.mrp || product.lowest_price).toLocaleString("en-IN")}
                           </div>
-                          {product.discount_percent && product.discount_percent > 0 ? (
-                            <span className="text-[10px] font-bold text-emerald-700">
-                              ↓ {product.discount_percent}%
-                            </span>
-                          ) : null}
+                          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                            MRP
+                          </div>
                         </td>
 
                         {/* Action Expand */}
@@ -455,10 +453,10 @@ export const CataloguePage: React.FC = () => {
 
                                   <div className="text-right pl-4 border-l border-slate-100">
                                     <div className="text-xl font-black text-slate-900">
-                                      ₹{product.lowest_price.toLocaleString("en-IN")}
+                                      ₹{(product.mrp || product.lowest_price).toLocaleString("en-IN")}
                                     </div>
-                                    <div className="text-[11px] font-bold text-slate-400">
-                                      Lowest Price {product.discount_percent && `↓ ${product.discount_percent}%`}
+                                    <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                                      MRP
                                     </div>
                                     <button
                                       onClick={() => navigate(`/products/${encodeURIComponent(product.family_id)}`)}

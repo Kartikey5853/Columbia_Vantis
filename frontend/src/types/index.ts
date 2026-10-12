@@ -59,6 +59,7 @@ export interface PlatformListing {
   sizes_available_count: number;
   sizes_summary: string;
   offers: ProductOffer[];
+  variants?: ProductVariant[];
   last_updated?: string | null;
 }
 

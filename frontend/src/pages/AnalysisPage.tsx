@@ -69,7 +69,11 @@ export const AnalysisPage: React.FC = () => {
         page_size: pageSize,
       });
 
-      setProducts(data.products);
+      // User requirement: "in data analysis dont show anything unless there is a price change in any platform"
+      const withChanges = (data.products || []).filter(
+        (p) => p.price_change_percent !== 0 || p.min_recorded_price !== p.max_recorded_price
+      );
+      setProducts(withChanges);
       setTotalRecords(data.total_records);
       setTotalPages(data.total_pages);
       setCurrentPage(data.page);
@@ -357,7 +361,7 @@ export const AnalysisPage: React.FC = () => {
                       {formatCurrency(prod.lowest_price)}
                     </span>
                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                      Best Price
+                      Current Price
                     </span>
                   </div>
 

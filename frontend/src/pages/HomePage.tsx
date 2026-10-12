@@ -429,24 +429,14 @@ export const HomePage: React.FC = () => {
                             {/* Right: Lowest Price & Compare CTAs */}
                             <div className="flex items-center justify-between md:justify-end gap-6 pt-3 md:pt-0 border-t md:border-t-0 border-slate-100 shrink-0">
                               <div className="text-left md:text-right">
-                                <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
-                                  Lowest Price
+                                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
+                                  MRP
                                 </span>
                                 <div className="flex items-baseline gap-2">
                                   <span className="text-2xl font-black text-slate-900">
-                                    ₹{product.lowest_price.toLocaleString("en-IN")}
+                                    ₹{(product.mrp || product.lowest_price).toLocaleString("en-IN")}
                                   </span>
-                                  {product.mrp && product.mrp > product.lowest_price && (
-                                    <span className="text-xs text-slate-400 line-through font-semibold">
-                                      ₹{product.mrp.toLocaleString("en-IN")}
-                                    </span>
-                                  )}
                                 </div>
-                                {Boolean(product.discount_percent && product.discount_percent > 0) && (
-                                  <span className="text-[11px] font-bold text-emerald-600 block">
-                                    Up to {product.discount_percent}% off
-                                  </span>
-                                )}
                               </div>
 
                               <div className="flex items-center gap-2">
@@ -516,11 +506,6 @@ export const HomePage: React.FC = () => {
                                             {listing.platform_name}
                                           </span>
                                         </div>
-                                        {isLowest && listing.price && (
-                                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800">
-                                            Lowest
-                                          </span>
-                                        )}
                                       </div>
 
                                       {/* Price & Stock */}

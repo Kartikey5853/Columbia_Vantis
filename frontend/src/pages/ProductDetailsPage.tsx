@@ -4,15 +4,17 @@ import {
   ArrowLeft,
   RotateCw,
   ExternalLink,
-  ChevronRight,
   Maximize2,
-  Check,
   Tag,
-  ShieldCheck,
-  TrendingDown,
+  CheckCircle2,
+  AlertCircle,
+  Package,
+  Layers,
+  Percent,
+  Check,
 } from "lucide-react";
 import productService from "../services/productService";
-import { ProductFamily, PlatformListing } from "../types";
+import { ProductFamily, PlatformListing, ProductVariant, ProductOffer } from "../types";
 import PlatformLogo from "../components/brand/PlatformLogo";
 
 export const ProductDetailsPage: React.FC = () => {
@@ -23,11 +25,8 @@ export const ProductDetailsPage: React.FC = () => {
 
   // User selections
   const [selectedImage, setSelectedImage] = useState<string>("");
-  const [selectedVariantIndex, setSelectedVariantIndex] = useState<number>(0);
-  const [selectedSize, setSelectedSize] = useState<string>("9");
-  const [sortOrder, setSortOrder] = useState<string>("price_asc");
-  const [showOnlyAvailable, setShowOnlyAvailable] = useState<boolean>(false);
-  const [selectedOfferModal, setSelectedOfferModal] = useState<any | null>(null);
+  const [selectedPlatformKey, setSelectedPlatformKey] = useState<string>("columbia");
+  const [selectedOfferModal, setSelectedOfferModal] = useState<ProductOffer | null>(null);
 
   useEffect(() => {
     if (familyId) {
@@ -42,8 +41,12 @@ export const ProductDetailsPage: React.FC = () => {
       const data = await productService.getProductDetails(id);
       setProduct(data);
       setSelectedImage(data.image_url || "");
-      if (data.sizes && data.sizes.length > 0) {
-        setSelectedSize(data.sizes[0]);
+      // Default to first platform that has active price or listing
+      const firstActive = data.platforms.find((p) => p.price !== null && p.price !== undefined);
+      if (firstActive) {
+        setSelectedPlatformKey(firstActive.platform);
+      } else if (data.platforms.length > 0) {
+        setSelectedPlatformKey(data.platforms[0].platform);
       }
     } catch (err: any) {
       setError(err.message || "Failed to load product details.");
@@ -80,32 +83,21 @@ export const ProductDetailsPage: React.FC = () => {
   }
 
   // Thumbnails gallery
-  const allImages = Array.from(new Set([product.image_url, ...product.gallery_images].filter(Boolean) as string[]));
+  const allImages = Array.from(
+    new Set([product.image_url, ...product.gallery_images].filter(Boolean) as string[])
+  );
 
-  // Size list
-  const sizeOptions = product.sizes && product.sizes.length > 0
-    ? product.sizes
-    : ["6", "7", "8", "9", "10", "11", "12"];
+  // Active selected platform listing
+  const activeListing: PlatformListing =
+    product.platforms.find((p) => p.platform === selectedPlatformKey) || product.platforms[0];
 
-  // Sort and filter platform listings
-  let filteredPlatforms = [...product.platforms];
-  if (showOnlyAvailable) {
-    filteredPlatforms = filteredPlatforms.filter((p) => p.price !== null && p.availability_status !== "Out of stock");
-  }
-
-  filteredPlatforms.sort((a, b) => {
-    if (sortOrder === "price_asc") {
-      const pa = a.price ?? 999999;
-      const pb = b.price ?? 999999;
-      return pa - pb;
-    }
-    if (sortOrder === "price_desc") {
-      const pa = a.price ?? 0;
-      const pb = b.price ?? 0;
-      return pb - pa;
-    }
-    return 0;
-  });
+  // Active platform variants list: fallback to family variants if platform-level variants empty
+  const activeVariants: ProductVariant[] =
+    activeListing.variants && activeListing.variants.length > 0
+      ? activeListing.variants
+      : activeListing.price !== null
+      ? (product.variants || [])
+      : [];
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-8 py-6 space-y-8">
@@ -120,24 +112,24 @@ export const ProductDetailsPage: React.FC = () => {
         </Link>
 
         <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
-          <span>Last updated: {product.data_freshness || "10 Oct 2026, 11:42 AM"}</span>
+          <span>Last updated: {product.data_freshness || "12 Oct 2026, 05:30 PM"}</span>
           <button
             onClick={() => loadProduct(product.family_id)}
             className="p-1 hover:text-sky-600 transition-colors cursor-pointer"
-            title="Refresh price snapshot"
+            title="Refresh snapshot"
           >
             <RotateCw className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
 
-      {/* Top 3-Part Desktop Section */}
+      {/* Top 3-Part Section */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 bg-white p-6 sm:p-8 rounded-3xl border border-slate-200/90 shadow-sm">
-        {/* Left Column (lg: 4 cols): Gallery & Main Product Image */}
+        {/* Left Column (lg: 4 cols): All Images & Main Image Preview */}
         <div className="lg:col-span-4 flex gap-4">
           {/* Vertical Thumbnail Strip */}
           <div className="flex flex-col gap-2 shrink-0">
-            {allImages.slice(0, 4).map((img, idx) => (
+            {allImages.slice(0, 5).map((img, idx) => (
               <button
                 key={idx}
                 onClick={() => setSelectedImage(img)}
@@ -147,7 +139,11 @@ export const ProductDetailsPage: React.FC = () => {
                     : "border-slate-200 hover:border-slate-300 opacity-80 hover:opacity-100"
                 }`}
               >
-                <img src={img} alt="Thumb" className="w-full h-full object-contain mix-blend-multiply" />
+                <img
+                  src={img}
+                  alt={`Thumb ${idx + 1}`}
+                  className="w-full h-full object-contain mix-blend-multiply"
+                />
               </button>
             ))}
           </div>
@@ -169,8 +165,8 @@ export const ProductDetailsPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Center Column (lg: 5 cols): Title, Identifiers, Color swatches, Sizes */}
-        <div className="lg:col-span-5 space-y-4">
+        {/* Center Column (lg: 5 cols): Title, Identifiers, & PLATFORM SELECTOR */}
+        <div className="lg:col-span-5 space-y-5">
           <div className="space-y-1">
             <div className="inline-flex items-center gap-1.5 text-xs font-bold text-sky-600 uppercase tracking-wider">
               <span>{product.brand}</span>
@@ -181,7 +177,7 @@ export const ProductDetailsPage: React.FC = () => {
           </div>
 
           {/* Identifier Row */}
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 font-mono py-1 border-y border-slate-100">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 font-mono py-1.5 border-y border-slate-100">
             {product.style && (
               <span>
                 Style: <span className="font-semibold text-slate-800">{product.style}</span>
@@ -215,81 +211,82 @@ export const ProductDetailsPage: React.FC = () => {
             ))}
           </div>
 
-          {/* Colour / Variant Selector */}
-          <div className="space-y-2 pt-2">
+          {/* PLATFORM SELECTOR (Top Tile Platform Option) */}
+          <div className="space-y-2.5 pt-2">
             <div className="flex items-center justify-between text-xs font-bold text-slate-700">
-              <span>Colour / Variant</span>
+              <span className="uppercase tracking-wider text-[11px] text-slate-500">
+                Select Platform For Data
+              </span>
               <span className="text-slate-400 font-normal">
-                {product.colours_count || 4} variants available
+                {product.platforms.filter((p) => p.price !== null).length} of 7 platforms available
               </span>
             </div>
 
-            <div className="flex items-center gap-2">
-              {[0, 1, 2, 3].map((vIdx) => (
-                <button
-                  key={vIdx}
-                  onClick={() => setSelectedVariantIndex(vIdx)}
-                  className={`relative w-14 h-14 rounded-xl border p-1 bg-slate-50 overflow-hidden transition-all ${
-                    selectedVariantIndex === vIdx
-                      ? "border-sky-500 ring-2 ring-sky-200"
-                      : "border-slate-200 hover:border-slate-300"
-                  }`}
-                >
-                  <img
-                    src={allImages[vIdx % allImages.length] || product.image_url || ""}
-                    alt={`Variant ${vIdx}`}
-                    className="w-full h-full object-contain mix-blend-multiply"
-                  />
-                  {selectedVariantIndex === vIdx && (
-                    <div className="absolute top-1 right-1 w-3.5 h-3.5 bg-sky-500 rounded-full text-white flex items-center justify-center">
-                      <Check className="w-2.5 h-2.5 stroke-[3]" />
+            {/* Platform Selection Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {product.platforms.map((plat) => {
+                const isSelected = selectedPlatformKey === plat.platform;
+                const isAvailable = plat.price !== null && plat.price !== undefined;
+
+                return (
+                  <button
+                    key={plat.platform}
+                    type="button"
+                    onClick={() => {
+                      setSelectedPlatformKey(plat.platform);
+                      if (plat.image_url) {
+                        setSelectedImage(plat.image_url);
+                      }
+                    }}
+                    className={`p-2.5 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-1.5 ${
+                      isSelected
+                        ? "bg-sky-50/70 border-sky-400 ring-2 ring-sky-200 shadow-xs"
+                        : isAvailable
+                        ? "bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50/50 shadow-2xs"
+                        : "bg-slate-50/60 border-slate-200/60 opacity-60 hover:opacity-90"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <PlatformLogo platform={plat.platform} size="sm" showLabel={false} />
+                      {isSelected && (
+                        <span className="w-4 h-4 rounded-full bg-sky-500 text-white flex items-center justify-center">
+                          <Check className="w-2.5 h-2.5 stroke-[3]" />
+                        </span>
+                      )}
                     </div>
-                  )}
-                </button>
-              ))}
-              <div className="text-xs text-slate-600 font-semibold pl-2">
-                Black / Graphite (010)
-              </div>
+                    <div>
+                      <div className="font-extrabold text-xs text-slate-900 truncate">
+                        {plat.platform_name}
+                      </div>
+                      <div className="flex items-center gap-1.5 mt-0.5 text-[11px]">
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full ${
+                            isAvailable
+                              ? plat.availability_status === "In stock"
+                                ? "bg-emerald-500"
+                                : "bg-amber-500"
+                              : "bg-slate-300"
+                          }`}
+                        />
+                        <span className={`font-semibold ${isAvailable ? "text-slate-700" : "text-slate-400"}`}>
+                          {isAvailable ? `₹${plat.price?.toLocaleString("en-IN")}` : "Unlisted"}
+                        </span>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
             </div>
-          </div>
-
-          {/* Select Size (UK) */}
-          <div className="space-y-2 pt-2">
-            <div className="flex items-center justify-between text-xs font-bold text-slate-700">
-              <span>Select Size (UK)</span>
-              <span className="text-sky-600 hover:underline cursor-pointer font-medium">
-                View size guide
-              </span>
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              {sizeOptions.map((sz) => (
-                <button
-                  key={sz}
-                  onClick={() => setSelectedSize(sz)}
-                  className={`w-10 h-10 rounded-xl text-xs font-bold transition-all ${
-                    selectedSize === sz
-                      ? "bg-[#079FE0] text-white shadow-xs"
-                      : "bg-slate-100 hover:bg-slate-200 text-slate-700"
-                  }`}
-                >
-                  {sz}
-                </button>
-              ))}
-            </div>
-            <p className="text-[11px] text-slate-400 font-medium">
-              {product.sizes_count} sizes available across catalog
-            </p>
           </div>
         </div>
 
-        {/* Right Column (lg: 3 cols): Product Summary Card */}
+        {/* Right Column (lg: 3 cols): Product Summary (Variants, Sizes, Platforms - NO Colours) & MRP */}
         <div className="lg:col-span-3 bg-slate-50/70 rounded-2xl border border-slate-100 p-6 flex flex-col justify-between space-y-6">
           <div className="space-y-4">
             <h3 className="font-bold text-slate-900 text-sm">Product Summary</h3>
 
-            {/* 4-Stat Grid */}
-            <div className="grid grid-cols-2 gap-2.5">
+            {/* 3-Stat Grid: Variants, Sizes, Platforms (Colours removed as colours == variants) */}
+            <div className="grid grid-cols-3 gap-2">
               <div className="p-3 bg-white rounded-xl border border-slate-200/80 text-center">
                 <div className="text-xl font-black text-sky-600">{product.variants_count}</div>
                 <div className="text-[11px] text-slate-500 font-medium mt-0.5">Variants</div>
@@ -302,231 +299,283 @@ export const ProductDetailsPage: React.FC = () => {
                 <div className="text-xl font-black text-sky-600">{product.platforms_count}</div>
                 <div className="text-[11px] text-slate-500 font-medium mt-0.5">Platforms</div>
               </div>
-              <div className="p-3 bg-white rounded-xl border border-slate-200/80 text-center">
-                <div className="text-xl font-black text-sky-600">{product.colours_count || 3}</div>
-                <div className="text-[11px] text-slate-500 font-medium mt-0.5">Colours</div>
-              </div>
             </div>
           </div>
 
-          {/* Pricing Highlight */}
-          <div className="space-y-2 pt-4 border-t border-slate-200">
-            <div className="flex items-baseline gap-2">
-              <span className="text-3xl font-black text-slate-900 tracking-tight">
-                ₹{product.lowest_price.toLocaleString("en-IN")}
+          {/* Pricing Highlight: Just MRP (no Lowest Price, no discount down text) */}
+          <div className="space-y-3 pt-4 border-t border-slate-200">
+            <div>
+              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
+                MRP
               </span>
-              <span className="text-xs font-bold text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded">
-                Lowest Price
-              </span>
+              <div className="text-3xl font-black text-slate-900 tracking-tight mt-0.5">
+                ₹{(product.mrp || product.lowest_price).toLocaleString("en-IN")}
+              </div>
             </div>
-            <p className="text-xs text-slate-500 font-medium">
-              Across all 7 monitored platforms
-            </p>
+
+            {/* Active Platform Listed Price */}
+            {activeListing && activeListing.price !== null && activeListing.price !== undefined ? (
+              <div className="p-3 bg-white rounded-xl border border-slate-200/80 space-y-1">
+                <div className="text-[11px] text-slate-500 font-medium">
+                  {activeListing.platform_name} Price:
+                </div>
+                <div className="text-lg font-black text-slate-900">
+                  ₹{activeListing.price.toLocaleString("en-IN")}
+                </div>
+                <div className="text-[11px] font-semibold text-emerald-600 flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3" />
+                  <span>{activeListing.availability_status}</span>
+                </div>
+              </div>
+            ) : (
+              <div className="p-3 bg-slate-100 rounded-xl border border-slate-200/60 text-xs font-semibold text-slate-500 text-center">
+                Out of stock on {activeListing?.platform_name || "selected platform"}
+              </div>
+            )}
           </div>
         </div>
       </div>
 
-      {/* Platform Comparison Table Section */}
-      <div className="bg-white rounded-3xl border border-slate-200/90 shadow-sm overflow-hidden">
-        {/* Table Header Bar */}
-        <div className="p-6 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div>
-            <h2 className="text-lg font-black text-slate-900 tracking-tight">
-              Platform Comparison
-            </h2>
-            <p className="text-xs text-slate-500 font-medium mt-0.5">
-              Selected variant: Black / Graphite (010) | Size: UK {selectedSize}
-            </p>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-4">
-            {/* Sort Dropdown */}
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-500 font-medium">Sort by</span>
-              <select
-                value={sortOrder}
-                onChange={(e) => setSortOrder(e.target.value)}
-                className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-500/20"
-              >
-                <option value="price_asc">Price: Low to High</option>
-                <option value="price_desc">Price: High to Low</option>
-              </select>
+      {/* Bottom Section: Full Variants, Sizes, Stock, Price & Offers for Selected Platform */}
+      <div className="bg-white rounded-3xl border border-slate-200/90 shadow-sm overflow-hidden space-y-6 p-6 sm:p-8">
+        {/* Selected Platform Header Bar */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-100">
+          <div className="flex items-center gap-3">
+            <PlatformLogo platform={activeListing.platform} size="lg" showLabel={false} />
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-lg font-black text-slate-900 tracking-tight">
+                  {activeListing.platform_name} Catalog Intelligence
+                </h2>
+                <span
+                  className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${
+                    activeListing.price !== null
+                      ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                      : "bg-slate-100 text-slate-500 border-slate-200"
+                  }`}
+                >
+                  {activeListing.availability_status}
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 font-medium mt-0.5">
+                Exact scraped variants, sizes, inventory levels, and payment promotions
+              </p>
             </div>
-
-            {/* Toggle show only available */}
-            <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-700 select-none">
-              <span>Show only available</span>
-              <input
-                type="checkbox"
-                checked={showOnlyAvailable}
-                onChange={(e) => setShowOnlyAvailable(e.target.checked)}
-                className="w-4 h-4 text-sky-500 rounded focus:ring-sky-500"
-              />
-            </label>
           </div>
+
+          {activeListing.url && activeListing.price !== null && (
+            <a
+              href={activeListing.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl transition-all shadow-2xs self-start sm:self-auto cursor-pointer"
+            >
+              <span>View On {activeListing.platform_name}</span>
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+          )}
         </div>
 
-        {/* Comparison Table */}
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-slate-50/70 border-b border-slate-200/80 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                <th className="py-3 px-4">Platform</th>
-                <th className="py-3 px-4">Product Image</th>
-                <th className="py-3 px-4">Listing Title</th>
-                <th className="py-3 px-4">Price</th>
-                <th className="py-3 px-4">Availability</th>
-                <th className="py-3 px-4">Sizes Available</th>
-                <th className="py-3 px-4">Offers</th>
-                <th className="py-3 px-4">Last Updated</th>
-                <th className="py-3 px-4 text-right">Action</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 text-xs text-slate-700">
-              {filteredPlatforms.map((listing: PlatformListing) => {
-                const hasListing = listing.price !== null && listing.price !== undefined && listing.price > 0;
-                const isLowest = listing.price === product.lowest_price;
-                const priceDiff = hasListing && listing.price ? listing.price - product.lowest_price : 0;
-                const primaryOffer = listing.offers && listing.offers.length > 0 ? listing.offers[0] : null;
+        {/* OFFERS SECTION (Promo codes, bank discounts, EMI options from JSON) */}
+        {activeListing.offers && activeListing.offers.length > 0 && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <Tag className="w-4 h-4 text-sky-500" />
+              <h3 className="font-extrabold text-sm text-slate-900 uppercase tracking-wider text-[11px]">
+                Available Platform Offers &amp; Discounts ({activeListing.offers.length})
+              </h3>
+            </div>
 
-                return (
-                  <tr
-                    key={listing.platform}
-                    className="hover:bg-slate-50/60 transition-colors"
-                  >
-                    {/* Platform */}
-                    <td className="py-4 px-4 font-semibold text-slate-900 whitespace-nowrap">
-                      <PlatformLogo platform={listing.platform} showLabel size="md" />
-                    </td>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {activeListing.offers.map((off, oidx) => (
+                <div
+                  key={oidx}
+                  onClick={() => setSelectedOfferModal(off)}
+                  className="p-3.5 bg-slate-50/80 hover:bg-sky-50/40 rounded-2xl border border-slate-200/90 transition-all cursor-pointer space-y-1.5"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="font-bold text-xs text-slate-900 line-clamp-1">
+                      {off.title || "Special Promotion"}
+                    </span>
+                    {off.code && (
+                      <span className="font-mono text-[10px] font-bold bg-white text-sky-700 border border-sky-200 px-2 py-0.5 rounded-md shrink-0">
+                        {off.code}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-500 line-clamp-2">
+                    {off.description || off.issuer || "Special discount at checkout."}
+                  </p>
+                  {(off.discount_amount || off.discount_percent || off.offer_price) && (
+                    <div className="text-[11px] font-bold text-emerald-600 pt-0.5">
+                      {off.discount_amount && `Flat ₹${off.discount_amount} Off`}
+                      {off.discount_percent && `${off.discount_percent}% Instant Discount`}
+                      {off.offer_price && `Effective Price: ₹${off.offer_price.toLocaleString("en-IN")}`}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
-                    {/* Image */}
-                    <td className="py-4 px-4">
-                      <div className="w-12 h-12 rounded-lg bg-slate-50 border border-slate-100 p-0.5 overflow-hidden flex items-center justify-center">
-                        <img
-                          src={listing.image_url || product.image_url || "/vantis_logo.png"}
-                          alt={listing.listing_title}
-                          className="w-full h-full object-contain mix-blend-multiply"
-                        />
-                      </div>
-                    </td>
+        {/* VARIANTS & SIZES STOCK TABLE */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Layers className="w-4 h-4 text-sky-500" />
+              <h3 className="font-extrabold text-sm text-slate-900 uppercase tracking-wider text-[11px]">
+                Variant-Level Inventory &amp; Size Breakdown
+              </h3>
+            </div>
+            <span className="text-xs font-semibold text-slate-400">
+              {activeVariants.length > 0 ? `${activeVariants.length} variants listed` : "1 standard listing"}
+            </span>
+          </div>
 
-                    {/* Listing Title & Identifiers */}
-                    <td className="py-4 px-4 max-w-xs">
-                      <div className="font-semibold text-slate-900 text-xs line-clamp-1">
-                        {listing.listing_title}
-                      </div>
-                      <div className="text-[11px] text-slate-400 font-mono mt-0.5">
-                        Style: {product.style || "2005101"} {product.ean && `• EAN: ${product.ean}`}
-                      </div>
-                    </td>
+          <div className="overflow-x-auto rounded-2xl border border-slate-200/90">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="bg-slate-50/80 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                  <th className="py-3 px-4">Size</th>
+                  <th className="py-3 px-4">Variant / Color</th>
+                  <th className="py-3 px-4">SKU / Identifier</th>
+                  <th className="py-3 px-4">Stock &amp; Availability</th>
+                  <th className="py-3 px-4">Price</th>
+                  <th className="py-3 px-4">MRP</th>
+                  <th className="py-3 px-4 text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
+                {activeVariants.length > 0 ? (
+                  activeVariants.map((v, vidx) => {
+                    const isAvailable = v.available !== false;
+                    const stockVal = v.stock ?? v.quantity;
 
-                    {/* Price & Difference */}
-                    <td className="py-4 px-4 whitespace-nowrap">
-                      {hasListing ? (
-                        <div>
-                          <div className="font-extrabold text-sm text-slate-900">
-                            ₹{listing.price?.toLocaleString("en-IN")}
+                    return (
+                      <tr key={vidx} className="hover:bg-slate-50/60 transition-colors">
+                        {/* Size */}
+                        <td className="py-3.5 px-4 font-bold text-slate-900">
+                          <span className="inline-block px-2.5 py-1 bg-slate-100 rounded-lg text-xs font-mono font-bold">
+                            {v.size || "Standard"}
+                          </span>
+                        </td>
+
+                        {/* Color / Variant */}
+                        <td className="py-3.5 px-4 font-semibold text-slate-800">
+                          {v.color || product.title}
+                        </td>
+
+                        {/* SKU */}
+                        <td className="py-3.5 px-4 font-mono text-[11px] text-slate-500">
+                          {v.sku || v.ean || product.style || "—"}
+                        </td>
+
+                        {/* Stock & Availability */}
+                        <td className="py-3.5 px-4 whitespace-nowrap">
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className={`w-2 h-2 rounded-full ${
+                                isAvailable ? "bg-emerald-500" : "bg-rose-400"
+                              }`}
+                            />
+                            <span className={`font-bold ${isAvailable ? "text-emerald-700" : "text-rose-600"}`}>
+                              {isAvailable ? "In stock" : "Out of stock"}
+                            </span>
+                            {stockVal && isAvailable && (
+                              <span className="text-[11px] text-slate-400 font-normal">
+                                ({typeof stockVal === "number" ? `${stockVal} units` : stockVal})
+                              </span>
+                            )}
                           </div>
-                          {isLowest ? (
-                            <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200">
-                              Lowest
-                            </span>
-                          ) : (
-                            <span className="text-[10px] font-bold text-rose-600">
-                              +₹{priceDiff.toLocaleString("en-IN")}
-                            </span>
-                          )}
-                        </div>
-                      ) : (
-                        <span className="text-slate-300 font-semibold">—</span>
-                      )}
-                    </td>
+                        </td>
 
-                    {/* Availability */}
-                    <td className="py-4 px-4 whitespace-nowrap">
+                        {/* Price */}
+                        <td className="py-3.5 px-4 font-extrabold text-slate-900">
+                          {v.price ? `₹${v.price.toLocaleString("en-IN")}` : activeListing.price ? `₹${activeListing.price.toLocaleString("en-IN")}` : "—"}
+                        </td>
+
+                        {/* MRP */}
+                        <td className="py-3.5 px-4 font-mono text-slate-500">
+                          {v.mrp ? `₹${v.mrp.toLocaleString("en-IN")}` : product.mrp ? `₹${product.mrp.toLocaleString("en-IN")}` : "—"}
+                        </td>
+
+                        {/* Action */}
+                        <td className="py-3.5 px-4 text-right">
+                          <a
+                            href={v.url || activeListing.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-all cursor-pointer"
+                          >
+                            <span>View</span>
+                            <ExternalLink className="w-3 h-3 text-slate-400" />
+                          </a>
+                        </td>
+                      </tr>
+                    );
+                  })
+                ) : (
+                  /* Single listing fallback */
+                  <tr>
+                    <td className="py-4 px-4 font-bold text-slate-900">
+                      <span className="px-2.5 py-1 bg-slate-100 rounded-lg text-xs font-mono font-bold">
+                        {activeListing.sizes_summary || "Standard"}
+                      </span>
+                    </td>
+                    <td className="py-4 px-4 font-semibold text-slate-800">
+                      {activeListing.listing_title}
+                    </td>
+                    <td className="py-4 px-4 font-mono text-xs text-slate-500">
+                      {product.style || product.sku || "—"}
+                    </td>
+                    <td className="py-4 px-4">
                       <div className="flex items-center gap-1.5">
                         <span
                           className={`w-2 h-2 rounded-full ${
-                            listing.availability_status === "In stock"
-                              ? "bg-emerald-500"
-                              : listing.availability_status === "Limited stock"
-                              ? "bg-amber-500"
-                              : "bg-slate-300"
+                            activeListing.price !== null ? "bg-emerald-500" : "bg-slate-300"
                           }`}
                         />
-                        <span className="font-semibold text-slate-800">
-                          {listing.availability_status}
+                        <span className="font-bold text-slate-800">
+                          {activeListing.availability_status}
                         </span>
-                      </div>
-                      <div className="text-[11px] text-slate-400 mt-0.5">
-                        {listing.stock_text || "Ships in 1-2 days"}
-                      </div>
-                    </td>
-
-                    {/* Sizes Available */}
-                    <td className="py-4 px-4 whitespace-nowrap">
-                      <div className="font-semibold text-slate-800">
-                        {hasListing ? listing.sizes_summary : "Unavailable"}
-                      </div>
-                      <div className="text-[11px] text-slate-400 mt-0.5">
-                        {hasListing ? "UK 6 - 12" : "—"}
+                        {activeListing.stock_text && (
+                          <span className="text-slate-400 font-normal">
+                            ({activeListing.stock_text})
+                          </span>
+                        )}
                       </div>
                     </td>
-
-                    {/* Offers */}
-                    <td className="py-4 px-4 max-w-[200px]">
-                      {primaryOffer ? (
-                        <button
-                          type="button"
-                          onClick={() => setSelectedOfferModal(primaryOffer)}
-                          className="text-left group cursor-pointer"
+                    <td className="py-4 px-4 font-extrabold text-slate-900">
+                      {activeListing.price ? `₹${activeListing.price.toLocaleString("en-IN")}` : "—"}
+                    </td>
+                    <td className="py-4 px-4 font-mono text-slate-500">
+                      {product.mrp ? `₹${product.mrp.toLocaleString("en-IN")}` : "—"}
+                    </td>
+                    <td className="py-4 px-4 text-right">
+                      {activeListing.url && activeListing.price !== null ? (
+                        <a
+                          href={activeListing.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-all"
                         >
-                          <div className="text-xs font-bold text-sky-700 bg-sky-50 border border-sky-200 px-2 py-0.5 rounded-full inline-flex items-center gap-1 group-hover:bg-sky-100 transition-colors">
-                            <Tag className="w-3 h-3 text-sky-500" />
-                            <span className="truncate max-w-[140px]">{primaryOffer.title}</span>
-                          </div>
-                          <div className="text-[10px] text-slate-400 mt-0.5 truncate max-w-[180px]">
-                            {primaryOffer.description || primaryOffer.issuer || "Bank & member promotion"}
-                          </div>
-                        </button>
+                          <span>View</span>
+                          <ExternalLink className="w-3 h-3 text-slate-400" />
+                        </a>
                       ) : (
-                        <span className="text-slate-400 text-xs">No offers</span>
-                      )}
-                    </td>
-
-                    {/* Last Updated */}
-                    <td className="py-4 px-4 whitespace-nowrap text-[11px] text-slate-500">
-                      <div>10 Oct 2026</div>
-                      <div className="text-slate-400">10:12 AM</div>
-                    </td>
-
-                    {/* Action */}
-                    <td className="py-4 px-4 text-right whitespace-nowrap">
-                      {hasListing ? (
-                        <div className="inline-flex items-center gap-1">
-                          <a
-                            href={listing.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl border border-slate-200 hover:border-sky-400 hover:bg-sky-50 text-sky-600 font-semibold text-xs transition-all shadow-2xs"
-                          >
-                            <span>View</span>
-                            <ExternalLink className="w-3.5 h-3.5" />
-                          </a>
-                        </div>
-                      ) : (
-                        <span className="text-slate-300 text-xs italic">N/A</span>
+                        <span className="text-slate-300 italic text-xs">Unlisted</span>
                       )}
                     </td>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
-      {/* Offer Details Popover Modal */}
+      {/* Offer Modal */}
       {selectedOfferModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4">
           <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl border border-slate-200 space-y-4">
@@ -537,35 +586,53 @@ export const ProductDetailsPage: React.FC = () => {
               </div>
               <button
                 onClick={() => setSelectedOfferModal(null)}
-                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+                className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
               >
                 ✕
               </button>
             </div>
 
             <p className="text-xs text-slate-600 leading-relaxed">
-              {selectedOfferModal.description || "Special offer applicable at checkout."}
+              {selectedOfferModal.description || "Promotion applicable directly at checkout."}
             </p>
 
             <div className="p-3 bg-slate-50 rounded-xl space-y-1.5 text-xs text-slate-600 border border-slate-100">
               {selectedOfferModal.code && (
-                <div>Coupon Code: <span className="font-mono font-bold text-slate-900">{selectedOfferModal.code}</span></div>
+                <div>
+                  Coupon Code:{" "}
+                  <span className="font-mono font-bold text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200">
+                    {selectedOfferModal.code}
+                  </span>
+                </div>
               )}
               {selectedOfferModal.issuer && (
-                <div>Issuer / Bank: <span className="font-semibold text-slate-800">{selectedOfferModal.issuer}</span></div>
+                <div>
+                  Bank / Issuer:{" "}
+                  <span className="font-semibold text-slate-800">{selectedOfferModal.issuer}</span>
+                </div>
               )}
               {selectedOfferModal.minimum_transaction_amount && (
-                <div>Min Transaction: <span className="font-semibold text-slate-800">₹{selectedOfferModal.minimum_transaction_amount}</span></div>
+                <div>
+                  Min Transaction:{" "}
+                  <span className="font-semibold text-slate-800">
+                    ₹{selectedOfferModal.minimum_transaction_amount}
+                  </span>
+                </div>
               )}
               {selectedOfferModal.maximum_discount && (
-                <div>Max Discount: <span className="font-semibold text-slate-800">₹{selectedOfferModal.maximum_discount}</span></div>
+                <div>
+                  Max Discount:{" "}
+                  <span className="font-semibold text-slate-800">
+                    ₹{selectedOfferModal.maximum_discount}
+                  </span>
+                </div>
               )}
             </div>
 
             <div className="flex justify-end pt-2">
               <button
                 onClick={() => setSelectedOfferModal(null)}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 rounded-xl text-xs font-semibold text-slate-700"
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 rounded-xl text-xs font-semibold text-slate-700 cursor-pointer"
               >
                 Close
               </button>

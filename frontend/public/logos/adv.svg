@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 40" fill="none">
+  <rect width="40" height="40" rx="8" fill="#111827"/>
+  <path d="M20 7L29 23H23.5L20 16.5L16.5 23H11L20 7Z" fill="#F59E0B"/>
+  <path d="M14 26L20 14L26 26H22L20 21L18 26H14Z" fill="#FFFFFF"/>
+  <path d="M20 27L22 31H18L20 27Z" fill="#F59E0B"/>
+  <text x="48" y="25" fill="#111827" font-family="system-ui, -apple-system, sans-serif" font-weight="900" font-size="14" letter-spacing="1.5">ADVENTURAS</text>
+</svg>

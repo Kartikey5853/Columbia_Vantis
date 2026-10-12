@@ -453,6 +453,7 @@ class CatalogService:
                     # Variants & sizes
                     item_vars = best_item.get("variants") or []
                     plat_sizes = []
+                    plat_variants = []
                     avail = best_item.get("available", True)
                     
                     if isinstance(item_vars, list) and item_vars:
@@ -467,7 +468,7 @@ class CatalogService:
                                 sizes_set.add(sz)
                             if col:
                                 colors_set.add(col)
-                            variants_list.append({
+                            v_obj = {
                                 "size": sz,
                                 "color": col or None,
                                 "sku": v.get("sku") or best_item.get("sku"),
@@ -478,7 +479,9 @@ class CatalogService:
                                 "price": clean_price(v.get("price")) or p_val,
                                 "mrp": clean_price(v.get("mrp")) or m_val,
                                 "url": v.get("url") or best_item.get("url") or best_item.get("href")
-                            })
+                            }
+                            plat_variants.append(v_obj)
+                            variants_list.append(v_obj)
 
                     # Parse offers
                     offers_raw = best_item.get("offers") or []
@@ -531,6 +534,7 @@ class CatalogService:
                         "sizes_available_count": len(plat_sizes),
                         "sizes_summary": sizes_summary,
                         "offers": parsed_offers,
+                        "variants": plat_variants,
                         "last_updated": best_item.get("scraped_at") or "10 Oct 2026, 11:42 AM"
                     })
                 else:
@@ -552,6 +556,7 @@ class CatalogService:
                         "sizes_available_count": 0,
                         "sizes_summary": "0 sizes",
                         "offers": [],
+                        "variants": [],
                         "last_updated": None
                     })
 
@@ -851,11 +856,17 @@ class CatalogService:
                 min_p = c_data.get("min_recorded_price", lowest)
                 max_p = c_data.get("max_recorded_price", lowest)
                 spark = c_data.get("sparkline") or [lowest] * 6
-            else:
-                pct = 0.0
-                min_p = lowest
-                max_p = lowest
-                spark = [lowest] * 6
+            # Check if there is an actual price change in history or across platforms
+            has_price_change = (pct != 0.0) or (min_p != max_p) or (len(set(spark)) > 1)
+            active_plat_prices = [pl["price"] for pl in p.get("platforms", []) if pl.get("price") is not None and pl["price"] > 0]
+            if len(set(active_plat_prices)) > 1:
+                has_price_change = True
+                if pct == 0.0:
+                    pct = round(((max(active_plat_prices) - min(active_plat_prices)) / max(active_plat_prices)) * -100, 1)
+
+            # User requirement: "in data analysis dont show anything unless there is a price change in any platform"
+            if not has_price_change:
+                continue
 
             enriched.append({
                 "family_id": p["family_id"],
