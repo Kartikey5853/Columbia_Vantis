@@ -76,6 +76,7 @@ app.include_router(analytics_router)
 app.include_router(master_data_router)
 app.include_router(system_router)
 
+@app.get("/health")
 @app.get("/healthz")
 @app.get("/api/health")
 async def api_health_check():

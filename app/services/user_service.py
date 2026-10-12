@@ -37,21 +37,20 @@ def init_user_db():
         ("raj", hash_password("raj123"), "Raj Columbia Specialist", "Product Analyst")
     ]
 
-    # Check if a master excel file already exists in repository to link as default if needed
+    # Check if a master excel file or mappings already exist in repository
     existing_master = None
-    for f in MASTER_DATA_DIR.glob("*master*.xlsx"):
+    for f in MASTER_DATA_DIR.glob("*.xlsx"):
         existing_master = f
         break
+    has_mappings_json = (DATA_DIR / "master_catalog_mappings.json").exists()
+    has_master_default = 1 if (existing_master or has_mappings_json) else 0
+    m_filename_default = existing_master.name if existing_master else ("Master_Catalog_Columbia.xlsx" if has_mappings_json else None)
+    m_path_default = str(existing_master) if existing_master else (str(DATA_DIR / "master_catalog_mappings.json") if has_mappings_json else None)
 
     for username, p_hash, d_name, role in seed_users:
         cursor.execute("SELECT username, password_hash, has_master_excel FROM app_users WHERE username = ?", (username,))
         row = cursor.fetchone()
         if not row:
-            # Check if kartikey already has master file
-            has_master = 1 if existing_master else 0
-            m_filename = existing_master.name if existing_master else None
-            m_path = str(existing_master) if existing_master else None
-
             cursor.execute("""
                 INSERT INTO app_users (
                     username, password_hash, display_name, role,
@@ -62,11 +61,17 @@ def init_user_db():
                 username, p_hash, d_name, role,
                 "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
                 "Asia/Kolkata", 1, "light",
-                has_master, m_filename, m_path, 3513 if has_master else 0
+                has_master_default, m_filename_default, m_path_default, 3513 if has_master_default else 0
             ))
-        else:
-            # Ensure default hash matches if needed or keep existing
-            pass
+        elif has_master_default and not row[2]:
+            cursor.execute("""
+                UPDATE app_users
+                SET has_master_excel = 1,
+                    master_excel_filename = COALESCE(master_excel_filename, ?),
+                    master_excel_path = COALESCE(master_excel_path, ?),
+                    master_excel_records = CASE WHEN master_excel_records > 0 THEN master_excel_records ELSE 3513 END
+                WHERE username = ?
+            """, (m_filename_default, m_path_default, username))
 
     conn.commit()
     conn.close()
@@ -90,7 +95,12 @@ class UserService:
         conn.close()
         if not row:
             return None
-        return dict(row)
+        d = dict(row)
+        if not d.get("has_master_excel") and (DATA_DIR / "master_catalog_mappings.json").exists():
+            d["has_master_excel"] = 1
+            d["master_excel_filename"] = d.get("master_excel_filename") or "Master_Catalog_Columbia.xlsx"
+            d["master_excel_records"] = d.get("master_excel_records") or 3513
+        return d
 
     @classmethod
     def authenticate(cls, username: str, password: str) -> Optional[Dict[str, Any]]:

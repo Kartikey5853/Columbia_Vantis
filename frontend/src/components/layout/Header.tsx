@@ -17,7 +17,26 @@ export const Header: React.FC<HeaderProps> = ({ user: propUser, onRefresh }) => 
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [avatarLoadError, setAvatarLoadError] = useState(false);
 
-  const user = propUser || authService.getSavedUser();
+  const [currentUser, setCurrentUser] = useState<User | null>(propUser || authService.getSavedUser());
+
+  React.useEffect(() => {
+    if (propUser) setCurrentUser(propUser);
+  }, [propUser]);
+
+  React.useEffect(() => {
+    const handleSync = () => {
+      setCurrentUser(authService.getSavedUser());
+      setAvatarLoadError(false);
+    };
+    window.addEventListener("storage", handleSync);
+    window.addEventListener("vantis_user_updated", handleSync);
+    return () => {
+      window.removeEventListener("storage", handleSync);
+      window.removeEventListener("vantis_user_updated", handleSync);
+    };
+  }, []);
+
+  const user = currentUser;
 
   const handleLogout = async () => {
     await authService.logout();

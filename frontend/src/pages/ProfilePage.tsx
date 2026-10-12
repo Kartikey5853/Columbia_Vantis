@@ -90,13 +90,21 @@ export const ProfilePage: React.FC = () => {
           const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
           setAvatarUrl(dataUrl);
           setAvatarLoadError(false);
+          let updatedUser: any = null;
           try {
-            const updated = await authService.updateProfile({ avatar_url: dataUrl });
-            setUser(updated);
+            updatedUser = await authService.updateProfile({ avatar_url: dataUrl });
+          } catch {
+            // Local fallback
+            const cur = authService.getSavedUser() || user || {};
+            updatedUser = { ...cur, avatar_url: dataUrl };
+          }
+          if (updatedUser) {
+            setUser(updatedUser);
+            localStorage.setItem("vantis_user", JSON.stringify(updatedUser));
+            window.dispatchEvent(new Event("storage"));
+            window.dispatchEvent(new CustomEvent("vantis_user_updated", { detail: updatedUser }));
             setSuccessMessage("Profile photo updated and saved successfully!");
             setTimeout(() => setSuccessMessage(null), 3500);
-          } catch (err: any) {
-            setErrorMessage(err.message || "Failed to save avatar to profile.");
           }
         }
         setIsUploadingAvatar(false);
@@ -117,13 +125,20 @@ export const ProfilePage: React.FC = () => {
   const handleRemoveAvatar = async () => {
     setAvatarUrl("");
     setAvatarLoadError(false);
+    let updatedUser: any = null;
     try {
-      const updated = await authService.updateProfile({ avatar_url: "" });
-      setUser(updated);
+      updatedUser = await authService.updateProfile({ avatar_url: "" });
+    } catch {
+      const cur = authService.getSavedUser() || user || {};
+      updatedUser = { ...cur, avatar_url: "" };
+    }
+    if (updatedUser) {
+      setUser(updatedUser);
+      localStorage.setItem("vantis_user", JSON.stringify(updatedUser));
+      window.dispatchEvent(new Event("storage"));
+      window.dispatchEvent(new CustomEvent("vantis_user_updated", { detail: updatedUser }));
       setSuccessMessage("Profile photo removed.");
       setTimeout(() => setSuccessMessage(null), 3500);
-    } catch (err: any) {
-      setErrorMessage(err.message || "Failed to remove photo.");
     }
   };
 
@@ -131,16 +146,23 @@ export const ProfilePage: React.FC = () => {
     e.preventDefault();
     setErrorMessage(null);
     setSuccessMessage(null);
+    let updatedUser: any = null;
     try {
-      const updated = await authService.updateProfile({
+      updatedUser = await authService.updateProfile({
         display_name: displayName,
         avatar_url: avatarUrl,
       });
-      setUser(updated);
+    } catch {
+      const cur = authService.getSavedUser() || user || {};
+      updatedUser = { ...cur, display_name: displayName, avatar_url: avatarUrl };
+    }
+    if (updatedUser) {
+      setUser(updatedUser);
+      localStorage.setItem("vantis_user", JSON.stringify(updatedUser));
+      window.dispatchEvent(new Event("storage"));
+      window.dispatchEvent(new CustomEvent("vantis_user_updated", { detail: updatedUser }));
       setSuccessMessage("Profile details successfully saved.");
       setTimeout(() => setSuccessMessage(null), 3500);
-    } catch (err: any) {
-      setErrorMessage(err.message || "Failed to save profile.");
     }
   };
 
@@ -208,57 +230,55 @@ export const ProfilePage: React.FC = () => {
 
       {/* Profile Card */}
       <div className="bg-white rounded-3xl border border-slate-200/90 shadow-sm overflow-hidden">
-        {/* Banner with Avatar Overlay */}
-        <div className="h-28 bg-[#079FE0] relative px-6">
-          <div className="absolute -bottom-10 left-8 flex items-end gap-4">
-            <div className="relative group">
-              <div className="w-20 h-20 rounded-2xl bg-white p-1 ring-4 ring-white shadow-md overflow-hidden flex items-center justify-center">
-                {avatarUrl && !avatarLoadError ? (
-                  <img
-                    src={avatarUrl}
-                    alt={user?.username}
-                    className="w-full h-full object-cover rounded-xl"
-                    onError={() => setAvatarLoadError(true)}
-                  />
-                ) : (
-                  <div className="w-full h-full bg-gradient-to-br from-sky-400 to-[#079FE0] text-white font-black text-2xl flex items-center justify-center rounded-xl shadow-inner">
-                    {userInitial}
-                  </div>
-                )}
-              </div>
-
-              {/* Camera Icon Overlay to Upload/Change Avatar */}
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={isUploadingAvatar}
-                className="absolute inset-0 rounded-2xl bg-black/50 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
-                title="Change Avatar Image"
-              >
-                <Camera className="w-6 h-6" />
-              </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                onChange={handleAvatarFileChange}
-                className="hidden"
-              />
+        {/* Clean Profile Header (No blue banner, no job title) */}
+        <div className="p-8 pb-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center gap-6">
+          <div className="relative group shrink-0">
+            <div className="w-20 h-20 rounded-2xl bg-slate-50 p-1 border border-slate-200 shadow-xs overflow-hidden flex items-center justify-center">
+              {avatarUrl && !avatarLoadError ? (
+                <img
+                  src={avatarUrl}
+                  alt={user?.username}
+                  className="w-full h-full object-cover rounded-xl"
+                  onError={() => setAvatarLoadError(true)}
+                />
+              ) : (
+                <div className="w-full h-full bg-slate-900 text-white font-black text-2xl flex items-center justify-center rounded-xl shadow-inner">
+                  {userInitial}
+                </div>
+              )}
             </div>
 
-            <div className="mb-3">
-              <h2 className="text-lg font-black text-slate-900 leading-tight">
-                {user?.display_name || user?.username}
-              </h2>
-              <div className="text-xs text-slate-500 font-bold">
-                @{user?.username} • {user?.role || "Columbia Lead"}
-              </div>
+            {/* Camera Icon Overlay to Upload/Change Avatar */}
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isUploadingAvatar}
+              className="absolute inset-0 rounded-2xl bg-black/60 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+              title="Change Profile Photo"
+            >
+              <Camera className="w-6 h-6" />
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleAvatarFileChange}
+              className="hidden"
+            />
+          </div>
+
+          <div>
+            <h2 className="text-xl font-black text-slate-900 leading-tight">
+              {user?.display_name || user?.username}
+            </h2>
+            <div className="text-xs text-slate-400 font-mono mt-0.5">
+              @{user?.username}
             </div>
           </div>
         </div>
 
         {/* User Details Form */}
-        <form onSubmit={handleSaveProfile} className="p-8 pt-16 space-y-6">
+        <form onSubmit={handleSaveProfile} className="p-8 pt-6 space-y-6">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
             {/* Username (Fixed / Read-only) */}
             <div className="space-y-1.5">

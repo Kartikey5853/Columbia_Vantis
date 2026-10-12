@@ -54,7 +54,7 @@ export interface PlatformListing {
   price?: number | null;
   mrp?: number | null;
   price_difference?: number | null;
-  availability_status: "In stock" | "Limited stock" | "Out of stock" | "Unknown";
+  availability_status: "In stock" | "Limited stock" | "Out of stock" | "No data available" | "Unknown" | string;
   stock_text?: string | null;
   sizes_available_count: number;
   sizes_summary: string;

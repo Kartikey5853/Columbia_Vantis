@@ -244,8 +244,8 @@ export const SystemStatusPage: React.FC = () => {
                     <td className="py-3.5 px-4 text-slate-600 font-mono text-[11px]">
                       {r.timestamp}
                     </td>
-                    <td className="py-3.5 px-4 font-bold text-slate-900">
-                      <PlatformLogo platform={r.platform} showLabel size="sm" />
+                    <td className="py-3.5 px-4 font-bold text-slate-900 text-xs">
+                      {r.platform}
                     </td>
                     <td className="py-3.5 px-4 font-mono text-slate-500 text-[11px]">
                       {r.job_id}
@@ -258,14 +258,14 @@ export const SystemStatusPage: React.FC = () => {
                           ? "bg-sky-50 text-sky-700 border-sky-200"
                           : "bg-rose-50 text-rose-700 border-rose-200"
                       }`}>
-                        <span className={`w-1.5 h-1.5 rounded-full ${
-                          r.status.toLowerCase() === "completed"
-                            ? "bg-emerald-500"
+                        <span>
+                          {r.status.toLowerCase() === "completed"
+                            ? "✅"
                             : r.status.toLowerCase() === "running"
-                            ? "bg-sky-500 animate-pulse"
-                            : "bg-rose-500"
-                        }`} />
-                        {r.status.toUpperCase()}
+                            ? "⚡"
+                            : "❌"}
+                        </span>
+                        <span>{r.status.toUpperCase()}</span>
                       </span>
                     </td>
                     <td className="py-3.5 px-4 font-mono font-bold text-slate-900">

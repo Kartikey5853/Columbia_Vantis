@@ -5,14 +5,19 @@ __pycache__/
 .pytest_cache/
 env
 test-results/
-*data
-!data/supabase_catalog_cache.json
+data/*
+!data/master_catalog_mappings.json
+jobs_data/
+new_data/
 akamai_cookies.json
 *cookies*.json
 *.cookies.json
 scratch
 experiments
-master_data_uploads/
+master_data_uploads/*
+!master_data_uploads/job_excel_d14b07b2_master.xlsx
+amazon_scraper/data/
+amazon_v4/data/
 *.zip
 amazon_scraper/*.json
 old files/

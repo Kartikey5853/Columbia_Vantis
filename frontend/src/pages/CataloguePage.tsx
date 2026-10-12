@@ -482,24 +482,30 @@ export const CataloguePage: React.FC = () => {
                                         key={plat.platform}
                                         className="p-3 bg-slate-50/70 rounded-xl border border-slate-200/80 space-y-1.5"
                                       >
-                                        <PlatformLogo platform={plat.platform} showLabel size="sm" />
+                                        <div className="font-bold text-xs text-slate-800 truncate">
+                                          {plat.platform_name}
+                                        </div>
                                         <div className="font-extrabold text-sm text-slate-900">
                                           {hasPlat ? `₹${plat.price?.toLocaleString("en-IN")}` : "—"}
                                         </div>
                                         <div className="flex items-center gap-1 text-[10px] font-semibold">
                                           <span
                                             className={`w-1.5 h-1.5 rounded-full ${
-                                              plat.availability_status === "In stock"
-                                                ? "bg-emerald-500"
-                                                : plat.availability_status === "Limited stock"
-                                                ? "bg-amber-500"
+                                              hasPlat
+                                                ? plat.availability_status === "In stock"
+                                                  ? "bg-emerald-500"
+                                                  : plat.availability_status === "Limited stock"
+                                                  ? "bg-amber-500"
+                                                  : "bg-rose-500"
                                                 : "bg-slate-300"
                                             }`}
                                           />
-                                          <span className="text-slate-600">{plat.availability_status}</span>
+                                          <span className={hasPlat ? "text-slate-700" : "text-slate-400"}>
+                                            {hasPlat ? plat.availability_status : "No data available"}
+                                          </span>
                                         </div>
                                         <div className="text-[10px] text-slate-400">
-                                          {hasPlat ? plat.sizes_summary : "0 sizes"}
+                                          {hasPlat ? plat.sizes_summary : "—"}
                                         </div>
                                       </div>
                                     );

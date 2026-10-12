@@ -162,7 +162,9 @@ async def get_recent_runs():
         s_map = {s["id"]: s["name"] for s in scrapers}
         raw_runs = await cli.select("scrape_runs", columns="*", order="started_at.desc", limit=25)
         
-        runs = []
+        from datetime import timedelta
+        IST = timezone(timedelta(hours=5, minutes=30))
+
         name_pretty = {
             "amazon": "Amazon",
             "columbia": "Columbia India",
@@ -172,16 +174,27 @@ async def get_recent_runs():
             "myntra": "Myntra",
             "ajio": "AJIO"
         }
+        platform_emojis = {
+            "amazon": "📦",
+            "columbia": "🏔️",
+            "adv": "🧗",
+            "tata": "🛍️",
+            "tata_lux": "💎",
+            "myntra": "👗",
+            "ajio": "🏷️"
+        }
         for r in raw_runs:
             raw_name = s_map.get(r.get("scraper_id")) or (r.get("report") or {}).get("scraper") or "columbia"
             p_name = name_pretty.get(raw_name, raw_name.title())
+            p_emoji = platform_emojis.get(raw_name, "📊")
             
             st_raw = r.get("started_at") or r.get("updated_at")
             ts_str = "Recent"
             if st_raw and len(st_raw) >= 16:
                 try:
                     dt = datetime.fromisoformat(st_raw.replace("Z", "+00:00"))
-                    ts_str = dt.strftime("%d %b %Y, %I:%M %p")
+                    dt_ist = dt.astimezone(IST)
+                    ts_str = dt_ist.strftime("%d %b %Y, %I:%M %p IST")
                 except Exception:
                     ts_str = st_raw[:16].replace("T", " ")
 
@@ -190,15 +203,16 @@ async def get_recent_runs():
             dur_str = f"{int(dur_sec // 60)}m {int(dur_sec % 60)}s" if dur_sec else "Completed"
             
             p_count = r.get("completed_products") or rep.get("completed_products") or r.get("total_products") or 0
+            raw_status = (r.get("status") or "completed").lower()
 
             runs.append({
                 "id": str(r.get("id")),
                 "timestamp": ts_str,
-                "platform": p_name,
+                "platform": f"{p_emoji} {p_name}",
                 "platform_key": raw_name,
                 "business_date": r.get("business_date") or "2026-10-12",
                 "job_id": str(r.get("id"))[:12],
-                "status": (r.get("status") or "completed").capitalize(),
+                "status": raw_status.capitalize(),
                 "products_fetched": int(p_count),
                 "duration": dur_str,
                 "message": rep.get("error") or f"Successfully extracted {p_count} product listings and variants."

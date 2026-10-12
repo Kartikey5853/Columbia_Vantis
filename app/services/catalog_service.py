@@ -7,7 +7,10 @@ import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
+from dotenv import load_dotenv
+load_dotenv()
 
+from persistence.normalizer import normalize_size
 from app.core.config import NEW_DATA_DIR, DATA_DIR, AMAZON_DATA_DIR, BASE_DIR
 from app.schemas.models import (
     ProductOffer, ProductVariant, PlatformListing, ProductFamily, ProductFamilySummary,
@@ -179,6 +182,146 @@ class CatalogService:
             "last_updated": None
         }
         self.supabase_cache: Dict[str, Any] = {}
+        self.master_records: List[Dict[str, Any]] = []
+        self.master_pid_to_style: Dict[str, str] = {}
+        self.master_sku_to_style: Dict[str, str] = {}
+        self.master_ean_to_style: Dict[str, str] = {}
+        self.master_style_meta: Dict[str, Dict[str, Any]] = {}
+        self._load_master_mappings()
+
+    def _load_master_mappings(self):
+        """Loads canonical cross-platform SKU/Style/EAN/PID mappings from Master Excel JSON."""
+        mapping_path = DATA_DIR / "master_catalog_mappings.json"
+        if not mapping_path.exists():
+            return
+        try:
+            with open(mapping_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            records = data.get("records") or []
+            self.master_records = records
+            self.master_pid_to_style.clear()
+            self.master_sku_to_style.clear()
+            self.master_ean_to_style.clear()
+            self.master_style_meta.clear()
+
+            for rec in records:
+                style = str(rec.get("style") or "").strip().upper()
+                if not style:
+                    continue
+                if style not in self.master_style_meta:
+                    self.master_style_meta[style] = {
+                        "skus": set(),
+                        "style_codes": set(),
+                        "eans": set(),
+                        "pids": {},
+                    }
+                meta = self.master_style_meta[style]
+                self.master_sku_to_style[style.lower()] = style
+                if len(style) >= 5:
+                    self.master_sku_to_style[style[:5].lower()] = style
+
+                sc = str(rec.get("style_code") or "").strip().upper()
+                if sc:
+                    meta["style_codes"].add(sc)
+                    self.master_sku_to_style[sc.lower()] = style
+
+                sku = str(rec.get("sku") or "").strip().upper()
+                if sku:
+                    meta["skus"].add(sku)
+                    self.master_sku_to_style[sku.lower()] = style
+
+                ean = str(rec.get("ean") or "").strip()
+                if ean:
+                    meta["eans"].add(ean)
+                    self.master_ean_to_style[ean.lower()] = style
+
+                pids = rec.get("platform_ids") or {}
+                for pk, pval in pids.items():
+                    if not pval:
+                        continue
+                    pval_str = str(pval).strip()
+                    if not pval_str or pval_str.upper() in ("ERROR", "NAN", "NONE", "SIZE ADDITION"):
+                        continue
+                    self.master_pid_to_style[f"{pk}:{pval_str.lower()}"] = style
+                    self.master_pid_to_style[pval_str.lower()] = style
+                    meta["pids"].setdefault(pk, set()).add(pval_str)
+
+            self.master_catalogue_info = {
+                "loaded": True,
+                "filename": "Master_Catalog_ Columbia.xlsx",
+                "record_count": len(records),
+                "last_updated": datetime.now(timezone.utc).isoformat()
+            }
+            print(f"[CATALOG_SERVICE] [MASTER] Loaded {len(records)} Master Excel rows ({len(self.master_style_meta)} unique styles).", flush=True)
+        except Exception as e:
+            print(f"[CATALOG_SERVICE] ⚠️ Error loading master_catalog_mappings.json: {e}", flush=True)
+
+    def _resolve_canonical_style(
+        self,
+        plat_key: str,
+        item: Dict[str, Any],
+        title: str,
+        sku: str,
+        ean: str,
+        url: str,
+        pid: str
+    ) -> Optional[str]:
+        """Resolves any platform record to its canonical Columbia Style code using Master Excel mappings first."""
+        # 1. Match by platform + product_id
+        if pid:
+            pl = pid.lower()
+            if f"{plat_key}:{pl}" in self.master_pid_to_style:
+                return self.master_pid_to_style[f"{plat_key}:{pl}"]
+            if pl in self.master_pid_to_style:
+                return self.master_pid_to_style[pl]
+
+        # 2. Match by EAN
+        if ean and ean.lower() in self.master_ean_to_style:
+            return self.master_ean_to_style[ean.lower()]
+
+        # 3. Match by SKU / Style / 5-char normalized style
+        for cand in (sku, str(item.get("style") or "").strip()):
+            if not cand:
+                continue
+            cl = cand.lower()
+            if cl in self.master_sku_to_style:
+                return self.master_sku_to_style[cl]
+            base = cl.split("-")[0]
+            if base in self.master_sku_to_style:
+                return self.master_sku_to_style[base]
+
+        # 4. Check variant SKUs and EANs
+        variants = item.get("variants")
+        if isinstance(variants, list):
+            for v in variants:
+                if not isinstance(v, dict):
+                    continue
+                vean = str(v.get("ean") or "").strip().lower()
+                if vean and vean in self.master_ean_to_style:
+                    return self.master_ean_to_style[vean]
+                vsku = str(v.get("sku") or "").strip().lower()
+                if vsku:
+                    if vsku in self.master_sku_to_style:
+                        return self.master_sku_to_style[vsku]
+                    vbase = vsku.split("-")[0]
+                    if vbase in self.master_sku_to_style:
+                        return self.master_sku_to_style[vbase]
+
+        # 5. Regex style extraction from title/sku/url/pid
+        extracted = extract_style_code(title, sku, url, pid)
+        if extracted:
+            el = extracted.lower()
+            if el in self.master_sku_to_style:
+                return self.master_sku_to_style[el]
+            return extracted.upper()
+
+        raw_style = str(item.get("style") or "").strip().upper()
+        if raw_style:
+            if raw_style.lower() in self.master_sku_to_style:
+                return self.master_sku_to_style[raw_style.lower()]
+            return raw_style
+
+        return None
 
     def _fetch_from_supabase(self) -> List[Tuple[str, Dict[str, Any]]]:
         """Fetches all scraped products from Supabase directly via PostgREST."""
@@ -249,20 +392,54 @@ class CatalogService:
                 cats.add(fam["category"])
             if fam.get("gender"):
                 gens.add(fam["gender"])
-            if fam.get("style"):
-                self.index_by_style[fam["style"].lower()] = fid
+            style_val = str(fam.get("style") or "").strip()
+            if style_val:
+                sl = style_val.lower()
+                self.index_by_style[sl] = fid
+                self.index_by_sku[sl] = fid
+                if len(sl) >= 5:
+                    self.index_by_style[sl[:5]] = fid
+                # Index all Master Excel SKUs, Style Codes, EANs, and PIDs for this style
+                meta = self.master_style_meta.get(style_val.upper())
+                if meta:
+                    for sc in meta["style_codes"]:
+                        self.index_by_style[sc.lower()] = fid
+                        self.index_by_sku[sc.lower()] = fid
+                    for msku in meta["skus"]:
+                        self.index_by_sku[msku.lower()] = fid
+                    for mean in meta["eans"]:
+                        self.index_by_ean[mean.lower()] = fid
+                    for pk, pid_set in meta["pids"].items():
+                        for mpid in pid_set:
+                            self.index_by_pid[mpid.lower()] = fid
+
             if fam.get("ean"):
-                self.index_by_ean[fam["ean"].lower()] = fid
+                self.index_by_ean[str(fam["ean"]).lower()] = fid
             if fam.get("sku"):
-                self.index_by_sku[fam["sku"].lower()] = fid
+                sku_l = str(fam["sku"]).lower()
+                self.index_by_sku[sku_l] = fid
+                if "-" in sku_l:
+                    parts = sku_l.split("-")
+                    self.index_by_style[parts[0]] = fid
+                    if len(parts) >= 2:
+                        self.index_by_style[f"{parts[0]}-{parts[1]}"] = fid
             for p in fam.get("platforms", []):
                 if p.get("product_id"):
-                    self.index_by_pid[p["product_id"].lower()] = fid
+                    for sub_pid in str(p["product_id"]).split(","):
+                        sp = sub_pid.strip().lower()
+                        if sp:
+                            self.index_by_pid[sp] = fid
             for v in fam.get("variants", []):
                 if v.get("sku"):
-                    self.index_by_sku[v["sku"].lower()] = fid
+                    vsku_l = str(v["sku"]).lower()
+                    self.index_by_sku[vsku_l] = fid
+                    if "-" in vsku_l:
+                        vparts = vsku_l.split("-")
+                        self.index_by_style[vparts[0]] = fid
+                        if len(vparts) >= 2:
+                            self.index_by_style[f"{vparts[0]}-{vparts[1]}"] = fid
                 if v.get("ean"):
-                    self.index_by_ean[v["ean"].lower()] = fid
+                    self.index_by_ean[str(v["ean"]).lower()] = fid
         self.all_categories = sorted(list(cats))
         self.all_genders = sorted(list(gens))
 
@@ -295,73 +472,73 @@ class CatalogService:
         # 1. Primary data source: Supabase live database
         supabase_records = self._fetch_from_supabase()
         for plat_key, item in supabase_records:
-            total_raw += 1
             pid = str(item.get("product_id") or item.get("source_product_id") or "").strip()
             title = str(item.get("title") or "").strip()
-            if not title:
-                continue
             sku = str(item.get("sku") or "").strip()
             ean = str(item.get("ean") or "").strip()
             url = str(item.get("url") or "").strip()
-            style = item.get("style") or extract_style_code(title, sku, url, pid)
-            fkey = get_canonical_family_key(title, style, ean)
+            if not title and not pid and not sku:
+                continue
+            total_raw += 1
+            style = self._resolve_canonical_style(plat_key, item, title, sku, ean, url, pid)
+            fkey = get_canonical_family_key(title or pid or sku, style, ean)
 
             if fkey not in raw_items_by_family:
                 raw_items_by_family[fkey] = []
             raw_items_by_family[fkey].append((plat_key, item))
 
-        # 2. Supplementary: Local files if present
-        source_configs = [
-            ("adv", NEW_DATA_DIR / "adventuras_products_with_offers.json"),
-            ("ajio", NEW_DATA_DIR / "ajio_columbia_products_2210.json"),
-            ("columbia", NEW_DATA_DIR / "columbia - with offers.json"),
-            ("tata_lux", NEW_DATA_DIR / "tatacliq_luxury_columbia_products_with_offers (1)_1.json"),
-            ("tata", NEW_DATA_DIR / "tatacliq_with_offers.json"),
-            ("myntra", DATA_DIR / "myntra" / "myntra_data.json"),
-            ("amazon", AMAZON_DATA_DIR / "amazon_data.json"),
-        ]
+        # 2. Fallback: Local files ONLY if live Supabase is unreachable
+        if not supabase_records:
+            source_configs = [
+                ("adv", NEW_DATA_DIR / "adventuras_products_with_offers.json"),
+                ("ajio", NEW_DATA_DIR / "ajio_columbia_products_2210.json"),
+                ("columbia", NEW_DATA_DIR / "columbia - with offers.json"),
+                ("tata_lux", NEW_DATA_DIR / "tatacliq_luxury_columbia_products_with_offers (1)_1.json"),
+                ("tata", NEW_DATA_DIR / "tatacliq_with_offers.json"),
+                ("myntra", DATA_DIR / "myntra" / "myntra_data.json"),
+                ("amazon", AMAZON_DATA_DIR / "amazon_data.json"),
+            ]
 
-        for plat_key, file_path in source_configs:
-            if not file_path.exists():
-                continue
+            for plat_key, file_path in source_configs:
+                if not file_path.exists():
+                    continue
 
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    content = json.load(f)
-                    items = content.get("products") or []
-                    for item in items:
-                        if not isinstance(item, dict):
-                            continue
-                        
-                        pid = str(item.get("product_id") or item.get("source_product_id") or item.get("asin") or "").strip()
-                        title = str(item.get("title") or item.get("name") or "").strip()
-                        if not title:
-                            continue
-                        
-                        sku = str(item.get("sku") or "").strip()
-                        if not sku and item.get("variants") and isinstance(item["variants"], list):
-                            v0 = item["variants"][0]
-                            if isinstance(v0, dict):
-                                sku = str(v0.get("sku") or "").strip()
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        content = json.load(f)
+                        items = content.get("products") or []
+                        for item in items:
+                            if not isinstance(item, dict):
+                                continue
+                            
+                            pid = str(item.get("product_id") or item.get("source_product_id") or item.get("asin") or "").strip()
+                            title = str(item.get("title") or item.get("name") or "").strip()
+                            sku = str(item.get("sku") or "").strip()
+                            if not sku and item.get("variants") and isinstance(item["variants"], list):
+                                v0 = item["variants"][0]
+                                if isinstance(v0, dict):
+                                    sku = str(v0.get("sku") or "").strip()
 
-                        ean = str(item.get("ean") or "").strip()
-                        if not ean and item.get("variants") and isinstance(item["variants"], list):
-                            v0 = item["variants"][0]
-                            if isinstance(v0, dict):
-                                ean = str(v0.get("ean") or "").strip()
+                            ean = str(item.get("ean") or "").strip()
+                            if not ean and item.get("variants") and isinstance(item["variants"], list):
+                                v0 = item["variants"][0]
+                                if isinstance(v0, dict):
+                                    ean = str(v0.get("ean") or "").strip()
 
-                        url = str(item.get("url") or item.get("href") or "").strip()
+                            url = str(item.get("url") or item.get("href") or "").strip()
+                            if not title and not pid and not sku:
+                                continue
 
-                        style = extract_style_code(title, sku, url, pid)
-                        fkey = get_canonical_family_key(title, style, ean)
+                            style = self._resolve_canonical_style(plat_key, item, title, sku, ean, url, pid)
+                            fkey = get_canonical_family_key(title or pid or sku, style, ean)
 
-                        if fkey not in raw_items_by_family:
-                            raw_items_by_family[fkey] = []
-                        raw_items_by_family[fkey].append((plat_key, item))
-                        total_raw += 1
+                            if fkey not in raw_items_by_family:
+                                raw_items_by_family[fkey] = []
+                            raw_items_by_family[fkey].append((plat_key, item))
+                            total_raw += 1
 
-            except Exception as e:
-                print(f"[CATALOG_SERVICE] ⚠️ Error loading {plat_key} ({file_path}): {e}", flush=True)
+                except Exception as e:
+                    print(f"[CATALOG_SERVICE] ⚠️ Error loading {plat_key} ({file_path}): {e}", flush=True)
 
         self.raw_records_count = total_raw
 
@@ -375,13 +552,13 @@ class CatalogService:
             primary_title = ""
             primary_image = ""
             gallery_images = []
-            best_style = None
+            best_style = fkey.split("_", 1)[1] if fkey.startswith("STYLE_") else None
             best_ean = None
             best_sku = None
             lowest_price = float("inf")
             highest_mrp = None
             
-            # Map platform key to best listing from that platform
+            # Map platform key to all listings from that platform
             platform_groups: Dict[str, List[Dict[str, Any]]] = {}
             for plat_key, item in plat_tuples:
                 if plat_key not in platform_groups:
@@ -402,13 +579,22 @@ class CatalogService:
                 if img and img not in gallery_images:
                     gallery_images.append(img)
 
-                item_title = str(item.get("title") or "").strip()
-                if item_title and (not primary_title or len(item_title) > len(primary_title)):
+                item_title = str(item.get("title") or item.get("name") or "").strip()
+                if item_title and (not primary_title or (plat_key in ("columbia", "adv") and len(item_title) >= 10)):
                     primary_title = item_title
 
-                s_cand = extract_style_code(item_title, item.get("sku") or "", item.get("url") or "", item.get("product_id") or "")
-                if s_cand and not best_style:
-                    best_style = s_cand
+                if not best_style:
+                    s_cand = self._resolve_canonical_style(
+                        plat_key,
+                        item,
+                        item_title,
+                        str(item.get("sku") or ""),
+                        str(item.get("ean") or ""),
+                        str(item.get("url") or ""),
+                        str(item.get("product_id") or item.get("source_product_id") or "")
+                    )
+                    if s_cand:
+                        best_style = s_cand
 
                 e_cand = str(item.get("ean") or "").strip()
                 if e_cand and len(e_cand) >= 10 and not best_ean:
@@ -418,11 +604,25 @@ class CatalogService:
                 if sku_cand and not best_sku:
                     best_sku = sku_cand
 
+            # Enrich missing SKU / EAN from Master Excel metadata if style is known
+            if best_style and best_style.upper() in self.master_style_meta:
+                m_meta = self.master_style_meta[best_style.upper()]
+                if not best_sku and m_meta["skus"]:
+                    best_sku = sorted(m_meta["skus"])[0]
+                if not best_ean and m_meta["eans"]:
+                    best_ean = sorted(m_meta["eans"])[0]
+
+            if not primary_title:
+                if best_style:
+                    primary_title = f"Columbia Sportswear {best_style}"
+                else:
+                    continue
+
             if lowest_price == float("inf"):
                 lowest_price = 4999.0
 
             if not highest_mrp or highest_mrp < lowest_price:
-                highest_mrp = round(lowest_price * 1.25, 2)
+                highest_mrp = lowest_price
 
             discount_pct = round(((highest_mrp - lowest_price) / highest_mrp) * 100) if highest_mrp and highest_mrp > lowest_price else 0
 
@@ -443,87 +643,179 @@ class CatalogService:
                 items_for_plat = platform_groups.get(plat_key, [])
 
                 if items_for_plat:
-                    # Select best listing
+                    # Prefer an item with a title and image as the primary representative for this platform
                     best_item = items_for_plat[0]
-                    p_val = clean_price(best_item.get("price") or best_item.get("current_price") or best_item.get("price_numeric") or best_item.get("sale_price")) or lowest_price
-                    m_val = clean_price(best_item.get("mrp") or best_item.get("current_mrp") or best_item.get("mrp_numeric")) or highest_mrp
-                    
+                    for cand_item in items_for_plat:
+                        if cand_item.get("title") and (cand_item.get("image_url") or cand_item.get("image")):
+                            best_item = cand_item
+                            break
+                        elif cand_item.get("title") and not best_item.get("title"):
+                            best_item = cand_item
+
+                    plat_prices = [
+                        clean_price(it.get("price") or it.get("current_price") or it.get("price_numeric") or it.get("sale_price"))
+                        for it in items_for_plat
+                    ]
+                    plat_prices = [p for p in plat_prices if p and p > 0]
+                    plat_mrps = [
+                        clean_price(it.get("mrp") or it.get("current_mrp") or it.get("mrp_numeric"))
+                        for it in items_for_plat
+                    ]
+                    plat_mrps = [m for m in plat_mrps if m and m > 0]
+
+                    p_val = min(plat_prices) if plat_prices else lowest_price
+                    m_val = max(plat_mrps) if plat_mrps else highest_mrp
                     diff = round(p_val - lowest_price, 2)
                     
-                    # Variants & sizes
-                    item_vars = best_item.get("variants") or []
+                    # Aggregate variants, sizes, offers, and stock across all items for this platform
                     plat_sizes = []
                     plat_variants = []
-                    avail = best_item.get("available", True)
-                    
-                    if isinstance(item_vars, list) and item_vars:
-                        for v in item_vars:
-                            if not isinstance(v, dict):
-                                continue
-                            sz = str(v.get("size") or "").strip()
-                            col = str(v.get("color") or "").strip()
-                            v_avail = v.get("available", True)
-                            if sz:
-                                plat_sizes.append(sz)
-                                sizes_set.add(sz)
-                            if col:
-                                colors_set.add(col)
-                            v_obj = {
-                                "size": sz,
-                                "color": col or None,
-                                "sku": v.get("sku") or best_item.get("sku"),
-                                "ean": v.get("ean") or best_item.get("ean"),
-                                "available": bool(v_avail),
-                                "quantity": v.get("quantity"),
-                                "stock": v.get("stock"),
-                                "price": clean_price(v.get("price")) or p_val,
-                                "mrp": clean_price(v.get("mrp")) or m_val,
-                                "url": v.get("url") or best_item.get("url") or best_item.get("href")
-                            }
-                            plat_variants.append(v_obj)
-                            variants_list.append(v_obj)
-
-                    # Parse offers
-                    offers_raw = best_item.get("offers") or []
+                    seen_var_keys = set()
                     parsed_offers = []
-                    if isinstance(offers_raw, list):
-                        for off in offers_raw:
-                            if isinstance(off, dict):
-                                parsed_offers.append({
-                                    "kind": off.get("kind") or off.get("type") or "offer",
-                                    "code": off.get("code") or None,
-                                    "title": off.get("title") or "Special Offer",
-                                    "description": off.get("description"),
-                                    "offer_price": clean_price(off.get("offer_price")),
-                                    "issuer": off.get("issuer"),
-                                    "card_type": off.get("card_type"),
-                                    "payment_network": off.get("payment_network"),
-                                    "discount_percent": clean_price(off.get("discount_percent")),
-                                    "discount_amount": clean_price(off.get("discount_amount") or off.get("discount")),
-                                    "minimum_transaction_amount": clean_price(off.get("minimum_transaction_amount") or off.get("min_purchase")),
-                                    "maximum_discount": clean_price(off.get("maximum_discount")),
-                                    "valid_from": off.get("valid_from"),
-                                    "validity": off.get("validity"),
-                                    "terms_url": off.get("terms_url")
-                                })
+                    seen_offer_keys = set()
+                    any_item_avail = False
+                    total_plat_stock = 0
+                    has_numeric_stock = False
 
-                    stock_count = best_item.get("stock") or best_item.get("seller_available_stock") or best_item.get("total_sellable_stock")
+                    for it in items_for_plat:
+                        it_avail = it.get("available", True)
+                        if it_avail:
+                            any_item_avail = True
+                        it_stock = it.get("stock") if it.get("stock") is not None else (it.get("seller_available_stock") or it.get("total_sellable_stock"))
+                        if isinstance(it_stock, (int, float)):
+                            has_numeric_stock = True
+                            total_plat_stock += int(it_stock)
+
+                        it_img = it.get("image_url") or it.get("image")
+                        if it_img and it_img not in gallery_images:
+                            gallery_images.append(it_img)
+
+                        item_vars = it.get("variants") or []
+                        if isinstance(item_vars, list) and item_vars:
+                            for v in item_vars:
+                                if not isinstance(v, dict):
+                                    continue
+                                raw_sz = str(v.get("size") or "").strip()
+                                sz = normalize_size(raw_sz) or raw_sz
+                                col = str(v.get("color") or "").strip()
+                                v_avail = v.get("available", True)
+                                v_sku = v.get("sku") or it.get("sku")
+                                v_ean = v.get("ean") or it.get("ean")
+                                v_stock = v.get("stock") if v.get("stock") is not None else v.get("quantity")
+                                if isinstance(v_stock, (int, float)) and v_stock <= 0:
+                                    v_avail = False
+                                if v_avail:
+                                    any_item_avail = True
+
+                                v_key = (sz, col, str(v_sku or ""), str(v_ean or ""))
+                                if v_key in seen_var_keys:
+                                    continue
+                                seen_var_keys.add(v_key)
+
+                                if sz and sz not in plat_sizes:
+                                    plat_sizes.append(sz)
+                                if sz:
+                                    sizes_set.add(sz)
+                                if col:
+                                    colors_set.add(col)
+
+                                v_obj = {
+                                    "size": sz,
+                                    "color": col or None,
+                                    "sku": v_sku,
+                                    "ean": v_ean,
+                                    "available": bool(v_avail),
+                                    "quantity": v.get("quantity") if v.get("quantity") is not None else v_stock,
+                                    "stock": v_stock,
+                                    "price": clean_price(v.get("price")) or p_val,
+                                    "mrp": clean_price(v.get("mrp")) or m_val,
+                                    "url": v.get("url") or it.get("url") or it.get("href")
+                                }
+                                plat_variants.append(v_obj)
+                                variants_list.append(v_obj)
+                        else:
+                            # Synthesize a variant row from the item itself if it has SKU/EAN/stock
+                            it_sku = str(it.get("sku") or "").strip()
+                            it_ean = str(it.get("ean") or "").strip()
+                            it_pid = str(it.get("product_id") or it.get("source_product_id") or it.get("asin") or "").strip()
+                            sz_guess = ""
+                            if it_sku and "-" in it_sku and len(it_sku.split("-")) >= 3:
+                                sz_guess = normalize_size(it_sku.split("-", 2)[2]) or it_sku.split("-", 2)[2]
+                            v_key = (sz_guess or "Standard", "", it_sku or it_pid, it_ean)
+                            if v_key not in seen_var_keys:
+                                seen_var_keys.add(v_key)
+                                if sz_guess and sz_guess not in plat_sizes:
+                                    plat_sizes.append(sz_guess)
+                                    sizes_set.add(sz_guess)
+                                v_obj = {
+                                    "size": sz_guess or "Standard",
+                                    "color": None,
+                                    "sku": it_sku or it_pid or None,
+                                    "ean": it_ean or None,
+                                    "available": bool(it_avail and (not isinstance(it_stock, (int, float)) or it_stock > 0)),
+                                    "quantity": it_stock,
+                                    "stock": it_stock,
+                                    "price": clean_price(it.get("price") or it.get("current_price")) or p_val,
+                                    "mrp": clean_price(it.get("mrp") or it.get("current_mrp")) or m_val,
+                                    "url": it.get("url") or it.get("href")
+                                }
+                                plat_variants.append(v_obj)
+                                variants_list.append(v_obj)
+
+                        # Parse offers
+                        offers_raw = it.get("offers") or []
+                        if isinstance(offers_raw, list):
+                            for off in offers_raw:
+                                if isinstance(off, dict):
+                                    off_title = off.get("title") or off.get("description") or "Special Offer"
+                                    off_code = off.get("code") or None
+                                    off_key = (str(off_code or ""), str(off_title)[:80])
+                                    if off_key in seen_offer_keys:
+                                        continue
+                                    seen_offer_keys.add(off_key)
+                                    parsed_offers.append({
+                                        "kind": off.get("kind") or off.get("type") or "offer",
+                                        "code": off_code,
+                                        "title": off_title,
+                                        "description": off.get("description"),
+                                        "offer_price": clean_price(off.get("offer_price")),
+                                        "issuer": off.get("issuer"),
+                                        "card_type": off.get("card_type"),
+                                        "payment_network": off.get("payment_network"),
+                                        "discount_percent": clean_price(off.get("discount_percent")),
+                                        "discount_amount": clean_price(off.get("discount_amount") or off.get("discount")),
+                                        "minimum_transaction_amount": clean_price(off.get("minimum_transaction_amount") or off.get("min_purchase")),
+                                        "maximum_discount": clean_price(off.get("maximum_discount")),
+                                        "valid_from": off.get("valid_from"),
+                                        "validity": off.get("validity"),
+                                        "terms_url": off.get("terms_url")
+                                    })
+
                     avail_status = "In stock"
-                    if not avail:
+                    if not any_item_avail or (has_numeric_stock and total_plat_stock <= 0):
                         avail_status = "Out of stock"
-                    elif isinstance(stock_count, (int, float)) and 0 < stock_count <= 5:
+                    elif has_numeric_stock and 0 < total_plat_stock <= 5:
                         avail_status = "Limited stock"
 
-                    stock_text = f"Only {stock_count} left" if avail_status == "Limited stock" else "Ships in 1-2 days"
-                    sizes_summary = f"{len(plat_sizes)} sizes" if plat_sizes else "Standard"
+                    if avail_status == "Out of stock":
+                        stock_text = "Out of stock"
+                    elif avail_status == "Limited stock":
+                        stock_text = f"Only {total_plat_stock} left"
+                    elif has_numeric_stock and total_plat_stock > 0:
+                        stock_text = f"{total_plat_stock} units in stock"
+                    else:
+                        stock_text = "In stock"
+
+                    sizes_summary = ", ".join(plat_sizes[:6]) if plat_sizes else "Standard"
+                    best_pid = str(best_item.get("product_id") or best_item.get("source_product_id") or best_item.get("asin") or "").strip()
 
                     platform_listings.append({
                         "platform": plat_key,
                         "platform_name": meta["name"],
                         "platform_key": plat_key,
                         "logo_key": meta["logo_key"],
-                        "product_id": str(best_item.get("product_id") or best_item.get("source_product_id") or best_item.get("asin") or ""),
-                        "listing_title": str(best_item.get("title") or primary_title),
+                        "product_id": best_pid,
+                        "listing_title": str(best_item.get("title") or best_item.get("name") or primary_title),
                         "url": str(best_item.get("url") or best_item.get("href") or meta["base_url"]),
                         "image_url": best_item.get("image_url") or best_item.get("image") or primary_image,
                         "price": p_val,
@@ -535,10 +827,10 @@ class CatalogService:
                         "sizes_summary": sizes_summary,
                         "offers": parsed_offers,
                         "variants": plat_variants,
-                        "last_updated": best_item.get("scraped_at") or "10 Oct 2026, 11:42 AM"
+                        "last_updated": best_item.get("scraped_at") or "12 Oct 2026, IST"
                     })
                 else:
-                    # Platform doesn't have this item
+                    # Platform does not have scraped data for this item -> "No data available"
                     platform_listings.append({
                         "platform": plat_key,
                         "platform_name": meta["name"],
@@ -551,10 +843,10 @@ class CatalogService:
                         "price": None,
                         "mrp": None,
                         "price_difference": None,
-                        "availability_status": "Out of stock",
-                        "stock_text": "Not listed on platform",
+                        "availability_status": "No data available",
+                        "stock_text": "—",
                         "sizes_available_count": 0,
-                        "sizes_summary": "0 sizes",
+                        "sizes_summary": "—",
                         "offers": [],
                         "variants": [],
                         "last_updated": None
@@ -581,7 +873,7 @@ class CatalogService:
                 "gender": gender,
                 "tags": tags,
                 "image_url": primary_image,
-                "gallery_images": gallery_images[:5],
+                "gallery_images": gallery_images[:8],
                 "lowest_price": lowest_price,
                 "mrp": highest_mrp,
                 "discount_percent": discount_pct,
@@ -593,40 +885,11 @@ class CatalogService:
                 "colors": unique_colors,
                 "sizes": unique_sizes,
                 "platforms": platform_listings,
-                "data_freshness": "10 Oct 2026, 11:42 AM"
+                "data_freshness": "12 Oct 2026, IST"
             }
 
         self.families = processed_families
-        self.families_list = list(processed_families.values())
-        
-        # Sort by platform count descending, then lowest price
-        self.families_list.sort(key=lambda x: (x["platforms_count"], -x["lowest_price"]), reverse=True)
-
-        # Build index lookups
-        self.index_by_sku.clear()
-        self.index_by_ean.clear()
-        self.index_by_style.clear()
-        self.index_by_pid.clear()
-
-        for fam in self.families_list:
-            fid = fam["family_id"]
-            if fam.get("style"):
-                self.index_by_style[fam["style"].lower()] = fid
-            if fam.get("ean"):
-                self.index_by_ean[fam["ean"].lower()] = fid
-            if fam.get("sku"):
-                self.index_by_sku[fam["sku"].lower()] = fid
-            for p in fam["platforms"]:
-                if p.get("product_id"):
-                    self.index_by_pid[p["product_id"].lower()] = fid
-            for v in fam.get("variants", []):
-                if v.get("sku"):
-                    self.index_by_sku[v["sku"].lower()] = fid
-                if v.get("ean"):
-                    self.index_by_ean[v["ean"].lower()] = fid
-
-        self.all_categories = sorted(list(categories_set))
-        self.all_genders = sorted(list(genders_set))
+        self._build_indices()
         self.load_time_seconds = time.time() - start_time
         self.is_loaded = True
 
@@ -653,8 +916,6 @@ class CatalogService:
             except Exception as e:
                 print(f"[CATALOG_SERVICE] [WARN] Failed to load Supabase cache: {e}", flush=True)
 
-        # Indexed families quietly into memory if called
-
     def search(self, query: str, limit: int = 50) -> List[Dict[str, Any]]:
         self.load_catalog()
         if not query or not query.strip():
@@ -662,17 +923,18 @@ class CatalogService:
 
         q = query.strip().lower()
 
-        # Direct identifier match
-        if q in self.index_by_style:
-            return [self.families[self.index_by_style[q]]]
-        if q in self.index_by_ean:
-            return [self.families[self.index_by_ean[q]]]
-        if q in self.index_by_sku:
-            return [self.families[self.index_by_sku[q]]]
-        if q in self.index_by_pid:
-            return [self.families[self.index_by_pid[q]]]
+        # 1. Exact identifier match (Style, Style Code, SKU, EAN, Platform Product ID / ASIN)
+        for idx in (self.index_by_style, self.index_by_sku, self.index_by_ean, self.index_by_pid):
+            if q in idx and idx[q] in self.families:
+                return [self.families[idx[q]]]
 
-        # Substring / token matching
+        # Check if query is a SKU or Style Code whose base style is indexed
+        if "-" in q:
+            base_part = q.split("-")[0]
+            if base_part in self.index_by_style and self.index_by_style[base_part] in self.families:
+                return [self.families[self.index_by_style[base_part]]]
+
+        # 2. Substring / token matching across family + all variants & platform IDs
         tokens = [t for t in q.split() if len(t) > 1]
         matches = []
         for fam in self.families_list:
@@ -682,14 +944,20 @@ class CatalogService:
             ean_lower = (fam.get("ean") or "").lower()
             sku_lower = (fam.get("sku") or "").lower()
 
-            if q in style_lower or q in ean_lower or q in sku_lower:
-                score += 100
+            if q == style_lower or q == ean_lower or q == sku_lower:
+                score += 200
+            elif q in style_lower or q in ean_lower or q in sku_lower:
+                score += 120
+            elif any(q in str(v.get("sku") or "").lower() or q in str(v.get("ean") or "").lower() for v in fam.get("variants", [])):
+                score += 110
+            elif any(q in str(p.get("product_id") or "").lower() for p in fam.get("platforms", [])):
+                score += 110
             elif q in t_lower:
-                score += 50
+                score += 60
             else:
                 for tok in tokens:
                     if tok in style_lower or tok in ean_lower or tok in sku_lower:
-                        score += 30
+                        score += 35
                     elif tok in t_lower:
                         score += 15
 
@@ -1009,10 +1277,76 @@ class CatalogService:
         }
 
     def process_master_excel(self, file_path: Path, filename: str) -> Dict[str, Any]:
-        """Validates and processes master Excel catalog file."""
+        """Validates, maps, and processes master Excel catalog file."""
         import pandas as pd
         df = pd.read_excel(file_path)
         record_count = len(df)
+
+        col_map = {}
+        for col in df.columns:
+            cl = str(col).strip().lower()
+            if "ean" in cl:
+                col_map["ean"] = col
+            elif "soh" in cl:
+                col_map["soh"] = col
+            elif "style code" in cl or "style_code" in cl:
+                col_map["style_code"] = col
+            elif "sku" in cl:
+                col_map["sku"] = col
+            elif "style" in cl and "style_code" not in col_map:
+                col_map["style"] = col
+            elif "adv" in cl:
+                col_map["adv"] = col
+            elif "columbia" in cl:
+                col_map["columbia"] = col
+            elif "myntra" in cl:
+                col_map["myntra"] = col
+            elif "amazon" in cl:
+                col_map["amazon"] = col
+            elif "lux" in cl:
+                col_map["tata_lux"] = col
+            elif "tata" in cl and "lux" not in cl:
+                col_map["tata"] = col
+            elif "nykaa" in cl:
+                col_map["nykaa"] = col
+            elif "ajio" in cl:
+                col_map["ajio"] = col
+            elif "flipkart" in cl:
+                col_map["flipkart"] = col
+
+        extracted_records = []
+        for _, row in df.iterrows():
+            ean = str(row[col_map["ean"]]).strip() if "ean" in col_map and pd.notna(row[col_map["ean"]]) else None
+            soh = int(row[col_map["soh"]]) if "soh" in col_map and pd.notna(row[col_map["soh"]]) and str(row[col_map["soh"]]).isdigit() else None
+            sku = str(row[col_map["sku"]]).strip() if "sku" in col_map and pd.notna(row[col_map["sku"]]) else None
+            style_code = str(row[col_map["style_code"]]).strip() if "style_code" in col_map and pd.notna(row[col_map["style_code"]]) else None
+            style = str(row[col_map["style"]]).strip() if "style" in col_map and pd.notna(row[col_map["style"]]) else None
+            if not style and sku:
+                style = sku.split("-")[0]
+
+            pids = {}
+            for pk in ("adv", "columbia", "myntra", "amazon", "tata", "tata_lux", "nykaa", "ajio", "flipkart"):
+                if pk in col_map and pd.notna(row[col_map[pk]]):
+                    v = str(row[col_map[pk]]).strip()
+                    if v and v.upper() not in ("NAN", "NONE", "NULL"):
+                        pids[pk] = v
+
+            extracted_records.append({
+                "ean": ean,
+                "soh": soh,
+                "sku": sku,
+                "style_code": style_code,
+                "style": style,
+                "platform_ids": pids
+            })
+
+        mapping_path = DATA_DIR / "master_catalog_mappings.json"
+        with open(mapping_path, "w", encoding="utf-8") as f:
+            json.dump({"total_rows": len(extracted_records), "records": extracted_records}, f)
+
+        self._load_master_mappings()
+        self.load_catalog(force=True)
+
         self.master_catalogue_info = {
             "loaded": True,
             "filename": filename,

@@ -32,8 +32,9 @@ export const HomePage: React.FC = () => {
   );
 
   // Master Excel status & first-time upload state
-  const [hasMasterExcel, setHasMasterExcel] = useState<boolean>(true);
-  const [skippedExcel, setSkippedExcel] = useState<boolean>(false);
+  const [hasMasterExcel, setHasMasterExcel] = useState<boolean>(
+    () => localStorage.getItem("master_excel_uploaded") === "true" || true
+  );
   const [isUploadingExcel, setIsUploadingExcel] = useState<boolean>(false);
   const [excelUploadProgress, setExcelUploadProgress] = useState<number>(0);
   const [excelError, setExcelError] = useState<string | null>(null);
@@ -56,10 +57,17 @@ export const HomePage: React.FC = () => {
     uploadService
       .getMasterDataStatus()
       .then((st) => {
-        setHasMasterExcel(Boolean(st.is_configured));
+        if (st.is_configured) {
+          localStorage.setItem("master_excel_uploaded", "true");
+          setHasMasterExcel(true);
+        } else if (localStorage.getItem("master_excel_uploaded") === "true") {
+          setHasMasterExcel(true);
+        } else {
+          setHasMasterExcel(false);
+        }
       })
       .catch(() => {
-        // Fallback default to showing search
+        // Fallback default to showing search if configured in codebase
         setHasMasterExcel(true);
       });
   }, []);
@@ -139,6 +147,7 @@ export const HomePage: React.FC = () => {
         setExcelUploadProgress(Math.max(15, pct));
       });
       setExcelUploadProgress(100);
+      localStorage.setItem("master_excel_uploaded", "true");
       setExcelSuccess(res.message || "Master Excel successfully uploaded and validated.");
       setTimeout(() => {
         setHasMasterExcel(true);
@@ -168,7 +177,7 @@ export const HomePage: React.FC = () => {
 
       <div className={`max-w-7xl mx-auto px-4 sm:px-8 ${!hasSearched ? "py-4 sm:py-6" : "py-8 sm:py-12"}`}>
         {/* FIRST-TIME MASTER EXCEL UPLOAD SECTION */}
-        {!hasMasterExcel && !skippedExcel ? (
+        {!hasMasterExcel ? (
           <div className="min-h-[calc(100vh-180px)] flex flex-col items-center justify-center -mt-6 sm:-mt-8">
             <div className="max-w-2xl w-full bg-white rounded-3xl border border-slate-200/90 shadow-sm p-8 sm:p-10 space-y-6 animate-in fade-in zoom-in-95 duration-300">
               <div className="text-center space-y-2">
@@ -233,17 +242,6 @@ export const HomePage: React.FC = () => {
                   </p>
                 </div>
               )}
-
-              {/* Skip Button */}
-              <div className="pt-2 text-center">
-                <button
-                  type="button"
-                  onClick={() => setSkippedExcel(true)}
-                  className="text-xs font-bold text-slate-500 hover:text-sky-600 transition-colors cursor-pointer"
-                >
-                  Or skip and browse existing scraped intelligence directly →
-                </button>
-              </div>
             </div>
           </div>
         ) : (
@@ -497,15 +495,9 @@ export const HomePage: React.FC = () => {
                                     >
                                       {/* Platform Header */}
                                       <div className="flex items-center justify-between mb-2">
-                                        <div className="flex items-center gap-2">
-                                          <PlatformLogo
-                                            platform={listing.platform}
-                                            className="h-4 w-auto max-w-16"
-                                          />
-                                          <span className="text-xs font-bold text-slate-800">
-                                            {listing.platform_name}
-                                          </span>
-                                        </div>
+                                        <span className="text-xs font-bold text-slate-800">
+                                          {listing.platform_name}
+                                        </span>
                                       </div>
 
                                       {/* Price & Stock */}
@@ -537,10 +529,18 @@ export const HomePage: React.FC = () => {
                                           </div>
                                         </div>
                                       ) : (
-                                        <div className="py-2 text-center">
-                                          <span className="text-xs font-semibold text-slate-400">
-                                            Not listed / Out of stock
-                                          </span>
+                                        <div className="space-y-1">
+                                          <div className="flex items-baseline justify-between">
+                                            <span className="text-base font-black text-slate-400">
+                                              —
+                                            </span>
+                                          </div>
+                                          <div className="flex items-center justify-between text-[11px]">
+                                            <span className="font-semibold text-slate-400">
+                                              No data available
+                                            </span>
+                                            <span className="text-slate-400">—</span>
+                                          </div>
                                         </div>
                                       )}
 

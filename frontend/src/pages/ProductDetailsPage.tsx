@@ -123,18 +123,18 @@ export const ProductDetailsPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Top 3-Part Section */}
+      {/* Top 2-Part Section: Left Gallery (5 cols) & Right Details with Platform Selector (7 cols) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 bg-white p-6 sm:p-8 rounded-3xl border border-slate-200/90 shadow-sm">
-        {/* Left Column (lg: 4 cols): All Images & Main Image Preview */}
-        <div className="lg:col-span-4 flex gap-4">
+        {/* Left Column (lg: 5 cols): All Images & Main Preview for Selected Platform */}
+        <div className="lg:col-span-5 flex flex-col-reverse sm:flex-row gap-4">
           {/* Vertical Thumbnail Strip */}
-          <div className="flex flex-col gap-2 shrink-0">
+          <div className="flex sm:flex-col gap-2 shrink-0 overflow-x-auto sm:overflow-visible">
             {allImages.slice(0, 5).map((img, idx) => (
               <button
                 key={idx}
                 onClick={() => setSelectedImage(img)}
                 className={`w-14 h-14 rounded-xl border p-1 bg-slate-50 overflow-hidden transition-all ${
-                  selectedImage === img
+                  (selectedImage || activeListing.image_url || product.image_url) === img
                     ? "border-sky-500 ring-2 ring-sky-200"
                     : "border-slate-200 hover:border-slate-300 opacity-80 hover:opacity-100"
                 }`}
@@ -149,14 +149,14 @@ export const ProductDetailsPage: React.FC = () => {
           </div>
 
           {/* Large Main Preview */}
-          <div className="relative flex-1 bg-slate-50/70 rounded-2xl border border-slate-100 p-6 flex items-center justify-center min-h-[300px]">
+          <div className="relative flex-1 bg-slate-50/70 rounded-2xl border border-slate-100 p-6 flex items-center justify-center min-h-[320px]">
             <img
-              src={selectedImage || product.image_url || "/vantis_logo.png"}
-              alt={product.title}
-              className="max-h-[300px] w-full object-contain mix-blend-multiply transition-all hover:scale-105"
+              src={selectedImage || activeListing.image_url || product.image_url || "/vantis_logo.png"}
+              alt={activeListing.listing_title || product.title}
+              className="max-h-[320px] w-full object-contain mix-blend-multiply transition-all hover:scale-105"
             />
             <button
-              onClick={() => window.open(selectedImage || product.image_url || "", "_blank")}
+              onClick={() => window.open(selectedImage || activeListing.image_url || product.image_url || "", "_blank")}
               className="absolute bottom-3 right-3 p-2 rounded-xl bg-white/90 border border-slate-200 text-slate-500 hover:text-slate-900 shadow-xs cursor-pointer"
               title="Expand full image"
             >
@@ -165,56 +165,12 @@ export const ProductDetailsPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Center Column (lg: 5 cols): Title, Identifiers, & PLATFORM SELECTOR */}
-        <div className="lg:col-span-5 space-y-5">
-          <div className="space-y-1">
-            <div className="inline-flex items-center gap-1.5 text-xs font-bold text-sky-600 uppercase tracking-wider">
-              <span>{product.brand}</span>
-            </div>
-            <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight leading-snug">
-              {product.title}
-            </h1>
-          </div>
-
-          {/* Identifier Row */}
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 font-mono py-1.5 border-y border-slate-100">
-            {product.style && (
-              <span>
-                Style: <span className="font-semibold text-slate-800">{product.style}</span>
-              </span>
-            )}
-            {product.style && product.ean && <span className="text-slate-200">|</span>}
-            {product.ean && (
-              <span>
-                EAN: <span className="font-semibold text-slate-800">{product.ean}</span>
-              </span>
-            )}
-            <span className="text-slate-200">|</span>
-            <span>
-              Category: <span className="font-semibold text-slate-800">{product.category}</span>
-            </span>
-            <span className="text-slate-200">|</span>
-            <span>
-              Gender: <span className="font-semibold text-slate-800">{product.gender}</span>
-            </span>
-          </div>
-
-          {/* Tags */}
-          <div className="flex flex-wrap gap-1.5">
-            {product.tags.map((tag, idx) => (
-              <span
-                key={idx}
-                className="bg-sky-50 text-sky-700 text-xs font-semibold px-2.5 py-0.5 rounded-full border border-sky-100"
-              >
-                {tag}
-              </span>
-            ))}
-          </div>
-
+        {/* Right Column (lg: 7 cols): Platform Selector, Dynamic Title, Identifiers, Pricing */}
+        <div className="lg:col-span-7 space-y-5">
           {/* PLATFORM SELECTOR (Top Tile Platform Option) */}
-          <div className="space-y-2.5 pt-2">
+          <div className="space-y-2.5">
             <div className="flex items-center justify-between text-xs font-bold text-slate-700">
-              <span className="uppercase tracking-wider text-[11px] text-slate-500">
+              <span className="uppercase tracking-wider text-[11px] text-slate-500 font-extrabold">
                 Select Platform For Data
               </span>
               <span className="text-slate-400 font-normal">
@@ -223,7 +179,7 @@ export const ProductDetailsPage: React.FC = () => {
             </div>
 
             {/* Platform Selection Grid */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {product.platforms.map((plat) => {
                 const isSelected = selectedPlatformKey === plat.platform;
                 const isAvailable = plat.price !== null && plat.price !== undefined;
@@ -264,12 +220,14 @@ export const ProductDetailsPage: React.FC = () => {
                             isAvailable
                               ? plat.availability_status === "In stock"
                                 ? "bg-emerald-500"
-                                : "bg-amber-500"
+                                : plat.availability_status === "Limited stock"
+                                ? "bg-amber-500"
+                                : "bg-rose-500"
                               : "bg-slate-300"
                           }`}
                         />
                         <span className={`font-semibold ${isAvailable ? "text-slate-700" : "text-slate-400"}`}>
-                          {isAvailable ? `₹${plat.price?.toLocaleString("en-IN")}` : "Unlisted"}
+                          {isAvailable ? `₹${plat.price?.toLocaleString("en-IN")}` : "No data"}
                         </span>
                       </div>
                     </div>
@@ -278,60 +236,94 @@ export const ProductDetailsPage: React.FC = () => {
               })}
             </div>
           </div>
-        </div>
 
-        {/* Right Column (lg: 3 cols): Product Summary (Variants, Sizes, Platforms - NO Colours) & MRP */}
-        <div className="lg:col-span-3 bg-slate-50/70 rounded-2xl border border-slate-100 p-6 flex flex-col justify-between space-y-6">
-          <div className="space-y-4">
-            <h3 className="font-bold text-slate-900 text-sm">Product Summary</h3>
+          {/* Dynamic Platform Title */}
+          <div className="space-y-1 pt-1">
+            <div className="inline-flex items-center gap-1.5 text-xs font-bold text-sky-600 uppercase tracking-wider">
+              <span>{activeListing.platform_name} Listing Details</span>
+            </div>
+            <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight leading-snug">
+              {activeListing.listing_title || product.title}
+            </h1>
+          </div>
 
-            {/* 3-Stat Grid: Variants, Sizes, Platforms (Colours removed as colours == variants) */}
-            <div className="grid grid-cols-3 gap-2">
-              <div className="p-3 bg-white rounded-xl border border-slate-200/80 text-center">
-                <div className="text-xl font-black text-sky-600">{product.variants_count}</div>
-                <div className="text-[11px] text-slate-500 font-medium mt-0.5">Variants</div>
+          {/* Platform-Specific Identifier Row */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 font-mono py-2 border-y border-slate-100">
+            {activeListing.product_id && (
+              <span>
+                {selectedPlatformKey === "amazon" ? "ASIN" : `${activeListing.platform_name} ID`}:{" "}
+                <span className="font-bold text-slate-900">{activeListing.product_id}</span>
+              </span>
+            )}
+            {activeListing.product_id && product.style && <span className="text-slate-200">|</span>}
+            {product.style && (
+              <span>
+                Style: <span className="font-semibold text-slate-800">{product.style}</span>
+              </span>
+            )}
+            {product.ean && (
+              <>
+                <span className="text-slate-200">|</span>
+                <span>
+                  EAN: <span className="font-semibold text-slate-800">{product.ean}</span>
+                </span>
+              </>
+            )}
+            <span className="text-slate-200">|</span>
+            <span>
+              Category: <span className="font-semibold text-slate-800">{product.category}</span>
+            </span>
+            <span className="text-slate-200">|</span>
+            <span>
+              Gender: <span className="font-semibold text-slate-800">{product.gender}</span>
+            </span>
+          </div>
+
+          {/* Selected Platform Pricing & Availability Banner */}
+          <div className="p-4 bg-slate-50/80 rounded-2xl border border-slate-200/80 flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
+                {activeListing.platform_name} Price
+              </span>
+              <div className="flex items-baseline gap-3 mt-0.5">
+                <span className="text-2xl sm:text-3xl font-black text-slate-900">
+                  {activeListing.price != null ? `₹${activeListing.price.toLocaleString("en-IN")}` : "—"}
+                </span>
+                {(activeListing.mrp || product.mrp) && (
+                  <span className="text-xs font-bold text-slate-400">
+                    MRP: ₹{(activeListing.mrp || product.mrp)?.toLocaleString("en-IN")}
+                  </span>
+                )}
               </div>
-              <div className="p-3 bg-white rounded-xl border border-slate-200/80 text-center">
-                <div className="text-xl font-black text-sky-600">{product.sizes_count}</div>
-                <div className="text-[11px] text-slate-500 font-medium mt-0.5">Sizes</div>
-              </div>
-              <div className="p-3 bg-white rounded-xl border border-slate-200/80 text-center">
-                <div className="text-xl font-black text-sky-600">{product.platforms_count}</div>
-                <div className="text-[11px] text-slate-500 font-medium mt-0.5">Platforms</div>
-              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span
+                className={`px-3 py-1 rounded-full text-xs font-bold border ${
+                  activeListing.availability_status === "In stock"
+                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                    : activeListing.availability_status === "Limited stock"
+                    ? "bg-amber-50 text-amber-700 border-amber-200"
+                    : activeListing.availability_status === "Out of stock"
+                    ? "bg-rose-50 text-rose-700 border-rose-200"
+                    : "bg-slate-100 text-slate-500 border-slate-200"
+                }`}
+              >
+                {activeListing.availability_status}
+              </span>
             </div>
           </div>
 
-          {/* Pricing Highlight: Just MRP (no Lowest Price, no discount down text) */}
-          <div className="space-y-3 pt-4 border-t border-slate-200">
-            <div>
-              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
-                MRP
+          {/* Tags */}
+          <div className="flex flex-wrap gap-1.5">
+            {product.tags.map((tag, idx) => (
+              <span
+                key={idx}
+                className="bg-sky-50 text-sky-700 text-xs font-semibold px-2.5 py-0.5 rounded-full border border-sky-100"
+              >
+                {tag}
               </span>
-              <div className="text-3xl font-black text-slate-900 tracking-tight mt-0.5">
-                ₹{(product.mrp || product.lowest_price).toLocaleString("en-IN")}
-              </div>
-            </div>
-
-            {/* Active Platform Listed Price */}
-            {activeListing && activeListing.price !== null && activeListing.price !== undefined ? (
-              <div className="p-3 bg-white rounded-xl border border-slate-200/80 space-y-1">
-                <div className="text-[11px] text-slate-500 font-medium">
-                  {activeListing.platform_name} Price:
-                </div>
-                <div className="text-lg font-black text-slate-900">
-                  ₹{activeListing.price.toLocaleString("en-IN")}
-                </div>
-                <div className="text-[11px] font-semibold text-emerald-600 flex items-center gap-1">
-                  <CheckCircle2 className="w-3 h-3" />
-                  <span>{activeListing.availability_status}</span>
-                </div>
-              </div>
-            ) : (
-              <div className="p-3 bg-slate-100 rounded-xl border border-slate-200/60 text-xs font-semibold text-slate-500 text-center">
-                Out of stock on {activeListing?.platform_name || "selected platform"}
-              </div>
-            )}
+            ))}
           </div>
         </div>
       </div>
@@ -358,7 +350,7 @@ export const ProductDetailsPage: React.FC = () => {
                 </span>
               </div>
               <p className="text-xs text-slate-500 font-medium mt-0.5">
-                Exact scraped variants, sizes, inventory levels, and payment promotions
+                Scraped variants, inventory levels, and promotional discounts for {activeListing.platform_name}
               </p>
             </div>
           </div>
@@ -376,15 +368,31 @@ export const ProductDetailsPage: React.FC = () => {
           )}
         </div>
 
-        {/* OFFERS SECTION (Promo codes, bank discounts, EMI options from JSON) */}
-        {activeListing.offers && activeListing.offers.length > 0 && (
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <Tag className="w-4 h-4 text-sky-500" />
-              <h3 className="font-extrabold text-sm text-slate-900 uppercase tracking-wider text-[11px]">
-                Available Platform Offers &amp; Discounts ({activeListing.offers.length})
-              </h3>
+        {activeListing.availability_status === "No data available" ? (
+          <div className="py-12 text-center space-y-3">
+            <div className="w-12 h-12 rounded-2xl bg-slate-50 border border-slate-200 text-slate-400 flex items-center justify-center mx-auto">
+              <Package className="w-6 h-6" />
             </div>
+            <div className="space-y-1">
+              <h3 className="font-extrabold text-base text-slate-800">
+                No Data Available on {activeListing.platform_name}
+              </h3>
+              <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                This product is not currently listed or active on {activeListing.platform_name}. Select another platform above to inspect listings, variants, and offers.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* OFFERS SECTION (Promo codes, bank discounts, EMI options from JSON) */}
+            {activeListing.offers && activeListing.offers.length > 0 && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Tag className="w-4 h-4 text-sky-500" />
+                  <h3 className="font-extrabold text-sm text-slate-900 uppercase tracking-wider text-[11px]">
+                    Available Platform Offers &amp; Discounts ({activeListing.offers.length})
+                  </h3>
+                </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
               {activeListing.offers.map((off, oidx) => (
@@ -573,7 +581,9 @@ export const ProductDetailsPage: React.FC = () => {
             </table>
           </div>
         </div>
-      </div>
+      </>
+    )}
+  </div>
 
       {/* Offer Modal */}
       {selectedOfferModal && (

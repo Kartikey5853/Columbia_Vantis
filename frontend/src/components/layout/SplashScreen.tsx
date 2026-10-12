@@ -30,14 +30,23 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
     // Check server health immediately and repeatedly
     const checkServer = async () => {
       try {
-        const res = await apiClient.get("/health", { timeout: 3500 });
+        const res = await apiClient.get("/api/health", { timeout: 2500 });
         if (res.status === 200) {
           setIsServerReady(true);
-          // Transition instantly
           finish();
+          return;
         }
       } catch {
-        // Server might be sleeping on Render free tier
+        try {
+          const res = await apiClient.get("/health", { timeout: 2500 });
+          if (res.status === 200) {
+            setIsServerReady(true);
+            finish();
+            return;
+          }
+        } catch {
+          // Server might still be waking up on Render free tier
+        }
       }
     };
 

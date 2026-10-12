@@ -141,36 +141,19 @@ export const AnalysisPage: React.FC = () => {
 
   return (
     <div className="h-full flex flex-col overflow-hidden max-w-7xl w-full mx-auto px-4 sm:px-8 py-3 space-y-3">
-      {/* Top Header & Supabase Real Price Telemetry Banner (Fixed shrink-0) */}
-      <div className="shrink-0 bg-white border border-slate-200/90 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-2xs">
-        <div className="space-y-1">
-          <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-sky-50 border border-sky-100 text-[#079FE0] text-xs font-bold tracking-wide">
-            <Database className="w-3.5 h-3.5" />
-            <span>Supabase Real Price Telemetry</span>
-          </div>
+      {/* Page Title & Count (Structured identically to View Data) */}
+      <div className="shrink-0 space-y-1">
+        <div className="flex items-center gap-3">
           <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
             Product Price Analysis &amp; Movements
           </h1>
-          <p className="text-xs text-slate-500 font-medium">
-            Dual view: Live product price list on the page. Click any product row to open the interactive pop-up graph.
-          </p>
+          <span className="bg-[#EAF6FE] text-[#079FE0] font-extrabold text-xs sm:text-sm px-3 py-1 rounded-full border border-sky-200">
+            {totalRecords.toLocaleString("en-IN")} products
+          </span>
         </div>
-
-        {/* Real Intelligence Metric Badges */}
-        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-          <div className="bg-slate-50 rounded-xl border border-slate-200 px-3 py-2 text-center">
-            <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Tracked Products</span>
-            <span className="text-sm sm:text-base font-black text-slate-900">{totalRecords.toLocaleString("en-IN")}</span>
-          </div>
-          <div className="bg-slate-50 rounded-xl border border-slate-200 px-3 py-2 text-center">
-            <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Active Platforms</span>
-            <span className="text-sm sm:text-base font-black text-[#079FE0]">7 Platforms</span>
-          </div>
-          <div className="bg-slate-50 rounded-xl border border-slate-200 px-3 py-2 text-center">
-            <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Telemetry Engine</span>
-            <span className="text-sm sm:text-base font-black text-emerald-600">Live Scrapes</span>
-          </div>
-        </div>
+        <p className="text-xs sm:text-sm text-slate-500 font-medium">
+          Products with verified price changes across platforms. Click any product row to open the interactive price history graph.
+        </p>
       </div>
 
       {/* Filter and Control Bar (Fixed shrink-0) */}
