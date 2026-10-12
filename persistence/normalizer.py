@@ -5,55 +5,64 @@ from typing import Any, Dict, List, Optional, Tuple
 def normalize_sku_and_style(sku: Optional[str], fallback_title: str = "", fallback_id: str = "") -> Tuple[Optional[str], Optional[str]]:
     """
     Normalizes SKU and Style Code according to Columbia standard.
-    Pattern: XXXXX-XXX where XXXXX is the style code (e.g. 2005101, WE8479, 1987111, BL0828).
-    Returns (style_code, full_sku). Keeps both.
+    Pattern: XXXXX-XXX where XXXXX is the style code (e.g. 2005101, WE8479, 1987111, BL0828, AM1572).
+    Returns (style_code, normalized_sku). Keeps both.
+    - Style: XXXXX (the first 5-7 chars)
+    - SKU: XXXXX-XXX (style + 3-char color code, stripped of variant size noise)
     """
-    clean_sku = str(sku or "").strip().upper()
+    clean_raw = str(sku or "").strip().upper()
     style = None
+    norm_sku = None
 
-    if clean_sku:
-        is_marketplace_id = clean_sku.startswith("MP0") or (clean_sku.startswith("B0") and len(clean_sku) == 10)
+    if clean_raw:
+        is_marketplace_id = clean_raw.startswith("MP0") or (clean_raw.startswith("B0") and len(clean_raw) == 10)
         if not is_marketplace_id:
-            # Check standard hyphenated pattern XXXXX-XXX
-            if "-" in clean_sku:
-                parts = clean_sku.split("-")
-                style = parts[0].strip()
-            elif "_" in clean_sku:
-                parts = clean_sku.split("_")
-                style = parts[0].strip()
-            elif "/" in clean_sku:
-                parts = clean_sku.split("/")
-                style = parts[0].strip()
+            sep = "-" if "-" in clean_raw else ("_" if "_" in clean_raw else ("/" if "/" in clean_raw else None))
+            if sep:
+                parts = [p.strip() for p in clean_raw.split(sep) if p.strip()]
+                if len(parts) >= 2:
+                    style = parts[0]
+                    norm_sku = f"{parts[0]}-{parts[1]}"
+                elif len(parts) == 1:
+                    style = parts[0]
+                    norm_sku = parts[0]
             else:
-                # Check alphanumeric Columbia pattern: 2 letters + 4 digits (e.g. WE8479, BL0828, FL6087, AE0861)
-                m = re.match(r"^([A-Z]{2}\d{4})", clean_sku)
+                m = re.match(r"^([A-Z]{2}\d{4})", clean_raw)
                 if m:
                     style = m.group(1)
+                    norm_sku = clean_raw
                 else:
-                    # 7-digit Columbia style code (e.g. 2005101, 1987111)
-                    m7 = re.match(r"^(\d{7})", clean_sku)
+                    m7 = re.match(r"^(\d{7})", clean_raw)
                     if m7:
                         style = m7.group(1)
+                        norm_sku = clean_raw
                     else:
-                        # 5-digit style pattern
-                        m5 = re.match(r"^(\d{5})", clean_sku)
+                        m5 = re.match(r"^(\d{5})", clean_raw)
                         if m5:
                             style = m5.group(1)
+                            norm_sku = clean_raw
+                        else:
+                            norm_sku = clean_raw
 
-    # If no SKU was provided, extract from title or fallback identifier
+    # Fallback extraction from title or ID if style was not found
     if not style:
         text = f"{fallback_title} {fallback_id}".upper()
-        # Look for 2 letters + 4 digits
         m_code = re.search(r"\b([A-Z]{2}\d{4})\b", text)
         if m_code:
             style = m_code.group(1)
         else:
-            # Look for 7 digits
             m_num = re.search(r"\b(\d{7})\b", text)
             if m_num:
                 style = m_num.group(1)
+            else:
+                m_num5 = re.search(r"\b(\d{5})\b", text)
+                if m_num5:
+                    style = m_num5.group(1)
 
-    return (style, clean_sku if clean_sku else None)
+    if not norm_sku and style:
+        norm_sku = style
+
+    return (style, norm_sku if norm_sku else (clean_raw if clean_raw else None))
 
 
 def normalize_size(raw_size: Optional[str]) -> str:

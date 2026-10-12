@@ -16,17 +16,33 @@ async def upsert_canonical_product(
     """
     Persists or updates a single canonical product record in Supabase.
     Enforces uniqueness on (scraper_id, source_product_id).
+    Supports new columns (style, stock, offers) while falling back cleanly if pending DDL.
     """
     cli = client or get_supabase_client()
     scraper_id = await get_scraper_id(product.source, cli)
     row_data = product.to_db_row(scraper_id)
 
-    res = await cli.upsert(
-        "products",
-        row_data,
-        on_conflict="scraper_id,source_product_id",
-        return_representation=True
-    )
+    try:
+        res = await cli.upsert(
+            "products",
+            row_data,
+            on_conflict="scraper_id,source_product_id",
+            return_representation=True
+        )
+    except Exception as e:
+        if any(col in str(e) for col in ("style", "stock", "offers")):
+            row_data.pop("style", None)
+            row_data.pop("stock", None)
+            row_data.pop("offers", None)
+            res = await cli.upsert(
+                "products",
+                row_data,
+                on_conflict="scraper_id,source_product_id",
+                return_representation=True
+            )
+        else:
+            raise
+
     if not res:
         rows = await cli.select(
             "products",
@@ -47,6 +63,7 @@ async def upsert_canonical_products_batch(
     """
     Batches insertion/upsert of products into Supabase (default 500 items per HTTP call).
     Returns list of saved canonical product records with their UUID ids.
+    Gracefully handles presence or absence of top-level style/stock/offers columns.
     """
     if not products:
         return []
@@ -61,12 +78,28 @@ async def upsert_canonical_products_batch(
     for i in range(0, total, batch_size):
         chunk = products[i:i + batch_size]
         rows = [p.to_db_row(scraper_id) for p in chunk]
-        res = await cli.upsert(
-            "products",
-            rows,
-            on_conflict="scraper_id,source_product_id",
-            return_representation=True
-        )
+        try:
+            res = await cli.upsert(
+                "products",
+                rows,
+                on_conflict="scraper_id,source_product_id",
+                return_representation=True
+            )
+        except Exception as e:
+            if any(col in str(e) for col in ("style", "stock", "offers")):
+                for r in rows:
+                    r.pop("style", None)
+                    r.pop("stock", None)
+                    r.pop("offers", None)
+                res = await cli.upsert(
+                    "products",
+                    rows,
+                    on_conflict="scraper_id,source_product_id",
+                    return_representation=True
+                )
+            else:
+                raise
+
         if res:
             results.extend(res)
         else:

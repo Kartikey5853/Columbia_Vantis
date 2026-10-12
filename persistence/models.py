@@ -48,6 +48,11 @@ class NormalizedProduct:
         sku_val = self.sku.strip() if self.sku else None
         ean_val = self.ean.strip() if self.ean else style_val
 
+        # Calculate total stock across variants if top-level stock is 0
+        computed_stock = int(self.stock or 0)
+        if computed_stock == 0 and self.variants:
+            computed_stock = sum(int(v.stock or 0) for v in self.variants if isinstance(v, NormalizedVariant))
+
         # Enrich variants with normalized style, sku, size, stock, and offers
         serialized_variants = []
         for v in self.variants:
@@ -63,8 +68,11 @@ class NormalizedProduct:
         return {
             "scraper_id": scraper_id,
             "source_product_id": str(self.source_product_id).strip(),
+            "style": style_val,
             "sku": sku_val or style_val,
             "ean": ean_val,
+            "stock": computed_stock,
+            "offers": self.offers,
             "title": self.title.strip() if self.title else "",
             "url": self.url.strip() if self.url else None,
             "image_url": self.image_url.strip() if self.image_url else None,
