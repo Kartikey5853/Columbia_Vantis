@@ -17,17 +17,18 @@ DB_PATH = DATA_DIR / "users.db"
 
 def _get_supabase_config():
     url = (os.getenv("SUPABASE_URL", "") or "https://viflznbwqrunivhfoavq.supabase.co").rstrip("/")
-    key = (
-        os.getenv("SUPABASE_SECRET_KEY")
-        or os.getenv("SUPABASE_KEY")
-        or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-        or os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
-    )
+    sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    if not sec_key:
+        candidate = os.getenv("SUPABASE_KEY", "")
+        if candidate.startswith("sb_secret_") or candidate.startswith("eyJ"):
+            sec_key = candidate
+    key = sec_key or "sb_secret_wgDvOA3l28p2d2jzH5euRg_mgqeBpLF"
     headers = {
         "apikey": key,
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
         "Accept": "application/json",
+        "Prefer": "return=representation",
     }
     return url, key, headers
 
@@ -163,13 +164,18 @@ class UserService:
                         rows = res.json()
                         if rows:
                             u_data = rows[0]
+                            if u_data.get("avatar_url") and "unsplash.com" in str(u_data["avatar_url"]):
+                                u_data["avatar_url"] = None
                             cls._save_local_cache(u_data)
                             return u_data
             except Exception as e:
                 print(f"[USER_SERVICE] ⚠️ Supabase get_user connection error: {e}", flush=True)
 
         # Fallback to local SQLite cache
-        return cls._get_local_user(clean_user)
+        local_user = cls._get_local_user(clean_user)
+        if local_user and local_user.get("avatar_url") and "unsplash.com" in str(local_user["avatar_url"]):
+            local_user["avatar_url"] = None
+        return local_user
 
     @classmethod
     def authenticate(cls, username: str, password: str) -> Optional[Dict[str, Any]]:
@@ -301,15 +307,23 @@ class UserService:
             payload["theme"] = theme.strip()
 
         url, key, headers = _get_supabase_config()
+        updated_remote_row = None
         if url and key:
             try:
-                with httpx.Client(timeout=5.0) as client:
-                    client.patch(
+                with httpx.Client(timeout=10.0) as client:
+                    r = client.patch(
                         f"{url}/rest/v1/app_users?username=eq.{clean_user}",
                         headers=headers,
                         json=payload
                     )
-                    print(f"[USER_SERVICE] [SUPABASE] Synchronized profile update for @{clean_user} to Supabase.", flush=True)
+                    if r.status_code in (200, 204):
+                        rows = r.json() if r.text else []
+                        if rows:
+                            updated_remote_row = rows[0]
+                            cls._save_local_cache(updated_remote_row)
+                            print(f"[USER_SERVICE] [SUPABASE] Successfully updated profile in Supabase for @{clean_user}.", flush=True)
+                    else:
+                        print(f"[USER_SERVICE] ⚠️ Supabase update returned status {r.status_code}: {r.text}", flush=True)
             except Exception as e:
                 print(f"[USER_SERVICE] ⚠️ Supabase update_profile error: {e}", flush=True)
 
@@ -345,6 +359,8 @@ class UserService:
         except Exception:
             pass
 
+        if updated_remote_row:
+            return updated_remote_row
         return cls.get_user(clean_user)
 
     @classmethod

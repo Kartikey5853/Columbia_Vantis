@@ -208,7 +208,7 @@ VALUES
         '2b00fd270242e8c9ef2fbd25c9916facb7eee85db31cb7a34570566343b0abe7',
         'Kartikey',
         '',
-        'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+        NULL,
         true,
         'Master_Catalog_Columbia.xlsx',
         3513
@@ -218,7 +218,7 @@ VALUES
         '048ce982a3172bc31a1590a34a5d7e5ebfc885b97db7941937256e359628c08d',
         'Raj',
         '',
-        'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
+        NULL,
         true,
         'Master_Catalog_Columbia.xlsx',
         3513

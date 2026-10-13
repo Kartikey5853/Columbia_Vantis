@@ -82,7 +82,7 @@ app.include_router(system_router)
 async def api_health_check():
     return {
         "status": "healthy",
-        "service": "Columbia VANTIS Intelligence API",
+        "service": "Columbia Vantis backend status",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "database": "connected",
         "pipeline_running": is_pipeline_running()

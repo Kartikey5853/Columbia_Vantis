@@ -37,6 +37,18 @@ async def list_products(
     )
     return res
 
+@router.get("/reload")
+@router.post("/reload")
+async def reload_catalog():
+    """Forces fresh re-index of catalog directly from Supabase."""
+    catalog_service.load_catalog(force=True)
+    return {
+        "status": "success",
+        "total_families": len(catalog_service.families),
+        "raw_records": catalog_service.raw_records_count,
+        "load_time": catalog_service.load_time_seconds
+    }
+
 @router.get("/search", response_model=List[ProductFamilySummary])
 async def search_products(
     q: str = Query(..., min_length=1, description="Query string"),

@@ -187,7 +187,6 @@ async def get_recent_runs():
         for r in raw_runs:
             raw_name = s_map.get(r.get("scraper_id")) or (r.get("report") or {}).get("scraper") or "columbia"
             p_name = name_pretty.get(raw_name, raw_name.title())
-            p_emoji = platform_emojis.get(raw_name, "📊")
             
             st_raw = r.get("started_at") or r.get("updated_at")
             ts_str = "Recent"
@@ -209,7 +208,7 @@ async def get_recent_runs():
             runs.append({
                 "id": str(r.get("id")),
                 "timestamp": ts_str,
-                "platform": f"{p_emoji} {p_name}",
+                "platform": p_name,
                 "platform_key": raw_name,
                 "business_date": r.get("business_date") or "2026-10-12",
                 "job_id": str(r.get("id"))[:12],

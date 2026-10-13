@@ -261,12 +261,12 @@ class CatalogService:
         """Synchronizes master catalog rows to Supabase 'master_catalog' table via PostgREST."""
         import httpx
         url = (os.getenv("SUPABASE_URL", "") or "https://viflznbwqrunivhfoavq.supabase.co").rstrip("/")
-        key = (
-            os.getenv("SUPABASE_SECRET_KEY")
-            or os.getenv("SUPABASE_KEY")
-            or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-            or os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
-        )
+        sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        if not sec_key:
+            candidate = os.getenv("SUPABASE_KEY", "")
+            if candidate.startswith("sb_secret_") or candidate.startswith("eyJ"):
+                sec_key = candidate
+        key = sec_key or "sb_secret_wgDvOA3l28p2d2jzH5euRg_mgqeBpLF"
         if not url or not key or not self.master_records:
             return
 
@@ -388,13 +388,12 @@ class CatalogService:
         """Fetches all scraped products from Supabase directly via PostgREST."""
         import httpx
         url = (os.getenv("SUPABASE_URL", "") or "https://viflznbwqrunivhfoavq.supabase.co").rstrip("/")
-        key = (
-            os.getenv("SUPABASE_SECRET_KEY")
-            or os.getenv("SUPABASE_KEY")
-            or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-            or os.getenv("SUPABASE_PUBLISHABLE_KEY")
-            or os.getenv("SUPABASE_ANON_KEY", "")
-        )
+        sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        if not sec_key:
+            candidate = os.getenv("SUPABASE_KEY", "")
+            if candidate.startswith("sb_secret_") or candidate.startswith("eyJ"):
+                sec_key = candidate
+        key = sec_key or "sb_secret_wgDvOA3l28p2d2jzH5euRg_mgqeBpLF"
         if not url or not key:
             return []
 
@@ -505,7 +504,7 @@ class CatalogService:
         self.all_genders = sorted(list(gens))
 
     def load_catalog(self, force: bool = False):
-        if self.is_loaded and not force:
+        if self.is_loaded and not force and len(self.families) > 0:
             return
 
         start_time = time.time()
@@ -952,7 +951,7 @@ class CatalogService:
         self.families = processed_families
         self._build_indices()
         self.load_time_seconds = time.time() - start_time
-        self.is_loaded = True
+        self.is_loaded = len(self.families) > 0
 
         # Save to disk cache for ultra-fast startup
         try:
@@ -978,7 +977,8 @@ class CatalogService:
                 print(f"[CATALOG_SERVICE] [WARN] Failed to load Supabase cache: {e}", flush=True)
 
     def search(self, query: str, limit: int = 50) -> List[Dict[str, Any]]:
-        self.load_catalog()
+        if not self.is_loaded or len(self.families) == 0:
+            self.load_catalog(force=True)
         if not query or not query.strip():
             return self.families_list[:limit]
 
@@ -1029,7 +1029,8 @@ class CatalogService:
         return [m[1] for m in matches[:limit]]
 
     def bulk_search(self, identifiers: List[str]) -> List[Dict[str, Any]]:
-        self.load_catalog()
+        if not self.is_loaded or len(self.families) == 0:
+            self.load_catalog(force=True)
         matched_ids = set()
         results = []
 
@@ -1070,7 +1071,8 @@ class CatalogService:
         max_price: Optional[float] = None,
         sort_by: str = "relevance"
     ) -> Dict[str, Any]:
-        self.load_catalog()
+        if not self.is_loaded or len(self.families) == 0:
+            self.load_catalog(force=True)
 
         if search and search.strip():
             candidate_list = self.search(search, limit=5000)
@@ -1124,11 +1126,13 @@ class CatalogService:
         }
 
     def get_family_by_id(self, family_id: str) -> Optional[Dict[str, Any]]:
-        self.load_catalog()
+        if not self.is_loaded or len(self.families) == 0:
+            self.load_catalog(force=True)
         return self.families.get(family_id)
 
     def get_summary(self) -> Dict[str, Any]:
-        self.load_catalog()
+        if not self.is_loaded or len(self.families) == 0:
+            self.load_catalog(force=True)
         total_prods = len(self.families_list)
         total_vars = sum(f["variants_count"] for f in self.families_list)
         all_prices = [f["lowest_price"] for f in self.families_list if f["lowest_price"] > 0]
@@ -1154,7 +1158,8 @@ class CatalogService:
         page: int = 1,
         page_size: int = 20
     ) -> Dict[str, Any]:
-        self.load_catalog()
+        if not self.is_loaded or len(self.families) == 0:
+            self.load_catalog(force=True)
 
         # Filter candidate products
         if search and search.strip():
@@ -1217,6 +1222,7 @@ class CatalogService:
             if not has_price_change:
                 continue
 
+            prev_price = max_p if pct < 0 else (min_p if pct > 0 else (spark[-2] if len(spark) >= 2 and spark[-2] != lowest else max_p))
             enriched.append({
                 "family_id": p["family_id"],
                 "title": p["title"],
@@ -1226,6 +1232,7 @@ class CatalogService:
                 "gender": p["gender"],
                 "image_url": p["image_url"],
                 "lowest_price": lowest,
+                "previous_price": prev_price,
                 "price_change_percent": pct,
                 "min_recorded_price": min_p,
                 "max_recorded_price": max_p,
