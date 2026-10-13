@@ -260,7 +260,7 @@ class CatalogService:
     def sync_master_to_supabase(self):
         """Synchronizes master catalog rows to Supabase 'master_catalog' table via PostgREST."""
         import httpx
-        url = (os.getenv("SUPABASE_URL", "") or "https://saeekkbjnnksgyikrchk.supabase.co").rstrip("/")
+        url = (os.getenv("SUPABASE_URL", "") or "https://viflznbwqrunivhfoavq.supabase.co").rstrip("/")
         key = (
             os.getenv("SUPABASE_SECRET_KEY")
             or os.getenv("SUPABASE_KEY")
@@ -387,7 +387,7 @@ class CatalogService:
     def _fetch_from_supabase(self) -> List[Tuple[str, Dict[str, Any]]]:
         """Fetches all scraped products from Supabase directly via PostgREST."""
         import httpx
-        url = (os.getenv("SUPABASE_URL", "") or "https://saeekkbjnnksgyikrchk.supabase.co").rstrip("/")
+        url = (os.getenv("SUPABASE_URL", "") or "https://viflznbwqrunivhfoavq.supabase.co").rstrip("/")
         key = (
             os.getenv("SUPABASE_SECRET_KEY")
             or os.getenv("SUPABASE_KEY")

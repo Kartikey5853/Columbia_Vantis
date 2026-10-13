@@ -16,7 +16,7 @@ DB_PATH = DATA_DIR / "users.db"
 
 
 def _get_supabase_config():
-    url = (os.getenv("SUPABASE_URL", "") or "https://saeekkbjnnksgyikrchk.supabase.co").rstrip("/")
+    url = (os.getenv("SUPABASE_URL", "") or "https://viflznbwqrunivhfoavq.supabase.co").rstrip("/")
     key = (
         os.getenv("SUPABASE_SECRET_KEY")
         or os.getenv("SUPABASE_KEY")

@@ -142,7 +142,7 @@ async def get_servers_status():
                 "service_type": "Database & Persistence",
                 "environment": "production",
                 "status": "live",
-                "base_url": os.getenv("SUPABASE_URL", "https://saeekkbjnnksgyikrchk.supabase.co"),
+                "base_url": os.getenv("SUPABASE_URL", "https://viflznbwqrunivhfoavq.supabase.co"),
                 "region": "ap-southeast-1 (Singapore)",
                 "uptime": "99.98%",
                 "database_size": "61 MB",
