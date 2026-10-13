@@ -183,6 +183,7 @@ async def get_recent_runs():
             "myntra": "👗",
             "ajio": "🏷️"
         }
+        runs = []
         for r in raw_runs:
             raw_name = s_map.get(r.get("scraper_id")) or (r.get("report") or {}).get("scraper") or "columbia"
             p_name = name_pretty.get(raw_name, raw_name.title())

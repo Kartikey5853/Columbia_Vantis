@@ -303,9 +303,13 @@ async def _create_lean_tab(browser, url: str, timeout: int = 60_000):
     for attempt in range(1, 4):
         try:
             print(f"[BROWSER] Navigating single tab to {url} (attempt {attempt}/3)...", flush=True)
-            await page.goto(url, wait_until="domcontentloaded", timeout=timeout)
+            await page.goto(url, wait_until="commit", timeout=min(timeout, 25_000))
             break
         except Exception as e:
+            curr_url = page.url
+            if curr_url and curr_url != "about:blank" and any(d in curr_url for d in ("tatacliq.com", "luxury.tatacliq.com")):
+                print(f"[BROWSER] Navigation completed origin commit to {curr_url} despite warning: {e}", flush=True)
+                break
             if attempt == 3:
                 raise
             print(f"[BROWSER] Navigation retry {attempt}/3 due to: {e}", flush=True)

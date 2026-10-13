@@ -72,8 +72,8 @@ VALUES
     (
         'kartikey',
         '2b00fd270242e8c9ef2fbd25c9916facb7eee85db31cb7a34570566343b0abe7',
-        'Kartikey Columbia Admin',
-        'Product Intelligence Lead',
+        'Kartikey',
+        '',
         'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
         true,
         'Master_Catalog_Columbia.xlsx',
@@ -82,8 +82,8 @@ VALUES
     (
         'raj',
         '048ce982a3172bc31a1590a34a5d7e5ebfc885b97db7941937256e359628c08d',
-        'Raj Columbia Specialist',
-        'Product Analyst',
+        'Raj',
+        '',
         'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
         true,
         'Master_Catalog_Columbia.xlsx',
