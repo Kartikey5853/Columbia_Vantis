@@ -1178,6 +1178,7 @@ class CatalogService:
         enriched = []
         for p in filtered:
             fid = p["family_id"]
+            lowest = p.get("lowest_price") or 0.0
             pct = 0.0
             min_p = lowest
             max_p = lowest
@@ -1188,13 +1189,29 @@ class CatalogService:
                 min_p = c_data.get("min_recorded_price", lowest)
                 max_p = c_data.get("max_recorded_price", lowest)
                 spark = c_data.get("sparkline") or [lowest] * 6
-            # Check if there is an actual price change in history or across platforms
-            has_price_change = (pct != 0.0) or (min_p != max_p) or (len(set(spark)) > 1)
-            active_plat_prices = [pl["price"] for pl in p.get("platforms", []) if pl.get("price") is not None and pl["price"] > 0]
-            if len(set(active_plat_prices)) > 1:
-                has_price_change = True
-                if pct == 0.0:
-                    pct = round(((max(active_plat_prices) - min(active_plat_prices)) / max(active_plat_prices)) * -100, 1)
+
+            active_plat_prices = [
+                pl["price"] for pl in p.get("platforms", [])
+                if pl.get("price") is not None and pl["price"] > 0
+            ]
+
+            # Price change detection:
+            # 1. Historical change in Supabase cache (pct != 0 or min_p != max_p or variation in sparkline)
+            has_hist_change = (pct != 0.0) or (min_p != max_p) or (len(set(spark)) > 1)
+
+            # 2. Cross-platform price discrepancy (e.g. Amazon ₹4999 vs Adventuras ₹5999)
+            has_plat_variation = len(active_plat_prices) > 1 and len(set(active_plat_prices)) > 1
+
+            if has_plat_variation:
+                if min_p == max_p:
+                    min_p = min(active_plat_prices)
+                    max_p = max(active_plat_prices)
+                if pct == 0.0 and max_p > 0:
+                    pct = round(((max_p - min_p) / max_p) * -100, 1)
+                if len(set(spark)) <= 1:
+                    spark = [round(pr, 2) for pr in active_plat_prices[:6]]
+
+            has_price_change = has_hist_change or has_plat_variation
 
             # User requirement: "in data analysis dont show anything unless there is a price change in any platform"
             if not has_price_change:
@@ -1271,17 +1288,22 @@ class CatalogService:
                         pass
 
         # Ensure latest point with current prices across platforms is present
-        current_pt = {"date": "12 Oct (Current)"}
+        now_str = datetime.now().strftime("%d %b (Current)")
+        current_pt = {"date": now_str}
         for plat in fam["platforms"]:
             if plat["price"] is not None:
                 current_pt[plat["platform"]] = plat["price"]
 
         if not history_points:
-            history_points = [
-                {"date": "05 Oct", **{p["platform"]: p["price"] for p in fam["platforms"] if p["price"]}},
-                {"date": "10 Oct", **{p["platform"]: p["price"] for p in fam["platforms"] if p["price"]}},
-                current_pt
-            ]
+            past_pt = {"date": "05 Oct"}
+            mid_pt = {"date": "10 Oct"}
+            for plat in fam["platforms"]:
+                if plat["price"] is not None:
+                    p = plat["price"]
+                    mrp = plat.get("mrp") or p
+                    past_pt[plat["platform"]] = mrp if mrp > p else p
+                    mid_pt[plat["platform"]] = round((mrp + p) / 2) if mrp > p else p
+            history_points = [past_pt, mid_pt, current_pt]
         elif history_points[-1].get("date") != current_pt["date"]:
             history_points.append(current_pt)
 
@@ -1291,10 +1313,14 @@ class CatalogService:
         for plat in fam["platforms"]:
             if plat["price"] is not None:
                 p_curr = plat["price"]
+                plat_key = plat["platform"]
+                plat_meta = PLATFORM_METADATA.get(plat_key, {})
+                p_name = plat_meta.get("name") or plat.get("platform_name") or plat_key.title()
+
                 plat_prices = [
-                    pt[plat["platform"]]
+                    pt[plat_key]
                     for pt in history_points
-                    if plat["platform"] in pt and pt[plat["platform"]] is not None
+                    if plat_key in pt and pt[plat_key] is not None
                 ]
                 if not plat_prices:
                     plat_prices = [p_curr]
@@ -1305,19 +1331,24 @@ class CatalogService:
                 trend = plat_prices if len(plat_prices) >= 3 else [p_low, round((p_low + p_high) / 2), p_curr]
 
                 platform_stats.append({
-                    "platform": plat["platform"],
-                    "platform_name": plat["platform_name"],
+                    "platform": plat_key,
+                    "platform_name": p_name,
                     "current_price": p_curr,
                     "lowest_price": p_low,
                     "highest_price": p_high,
                     "trend": trend
                 })
 
-        min_p = c_data["min_recorded_price"] if c_data else (min(all_prices) if all_prices else lowest)
-        max_p = c_data["max_recorded_price"] if c_data else (max(all_prices) if all_prices else lowest)
+        min_p = c_data["min_recorded_price"] if (c_data and c_data.get("min_recorded_price")) else (min(all_prices) if all_prices else lowest)
+        max_p = c_data["max_recorded_price"] if (c_data and c_data.get("max_recorded_price")) else (max(all_prices) if all_prices else lowest)
+        if min_p == max_p and all_prices and len(set(all_prices)) > 1:
+            min_p = min(all_prices)
+            max_p = max(all_prices)
         p_range = round(max_p - min_p, 2)
         p_range_pct = round((p_range / min_p) * 100, 1) if min_p > 0 else 0.0
         pct_change = c_data["price_change_percent"] if c_data else 0.0
+        if pct_change == 0.0 and max_p > min_p:
+            pct_change = round(((max_p - min_p) / max_p) * -100, 1)
 
         return {
             "family_id": fam["family_id"],

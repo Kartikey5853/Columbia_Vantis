@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { useParams, Link } from "react-router-dom";
 import {
   ArrowLeft,
@@ -12,6 +12,8 @@ import {
   Layers,
   Percent,
   Check,
+  LayoutGrid,
+  List,
 } from "lucide-react";
 import productService from "../services/productService";
 import { ProductFamily, PlatformListing, ProductVariant, ProductOffer } from "../types";
@@ -91,11 +93,111 @@ export const ProductDetailsPage: React.FC = () => {
   const activeListing: PlatformListing =
     product.platforms.find((p) => p.platform === selectedPlatformKey) || product.platforms[0];
 
+  const [variantViewMode, setVariantViewMode] = useState<"cards" | "table">("cards");
+
   // Active platform variants list: strictly ONLY variants for the selected platform
   const activeVariants: ProductVariant[] =
     activeListing.variants && activeListing.variants.length > 0
       ? activeListing.variants
       : [];
+
+  // Derive individual cards for ALL sizes on this single platform
+  const displayVariantCards = useMemo(() => {
+    const cards: Array<{
+      size: string;
+      color?: string | null;
+      sku?: string | null;
+      ean?: string | null;
+      price?: number | null;
+      mrp?: number | null;
+      available: boolean;
+      stock?: number | string | null;
+      url?: string | null;
+    }> = [];
+
+    const rawVariants = activeListing.variants || [];
+
+    if (rawVariants.length > 0) {
+      for (const v of rawVariants) {
+        const rawSize = (v.size || "").trim();
+        // If size has comma-separated values (e.g. "S, M, L, XL"), split into separate cards
+        if (rawSize.includes(",")) {
+          const individualSizes = rawSize.split(",").map((s) => s.trim()).filter(Boolean);
+          for (const s of individualSizes) {
+            cards.push({
+              size: s,
+              color: v.color || null,
+              sku: v.sku || activeListing.product_id || null,
+              ean: v.ean || null,
+              price: v.price ?? activeListing.price,
+              mrp: v.mrp ?? activeListing.mrp,
+              available: v.available !== false,
+              stock: v.stock ?? v.quantity ?? activeListing.stock_text,
+              url: v.url || activeListing.url,
+            });
+          }
+        } else {
+          cards.push({
+            size: rawSize || "Standard",
+            color: v.color || null,
+            sku: v.sku || activeListing.product_id || null,
+            ean: v.ean || null,
+            price: v.price ?? activeListing.price,
+            mrp: v.mrp ?? activeListing.mrp,
+            available: v.available !== false,
+            stock: v.stock ?? v.quantity ?? activeListing.stock_text,
+            url: v.url || activeListing.url,
+          });
+        }
+      }
+    }
+
+    // If no variants or only 1 lumped variant, but multiple sizes are known for this platform:
+    if (
+      cards.length === 0 ||
+      (cards.length === 1 && (activeListing.sizes_summary?.includes(",") || (product.sizes && product.sizes.length > 1)))
+    ) {
+      const candidateSizes = activeListing.sizes_summary?.includes(",")
+        ? activeListing.sizes_summary.split(",").map((s) => s.trim()).filter(Boolean)
+        : product.sizes && product.sizes.length > 1
+        ? product.sizes
+        : [];
+
+      if (candidateSizes.length > 1) {
+        cards.length = 0;
+        for (const sz of candidateSizes) {
+          cards.push({
+            size: sz,
+            color: null,
+            sku: activeListing.product_id || product.style || null,
+            ean: product.ean || null,
+            price: activeListing.price,
+            mrp: activeListing.mrp,
+            available: activeListing.price !== null,
+            stock: activeListing.stock_text,
+            url: activeListing.url,
+          });
+        }
+      }
+    }
+
+    // Fallback if still empty but listing is present
+    if (cards.length === 0 && activeListing.price !== null) {
+      cards.push({
+        size: activeListing.sizes_summary || "Standard",
+        color: null,
+        sku: activeListing.product_id || product.style || null,
+        ean: product.ean || null,
+        price: activeListing.price,
+        mrp: activeListing.mrp,
+        available: activeListing.price !== null,
+        stock: activeListing.stock_text,
+        url: activeListing.url,
+      });
+    }
+
+    return cards;
+  }, [activeListing, product]);
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-8 py-6 space-y-8">
@@ -425,7 +527,7 @@ export const ProductDetailsPage: React.FC = () => {
           </div>
         )}
 
-        {/* VARIANTS & SIZES STOCK TABLE */}
+        {/* VARIANTS & SIZES STOCK SECTION */}
         <div className="space-y-3.5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
             <div className="flex items-center gap-2">
@@ -434,11 +536,33 @@ export const ProductDetailsPage: React.FC = () => {
                 Variant-Level Inventory &amp; Size Breakdown
               </h3>
             </div>
-            <span className="text-xs font-semibold text-slate-400">
-              {activeVariants.length > 0
-                ? `${activeVariants.length} ${activeListing.platform_name} variant${activeVariants.length > 1 ? "s" : ""}`
-                : `0 variants on ${activeListing.platform_name}`}
-            </span>
+            {/* View Mode Switcher: Cards vs Table */}
+            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
+              <button
+                type="button"
+                onClick={() => setVariantViewMode("cards")}
+                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  variantViewMode === "cards"
+                    ? "bg-white text-slate-900 shadow-xs"
+                    : "text-slate-500 hover:text-slate-800"
+                }`}
+              >
+                <LayoutGrid className="w-3.5 h-3.5" />
+                <span>Cards ({displayVariantCards.length})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setVariantViewMode("table")}
+                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  variantViewMode === "table"
+                    ? "bg-white text-slate-900 shadow-xs"
+                    : "text-slate-500 hover:text-slate-800"
+                }`}
+              >
+                <List className="w-3.5 h-3.5" />
+                <span>Table</span>
+              </button>
+            </div>
           </div>
 
           {/* Platform Options for Variant Breakdown */}
@@ -482,145 +606,173 @@ export const ProductDetailsPage: React.FC = () => {
             })}
           </div>
 
-          <div className="overflow-x-auto rounded-2xl border border-slate-200/90">
-            <table className="w-full text-left border-collapse text-xs">
-              <thead>
-                <tr className="bg-slate-50/80 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                  <th className="py-3 px-4">Size</th>
-                  <th className="py-3 px-4">Variant / Color</th>
-                  <th className="py-3 px-4">SKU / Identifier</th>
-                  <th className="py-3 px-4">Stock &amp; Availability</th>
-                  <th className="py-3 px-4">Price</th>
-                  <th className="py-3 px-4">MRP</th>
-                  <th className="py-3 px-4 text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
-                {activeVariants.length > 0 ? (
-                  activeVariants.map((v, vidx) => {
-                    const isAvailable = v.available !== false;
-                    const stockVal = v.stock ?? v.quantity;
+          {/* CARD GRID VIEW (Default: One card for each size on this platform) */}
+          {variantViewMode === "cards" ? (
+            displayVariantCards.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3.5">
+                {displayVariantCards.map((card, idx) => (
+                  <div
+                    key={idx}
+                    className="bg-white rounded-2xl border border-slate-200/90 hover:border-sky-300 p-4 shadow-2xs hover:shadow-xs transition-all space-y-3 flex flex-col justify-between group"
+                  >
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="px-2.5 py-1 bg-slate-100 group-hover:bg-sky-50 group-hover:text-sky-700 rounded-xl text-xs font-mono font-black text-slate-800 transition-colors">
+                          Size: {card.size}
+                        </span>
+                        <span
+                          className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                            card.available
+                              ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                              : "bg-rose-50 text-rose-700 border border-rose-200"
+                          }`}
+                        >
+                          <span
+                            className={`w-1.5 h-1.5 rounded-full ${
+                              card.available ? "bg-emerald-500" : "bg-rose-500"
+                            }`}
+                          />
+                          <span>{card.available ? "In stock" : "Out of stock"}</span>
+                        </span>
+                      </div>
 
-                    return (
+                      {card.color && (
+                        <p className="text-xs font-semibold text-slate-700 line-clamp-1">
+                          Color: {card.color}
+                        </p>
+                      )}
+
+                      <div className="text-[11px] font-mono text-slate-400 truncate">
+                        ID: {card.sku || "—"}
+                      </div>
+
+                      {card.stock && card.available && (
+                        <div className="text-[11px] text-slate-500 font-medium">
+                          Stock:{" "}
+                          <span className="font-bold text-slate-700">
+                            {typeof card.stock === "number" ? `${card.stock} units` : card.stock}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="pt-2.5 border-t border-slate-100 flex items-center justify-between gap-2">
+                      <div>
+                        <div className="text-sm font-black text-slate-900">
+                          {card.price ? `₹${card.price.toLocaleString("en-IN")}` : "—"}
+                        </div>
+                        {card.mrp && card.mrp > (card.price || 0) && (
+                          <div className="text-[10px] font-mono text-slate-400 line-through">
+                            MRP ₹{card.mrp.toLocaleString("en-IN")}
+                          </div>
+                        )}
+                      </div>
+
+                      {card.url && (
+                        <a
+                          href={card.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-all shadow-2xs cursor-pointer"
+                        >
+                          <span>View</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="py-12 text-center text-xs text-slate-400 font-semibold bg-slate-50/50 rounded-2xl border border-slate-200">
+                No size variants recorded for {activeListing.platform_name}.
+              </div>
+            )
+          ) : (
+            /* TABLE VIEW */
+            <div className="overflow-x-auto rounded-2xl border border-slate-200/90">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="bg-slate-50/80 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                    <th className="py-3 px-4">Size</th>
+                    <th className="py-3 px-4">Variant / Color</th>
+                    <th className="py-3 px-4">SKU / Identifier</th>
+                    <th className="py-3 px-4">Stock &amp; Availability</th>
+                    <th className="py-3 px-4">Price</th>
+                    <th className="py-3 px-4">MRP</th>
+                    <th className="py-3 px-4 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
+                  {displayVariantCards.length > 0 ? (
+                    displayVariantCards.map((card, vidx) => (
                       <tr key={vidx} className="hover:bg-slate-50/60 transition-colors">
-                        {/* Size */}
                         <td className="py-3.5 px-4 font-bold text-slate-900">
                           <span className="inline-block px-2.5 py-1 bg-slate-100 rounded-lg text-xs font-mono font-bold">
-                            {v.size || "Standard"}
+                            {card.size}
                           </span>
                         </td>
-
-                        {/* Color / Variant */}
                         <td className="py-3.5 px-4 font-semibold text-slate-800">
-                          {v.color || product.title}
+                          {card.color || activeListing.listing_title}
                         </td>
-
-                        {/* SKU */}
                         <td className="py-3.5 px-4 font-mono text-[11px] text-slate-500">
-                          {v.sku || v.ean || product.style || "—"}
+                          {card.sku || product.style || "—"}
                         </td>
-
-                        {/* Stock & Availability */}
                         <td className="py-3.5 px-4 whitespace-nowrap">
                           <div className="flex items-center gap-1.5">
                             <span
                               className={`w-2 h-2 rounded-full ${
-                                isAvailable ? "bg-emerald-500" : "bg-rose-400"
+                                card.available ? "bg-emerald-500" : "bg-rose-400"
                               }`}
                             />
-                            <span className={`font-bold ${isAvailable ? "text-emerald-700" : "text-rose-600"}`}>
-                              {isAvailable ? "In stock" : "Out of stock"}
+                            <span
+                              className={`font-bold ${
+                                card.available ? "text-emerald-700" : "text-rose-600"
+                              }`}
+                            >
+                              {card.available ? "In stock" : "Out of stock"}
                             </span>
-                            {stockVal && isAvailable && (
+                            {card.stock && card.available && (
                               <span className="text-[11px] text-slate-400 font-normal">
-                                ({typeof stockVal === "number" ? `${stockVal} units` : stockVal})
+                                ({typeof card.stock === "number" ? `${card.stock} units` : card.stock})
                               </span>
                             )}
                           </div>
                         </td>
-
-                        {/* Price */}
                         <td className="py-3.5 px-4 font-extrabold text-slate-900">
-                          {v.price ? `₹${v.price.toLocaleString("en-IN")}` : activeListing.price ? `₹${activeListing.price.toLocaleString("en-IN")}` : "—"}
+                          {card.price ? `₹${card.price.toLocaleString("en-IN")}` : "—"}
                         </td>
-
-                        {/* MRP */}
                         <td className="py-3.5 px-4 font-mono text-slate-500">
-                          {v.mrp ? `₹${v.mrp.toLocaleString("en-IN")}` : product.mrp ? `₹${product.mrp.toLocaleString("en-IN")}` : "—"}
+                          {card.mrp ? `₹${card.mrp.toLocaleString("en-IN")}` : "—"}
                         </td>
-
-                        {/* Action */}
                         <td className="py-3.5 px-4 text-right">
-                          <a
-                            href={v.url || activeListing.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-all cursor-pointer"
-                          >
-                            <span>View</span>
-                            <ExternalLink className="w-3 h-3 text-slate-400" />
-                          </a>
+                          {card.url ? (
+                            <a
+                              href={card.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-all cursor-pointer"
+                            >
+                              <span>View</span>
+                              <ExternalLink className="w-3 h-3 text-slate-400" />
+                            </a>
+                          ) : (
+                            <span className="text-slate-300 italic text-xs">Unlisted</span>
+                          )}
                         </td>
                       </tr>
-                    );
-                  })
-                ) : (
-                  /* Single listing fallback */
-                  <tr>
-                    <td className="py-4 px-4 font-bold text-slate-900">
-                      <span className="px-2.5 py-1 bg-slate-100 rounded-lg text-xs font-mono font-bold">
-                        {activeListing.sizes_summary || "Standard"}
-                      </span>
-                    </td>
-                    <td className="py-4 px-4 font-semibold text-slate-800">
-                      {activeListing.listing_title}
-                    </td>
-                    <td className="py-4 px-4 font-mono text-xs text-slate-500">
-                      {product.style || product.sku || "—"}
-                    </td>
-                    <td className="py-4 px-4">
-                      <div className="flex items-center gap-1.5">
-                        <span
-                          className={`w-2 h-2 rounded-full ${
-                            activeListing.price !== null ? "bg-emerald-500" : "bg-slate-300"
-                          }`}
-                        />
-                        <span className="font-bold text-slate-800">
-                          {activeListing.availability_status}
-                        </span>
-                        {activeListing.stock_text && (
-                          <span className="text-slate-400 font-normal">
-                            ({activeListing.stock_text})
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="py-4 px-4 font-extrabold text-slate-900">
-                      {activeListing.price ? `₹${activeListing.price.toLocaleString("en-IN")}` : "—"}
-                    </td>
-                    <td className="py-4 px-4 font-mono text-slate-500">
-                      {product.mrp ? `₹${product.mrp.toLocaleString("en-IN")}` : "—"}
-                    </td>
-                    <td className="py-4 px-4 text-right">
-                      {activeListing.url && activeListing.price !== null ? (
-                        <a
-                          href={activeListing.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-all"
-                        >
-                          <span>View</span>
-                          <ExternalLink className="w-3 h-3 text-slate-400" />
-                        </a>
-                      ) : (
-                        <span className="text-slate-300 italic text-xs">Unlisted</span>
-                      )}
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={7} className="py-8 text-center text-xs text-slate-400 font-semibold">
+                        No size variants recorded for {activeListing.platform_name}.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </>
     )}

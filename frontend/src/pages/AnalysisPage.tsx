@@ -23,6 +23,8 @@ import {
   LineChart as LineChartIcon,
   Database,
   ArrowRight,
+  Maximize2,
+  Minimize2,
 } from "lucide-react";
 import analyticsService from "../services/analyticsService";
 import {
@@ -47,6 +49,14 @@ export const AnalysisPage: React.FC = () => {
   const [platform, setPlatform] = useState<string>("All");
   const [sortBy, setSortBy] = useState<string>("price_change");
 
+  // Fullscreen table toggle
+  const [isFullscreenTable, setIsFullscreenTable] = useState<boolean>(false);
+
+  // Active on-screen graph product & history
+  const [activeInlineProduct, setActiveInlineProduct] = useState<AnalyticsProductRow | null>(null);
+  const [inlineHistoryData, setInlineHistoryData] = useState<ProductPriceHistoryResponse | null>(null);
+  const [isLoadingInlineHistory, setIsLoadingInlineHistory] = useState<boolean>(false);
+
   // Pop-up modal state
   const [modalProduct, setModalProduct] = useState<AnalyticsProductRow | null>(null);
   const [historyData, setHistoryData] = useState<ProductPriceHistoryResponse | null>(null);
@@ -56,6 +66,19 @@ export const AnalysisPage: React.FC = () => {
   useEffect(() => {
     loadProductList(1);
   }, [category, platform, sortBy]);
+
+  const selectInlineProduct = async (prod: AnalyticsProductRow, range: string = selectedRange) => {
+    setActiveInlineProduct(prod);
+    setIsLoadingInlineHistory(true);
+    try {
+      const hist = await analyticsService.getPriceHistory(prod.family_id, range);
+      setInlineHistoryData(hist);
+    } catch {
+      // Keep existing
+    } finally {
+      setIsLoadingInlineHistory(false);
+    }
+  };
 
   const loadProductList = async (pageToLoad: number = 1) => {
     setIsLoadingList(true);
@@ -69,14 +92,15 @@ export const AnalysisPage: React.FC = () => {
         page_size: pageSize,
       });
 
-      // User requirement: "in data analysis dont show anything unless there is a price change in any platform"
-      const withChanges = (data.products || []).filter(
-        (p) => p.price_change_percent !== 0 || p.min_recorded_price !== p.max_recorded_price
-      );
-      setProducts(withChanges);
+      const items = data.products || [];
+      setProducts(items);
       setTotalRecords(data.total_records);
       setTotalPages(data.total_pages);
       setCurrentPage(data.page);
+
+      if (items.length > 0) {
+        selectInlineProduct(items[0], selectedRange);
+      }
     } catch {
       // Keep existing list on failure
     } finally {
@@ -110,6 +134,9 @@ export const AnalysisPage: React.FC = () => {
 
   const handleRangeChange = async (r: string) => {
     setSelectedRange(r);
+    if (activeInlineProduct) {
+      selectInlineProduct(activeInlineProduct, r);
+    }
     if (modalProduct) {
       setIsLoadingHistory(true);
       try {
@@ -231,11 +258,172 @@ export const AnalysisPage: React.FC = () => {
             </select>
             <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
           </div>
+
+          {/* Fullscreen Table Mode Button */}
+          <button
+            type="button"
+            onClick={() => setIsFullscreenTable(!isFullscreenTable)}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
+              isFullscreenTable
+                ? "bg-slate-900 text-white border-slate-900 shadow-xs"
+                : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
+            }`}
+            title={isFullscreenTable ? "Exit Fullscreen" : "Fullscreen Table Mode"}
+          >
+            {isFullscreenTable ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+            <span>{isFullscreenTable ? "Exit Fullscreen" : "Fullscreen Table"}</span>
+          </button>
         </div>
       </div>
 
-      {/* Main Product Price Change List (Fixed Container with Internal Component Scrolling) */}
-      <div className="flex-1 min-h-0 flex flex-col overflow-hidden bg-white rounded-2xl border border-slate-200/90 shadow-2xs">
+      {/* On-Screen Interactive Product Multi-Platform Price Movement Graph */}
+      {!isFullscreenTable && activeInlineProduct && (
+        <div className="shrink-0 bg-white rounded-2xl border border-slate-200/90 shadow-2xs p-4 space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-12 h-12 rounded-xl bg-slate-50 border border-slate-100 shrink-0 overflow-hidden p-1 flex items-center justify-center">
+                <img
+                  src={activeInlineProduct.image_url || "/vantis_logo.png"}
+                  alt={activeInlineProduct.title}
+                  className="w-full h-full object-contain"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).src = "/vantis_logo.png";
+                  }}
+                />
+              </div>
+              <div className="min-w-0 space-y-0.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[10px] font-bold text-sky-700 bg-sky-50 px-2 py-0.5 rounded-md border border-sky-100">
+                    Live Price Telemetry Graph
+                  </span>
+                  {activeInlineProduct.style && (
+                    <span className="font-mono text-[10px] font-bold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
+                      Style: {activeInlineProduct.style}
+                    </span>
+                  )}
+                  <span
+                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                      activeInlineProduct.price_change_percent < 0
+                        ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                        : "bg-rose-50 text-rose-700 border-rose-200"
+                    }`}
+                  >
+                    {Math.abs(activeInlineProduct.price_change_percent)}% {activeInlineProduct.price_change_percent < 0 ? "Price Drop" : "Price Rise"}
+                  </span>
+                </div>
+                <h2 className="text-xs sm:text-sm font-black text-slate-900 truncate">
+                  {activeInlineProduct.title}
+                </h2>
+                <p className="text-[11px] text-slate-500 font-medium">
+                  Current Best: <span className="font-bold text-slate-800">{formatCurrency(activeInlineProduct.lowest_price)}</span> • Range: {formatCurrency(activeInlineProduct.min_recorded_price)} – {formatCurrency(activeInlineProduct.max_recorded_price)}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+              <div className="flex items-center bg-slate-100 p-0.5 rounded-lg gap-0.5">
+                {["1W", "1M", "3M", "6M", "ALL"].map((r) => (
+                  <button
+                    key={r}
+                    onClick={() => handleRangeChange(r)}
+                    className={`px-2 py-0.5 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
+                      selectedRange === r ? "bg-white text-slate-900 shadow-2xs" : "text-slate-500 hover:text-slate-800"
+                    }`}
+                  >
+                    {r}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={() => openGraphModal(activeInlineProduct)}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-all cursor-pointer shadow-2xs"
+              >
+                <Maximize2 className="w-3.5 h-3.5" />
+                <span>Full Modal</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Interactive Chart */}
+          <div className="h-44 w-full bg-slate-50/50 rounded-xl p-2 border border-slate-100">
+            {isLoadingInlineHistory ? (
+              <div className="h-full flex items-center justify-center">
+                <div className="w-6 h-6 border-2 border-sky-200 border-t-sky-500 rounded-full animate-spin" />
+              </div>
+            ) : inlineHistoryData && inlineHistoryData.history_points && inlineHistoryData.history_points.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={inlineHistoryData.history_points} margin={{ top: 5, right: 15, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+                  <XAxis dataKey="date" stroke="#94a3b8" fontSize={10} tickLine={false} axisLine={{ stroke: "#cbd5e1" }} />
+                  <YAxis stroke="#94a3b8" fontSize={10} tickLine={false} axisLine={false} tickFormatter={(val) => `₹${val.toLocaleString("en-IN")}`} domain={["auto", "auto"]} />
+                  <Tooltip
+                    content={({ active, payload, label }) => {
+                      if (!active || !payload || !payload.length) return null;
+                      return (
+                        <div className="bg-white p-2.5 rounded-xl border border-slate-200 shadow-xl text-xs space-y-1">
+                          <div className="font-bold text-slate-800 border-b border-slate-100 pb-1">{label}</div>
+                          {payload.map((item: any, idx: number) => (
+                            <div key={idx} className="flex items-center justify-between gap-3 text-[11px]">
+                              <span className="font-medium text-slate-600 capitalize">{item.name}:</span>
+                              <span className="font-black text-slate-900">₹{Number(item.value).toLocaleString("en-IN")}</span>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    }}
+                  />
+                  <Legend wrapperStyle={{ paddingTop: "4px", fontSize: "10px", fontWeight: "600" }} />
+                  {inlineHistoryData.platform_stats.map((ps) => (
+                    <Line
+                      key={ps.platform}
+                      type="monotone"
+                      dataKey={ps.platform}
+                      name={ps.platform_name}
+                      stroke={platformColors[ps.platform] || "#64748b"}
+                      strokeWidth={2}
+                      dot={{ r: 3, strokeWidth: 1.5, fill: "#fff" }}
+                      connectNulls
+                    />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex items-center justify-center text-xs text-slate-400">
+                Select a product below to inspect its multi-platform price trend.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Main Product Price Change List (Supports Fullscreen Table) */}
+      <div
+        className={
+          isFullscreenTable
+            ? "fixed inset-0 z-50 bg-white p-4 sm:p-6 flex flex-col space-y-3 overflow-hidden animate-in fade-in"
+            : "flex-1 min-h-0 flex flex-col overflow-hidden bg-white rounded-2xl border border-slate-200/90 shadow-2xs"
+        }
+      >
+        {isFullscreenTable && (
+          <div className="shrink-0 flex items-center justify-between pb-3 border-b border-slate-200">
+            <div className="flex items-center gap-3">
+              <h2 className="text-lg font-black text-slate-900">
+                Fullscreen Price Intelligence Table
+              </h2>
+              <span className="bg-[#EAF6FE] text-[#079FE0] font-extrabold text-xs px-2.5 py-0.5 rounded-full border border-sky-200">
+                {totalRecords} products
+              </span>
+            </div>
+            <button
+              onClick={() => setIsFullscreenTable(false)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 text-white text-xs font-bold hover:bg-slate-800 transition-all cursor-pointer shadow-xs"
+            >
+              <Minimize2 className="w-3.5 h-3.5" />
+              <span>Exit Fullscreen</span>
+            </button>
+          </div>
+        )}
+
         {/* Table Header (Fixed shrink-0) */}
         <div className="shrink-0 p-3.5 sm:px-6 bg-slate-50/80 border-b border-slate-200/80 flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-wider">
           <div className="flex-1">Product &amp; Style Code</div>
@@ -263,12 +451,15 @@ export const AnalysisPage: React.FC = () => {
             products.map((prod) => {
               const isDrop = prod.price_change_percent < 0;
               const isRise = prod.price_change_percent > 0;
+              const isSelectedRow = activeInlineProduct?.family_id === prod.family_id;
 
               return (
                 <div
                   key={prod.family_id}
-                  onClick={() => openGraphModal(prod)}
-                  className="p-3.5 sm:px-6 flex items-center justify-between gap-4 hover:bg-sky-50/30 transition-colors cursor-pointer group"
+                  onClick={() => selectInlineProduct(prod)}
+                  className={`p-3.5 sm:px-6 flex items-center justify-between gap-4 transition-colors cursor-pointer group ${
+                    isSelectedRow ? "bg-sky-50/60 border-l-4 border-l-[#079FE0]" : "hover:bg-slate-50/70"
+                  }`}
                 >
                   {/* Left: Product Thumbnail & Identifiers */}
                   <div className="flex items-center gap-3.5 flex-1 min-w-0">
