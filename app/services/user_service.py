@@ -2,7 +2,7 @@ import sqlite3
 import os
 import json
 import httpx
-from datetime import datetime, timezone
+from datetime import datetime, timezone as dt_timezone
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from dotenv import load_dotenv
@@ -255,7 +255,7 @@ class UserService:
                         headers=headers,
                         json={
                             "password_hash": new_hash,
-                            "updated_at": datetime.now(timezone.utc).isoformat()
+                            "updated_at": datetime.now(dt_timezone.utc).isoformat()
                         }
                     )
                     if r.status_code in (200, 204):
@@ -286,21 +286,24 @@ class UserService:
         username: str,
         display_name: Optional[str] = None,
         avatar_url: Optional[str] = None,
+        timezone: Optional[str] = None,
         timezone_val: Optional[str] = None,
         notifications_enabled: Optional[bool] = None,
-        theme: Optional[str] = None
+        theme: Optional[str] = None,
+        **kwargs
     ) -> Optional[Dict[str, Any]]:
         """
         Updates user profile data in Supabase 'app_users' and local cache.
         """
         clean_user = username.strip().lower()
-        payload = {"updated_at": datetime.now(timezone.utc).isoformat()}
+        payload = {"updated_at": datetime.now(dt_timezone.utc).isoformat()}
         if display_name is not None:
             payload["display_name"] = display_name.strip()
         if avatar_url is not None:
             payload["avatar_url"] = avatar_url.strip()
-        if timezone_val is not None:
-            payload["timezone"] = timezone_val.strip()
+        effective_tz = timezone if timezone is not None else timezone_val
+        if effective_tz is not None:
+            payload["timezone"] = effective_tz.strip()
         if notifications_enabled is not None:
             payload["notifications_enabled"] = bool(notifications_enabled)
         if theme is not None:
@@ -384,7 +387,7 @@ class UserService:
                             "has_master_excel": True,
                             "master_excel_filename": filename,
                             "master_excel_records": record_count,
-                            "updated_at": datetime.now(timezone.utc).isoformat()
+                            "updated_at": datetime.now(dt_timezone.utc).isoformat()
                         }
                     )
             except Exception:

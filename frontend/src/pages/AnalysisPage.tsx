@@ -349,7 +349,6 @@ export const AnalysisPage: React.FC = () => {
         {/* Table Header (Fixed shrink-0) */}
         <div className="shrink-0 p-3.5 sm:px-6 bg-slate-50/80 border-b border-slate-200/80 flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-wider">
           <div className="flex-1">Product &amp; Style Code</div>
-          <div className="hidden sm:block w-36 text-center">Historical Trend</div>
           <div className="w-28 text-right">Previous Price</div>
           <div className="w-28 text-right">Current Price</div>
           <div className="w-32 text-right">Price Status</div>
@@ -415,41 +414,15 @@ export const AnalysisPage: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Sparkline Column */}
-                  <div className="hidden sm:flex items-center justify-center w-36 shrink-0">
-                    {prod.sparkline && prod.sparkline.length > 1 ? (
-                      <div className="w-28 h-7 flex items-end gap-1 px-1">
-                        {prod.sparkline.map((val, idx) => {
-                          const minV = Math.min(...prod.sparkline);
-                          const maxV = Math.max(...prod.sparkline);
-                          const heightPct = maxV === minV ? 50 : Math.max(15, Math.round(((val - minV) / (maxV - minV)) * 85));
-                          return (
-                            <div
-                              key={idx}
-                              style={{ height: `${heightPct}%` }}
-                              className={`flex-1 rounded-t-xs transition-all ${
-                                isDrop ? "bg-emerald-400" : isRise ? "bg-rose-400" : "bg-sky-400"
-                              }`}
-                              title={`₹${val}`}
-                            />
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <span className="text-slate-300 text-xs">—</span>
-                    )}
-                  </div>
-
                   {/* Previous Price */}
                   <div className="w-28 text-right shrink-0">
-                    <span className="text-xs font-bold text-slate-500 block">
-                      {formatCurrency(
-                        prod.previous_price ||
-                        (prod.min_recorded_price !== prod.lowest_price ? prod.min_recorded_price : prod.max_recorded_price)
-                      )}
+                    <span className="text-xs font-bold text-slate-700 block">
+                      {prod.previous_price && prod.previous_price !== prod.lowest_price
+                        ? formatCurrency(prod.previous_price)
+                        : "—"}
                     </span>
                     <span className="text-[10px] text-slate-400 font-medium block">
-                      Previous
+                      {prod.previous_price && prod.previous_price !== prod.lowest_price ? "Other Platform" : "Previous"}
                     </span>
                   </div>
 
@@ -599,7 +572,7 @@ export const AnalysisPage: React.FC = () => {
                   <div className="h-64 flex items-center justify-center">
                     <div className="w-6 h-6 border-2 border-sky-200 border-t-sky-500 rounded-full animate-spin" />
                   </div>
-                ) : historyData && historyData.history_points && historyData.history_points.length > 0 ? (
+                ) : historyData && historyData.history_points && historyData.history_points.length > 1 ? (
                   <div className="h-64 w-full">
                     <ResponsiveContainer width="100%" height="100%">
                       <LineChart
@@ -665,9 +638,12 @@ export const AnalysisPage: React.FC = () => {
                     </ResponsiveContainer>
                   </div>
                 ) : (
-                  <div className="h-64 flex flex-col items-center justify-center text-slate-400 space-y-2">
-                    <LineChartIcon className="w-8 h-8 stroke-1 text-slate-300" />
-                    <p className="text-xs font-semibold">No price history points recorded yet for this product.</p>
+                  <div className="h-44 flex flex-col items-center justify-center text-slate-500 space-y-2 p-6 bg-white rounded-xl border border-slate-200">
+                    <LineChartIcon className="w-7 h-7 stroke-1 text-slate-400" />
+                    <p className="text-xs font-bold text-slate-800">Single Scrape Recorded (13 Oct 2026)</p>
+                    <p className="text-[11px] text-slate-500 text-center max-w-sm">
+                      This product has been recorded once. Multi-point historical price curves will plot across timeline checkpoints automatically as subsequent scraper runs complete.
+                    </p>
                   </div>
                 )}
               </div>
