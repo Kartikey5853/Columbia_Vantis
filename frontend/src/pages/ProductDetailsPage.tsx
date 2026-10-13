@@ -57,52 +57,23 @@ export const ProductDetailsPage: React.FC = () => {
     }
   };
 
-  if (isLoading) {
-    return (
-      <div className="max-w-7xl mx-auto px-4 sm:px-8 py-20 text-center space-y-3">
-        <div className="w-10 h-10 border-3 border-sky-200 border-t-sky-500 rounded-full animate-spin mx-auto" />
-        <p className="text-sm font-semibold text-slate-600">Gathering 7-platform intelligence...</p>
-      </div>
-    );
-  }
-
-  if (error || !product) {
-    return (
-      <div className="max-w-7xl mx-auto px-4 sm:px-8 py-20 text-center space-y-4">
-        <div className="bg-rose-50 text-rose-700 p-6 rounded-2xl border border-rose-200 max-w-md mx-auto">
-          <p className="font-bold text-base mb-1">Product Not Found</p>
-          <p className="text-xs text-rose-600">{error || "Could not retrieve product family details."}</p>
-          <Link
-            to="/home"
-            className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 bg-rose-600 text-white rounded-xl text-xs font-bold"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Return to Search</span>
-          </Link>
-        </div>
-      </div>
-    );
-  }
-
-  // Thumbnails gallery
-  const allImages = Array.from(
-    new Set([product.image_url, ...product.gallery_images].filter(Boolean) as string[])
-  );
+  // View mode switcher: cards vs table
+  const [variantViewMode, setVariantViewMode] = useState<"cards" | "table">("cards");
 
   // Active selected platform listing
-  const activeListing: PlatformListing =
-    product.platforms.find((p) => p.platform === selectedPlatformKey) || product.platforms[0];
-
-  const [variantViewMode, setVariantViewMode] = useState<"cards" | "table">("cards");
+  const activeListing: PlatformListing | undefined =
+    product?.platforms?.find((p) => p.platform === selectedPlatformKey) || product?.platforms?.[0];
 
   // Active platform variants list: strictly ONLY variants for the selected platform
   const activeVariants: ProductVariant[] =
-    activeListing.variants && activeListing.variants.length > 0
+    activeListing?.variants && activeListing.variants.length > 0
       ? activeListing.variants
       : [];
 
   // Derive individual cards for ALL sizes on this single platform
   const displayVariantCards = useMemo(() => {
+    if (!product || !activeListing) return [];
+
     const cards: Array<{
       size: string;
       color?: string | null;
@@ -198,6 +169,38 @@ export const ProductDetailsPage: React.FC = () => {
 
     return cards;
   }, [activeListing, product]);
+
+  if (isLoading) {
+    return (
+      <div className="max-w-7xl mx-auto px-4 sm:px-8 py-20 text-center space-y-3">
+        <div className="w-10 h-10 border-3 border-sky-200 border-t-sky-500 rounded-full animate-spin mx-auto" />
+        <p className="text-sm font-semibold text-slate-600">Gathering 7-platform intelligence...</p>
+      </div>
+    );
+  }
+
+  if (error || !product || !activeListing) {
+    return (
+      <div className="max-w-7xl mx-auto px-4 sm:px-8 py-20 text-center space-y-4">
+        <div className="bg-rose-50 text-rose-700 p-6 rounded-2xl border border-rose-200 max-w-md mx-auto">
+          <p className="font-bold text-base mb-1">Product Not Found</p>
+          <p className="text-xs text-rose-600">{error || "Could not retrieve product family details."}</p>
+          <Link
+            to="/home"
+            className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 bg-rose-600 text-white rounded-xl text-xs font-bold"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            <span>Return to Search</span>
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  // Thumbnails gallery
+  const allImages = Array.from(
+    new Set([product.image_url, ...product.gallery_images].filter(Boolean) as string[])
+  );
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-8 py-6 space-y-8">
