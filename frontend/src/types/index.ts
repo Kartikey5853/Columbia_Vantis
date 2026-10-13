@@ -139,6 +139,7 @@ export interface AnalyticsProductRow {
   gender?: string;
   image_url?: string | null;
   lowest_price: number;
+  previous_price?: number;
   price_change_percent: number;
   min_recorded_price: number;
   max_recorded_price: number;
@@ -220,6 +221,7 @@ export interface ServerStatus {
 export interface RecentRun {
   timestamp: string;
   platform: string;
+  platform_key?: string;
   job_id: string;
   status: string;
   products_fetched: number;

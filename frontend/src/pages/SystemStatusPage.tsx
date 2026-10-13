@@ -97,45 +97,29 @@ export const SystemStatusPage: React.FC = () => {
       {/* Real FastAPI Server Health Box (Full-width long box with real telemetry) */}
       <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs p-5 sm:p-6 transition-all">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-5 border-b border-slate-100">
-          <div className="flex items-center gap-3.5">
-            <div className={`w-11 h-11 rounded-2xl flex items-center justify-center border transition-colors ${
-              healthData
-                ? "bg-emerald-50 text-emerald-600 border-emerald-200"
-                : healthError
-                ? "bg-rose-50 text-rose-600 border-rose-200"
-                : "bg-slate-50 text-slate-500 border-slate-200"
-            }`}>
-              <Server className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="font-extrabold text-base text-slate-900">
-                  {healthData?.service || "FastAPI Core Application Server"}
-                </h3>
-                <span className="text-[10px] font-mono text-slate-400 bg-slate-100 px-2 py-0.5 rounded-md font-bold">
-                  /api/health
-                </span>
-              </div>
-              <p className="text-xs text-slate-500 font-medium mt-0.5">
-                Live backend health probe with round-trip latency &amp; Supabase persistence status
-              </p>
-            </div>
+          <div>
+            <h3 className="font-extrabold text-base text-slate-900">
+              {healthData?.service || "Columbia Vantis backend status"}
+            </h3>
+            <p className="text-xs text-slate-500 font-medium mt-0.5">
+              Real-time backend health probe and live Supabase persistence telemetry.
+            </p>
           </div>
 
           <div className="flex items-center gap-3 self-start md:self-auto">
             {healthData ? (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                ONLINE (200 OK)
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold bg-slate-100 text-slate-800 border border-slate-200">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Operational (200 OK)</span>
               </span>
             ) : healthError ? (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200">
                 <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
-                UNREACHABLE
+                <span>Unreachable</span>
               </span>
             ) : (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-600">
-                CHECKING...
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold bg-slate-50 text-slate-500 border border-slate-200">
+                <span>Checking...</span>
               </span>
             )}
 
@@ -193,28 +177,22 @@ export const SystemStatusPage: React.FC = () => {
       </div>
 
       {/* Database Scraper Runs Table (Directly from Supabase scrape_runs) */}
-      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs overflow-hidden">
+      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs overflow-hidden flex flex-col">
         <div className="p-5 border-b border-slate-100 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <Database className="w-5 h-5 text-sky-500" />
-            <div>
-              <h2 className="font-extrabold text-base text-slate-900">
-                Scraper Runs Database Table
-              </h2>
-              <span className="text-[11px] text-slate-400 font-medium">
-                Live records stored in Supabase <code className="font-mono text-slate-600 bg-slate-100 px-1 py-0.5 rounded">scrape_runs</code>
-              </span>
-            </div>
+          <div>
+            <h2 className="font-extrabold text-base text-slate-900">
+              Scraper Runs Database Table
+            </h2>
           </div>
           <span className="text-xs font-bold text-slate-500 bg-slate-50 border border-slate-200 px-3 py-1 rounded-xl">
             {recentRuns.length} Runs Recorded
           </span>
         </div>
 
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
           <table className="w-full text-left border-collapse text-xs">
-            <thead>
-              <tr className="bg-slate-50/80 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+            <thead className="sticky top-0 z-10 bg-slate-50/95 backdrop-blur-xs shadow-2xs">
+              <tr className="border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
                 <th className="py-3 px-4">Timestamp</th>
                 <th className="py-3 px-4">Platform</th>
                 <th className="py-3 px-4">Job / Run ID</th>
@@ -244,27 +222,41 @@ export const SystemStatusPage: React.FC = () => {
                     <td className="py-3.5 px-4 text-slate-600 font-mono text-[11px]">
                       {r.timestamp}
                     </td>
-                    <td className="py-3.5 px-4 font-bold text-slate-900 text-xs">
-                      {r.platform}
+                    <td className="py-3.5 px-4 font-bold text-slate-800">
+                      {r.platform_key === "amazon"
+                        ? "Amazon"
+                        : r.platform_key === "tata"
+                        ? "Tata CLiQ"
+                        : r.platform_key === "tata_lux"
+                        ? "Tata CLiQ Luxury"
+                        : r.platform_key === "columbia"
+                        ? "Columbia India"
+                        : r.platform_key === "adv"
+                        ? "Adventuras"
+                        : r.platform_key === "myntra"
+                        ? "Myntra"
+                        : r.platform_key === "ajio"
+                        ? "AJIO"
+                        : r.platform || "Columbia"}
                     </td>
                     <td className="py-3.5 px-4 font-mono text-slate-500 text-[11px]">
                       {r.job_id}
                     </td>
                     <td className="py-3.5 px-4">
-                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
+                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold border ${
                         r.status.toLowerCase() === "completed"
                           ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                           : r.status.toLowerCase() === "running"
                           ? "bg-sky-50 text-sky-700 border-sky-200"
                           : "bg-rose-50 text-rose-700 border-rose-200"
                       }`}>
-                        <span>
-                          {r.status.toLowerCase() === "completed"
-                            ? "✅"
-                            : r.status.toLowerCase() === "running"
-                            ? "⚡"
-                            : "❌"}
-                        </span>
+                        {r.status.toLowerCase() === "completed" ? (
+                          <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                        ) : r.status.toLowerCase() === "running" ? (
+                          <RotateCw className="w-3 h-3 animate-spin text-sky-600" />
+                        ) : (
+                          <AlertCircle className="w-3 h-3 text-rose-600" />
+                        )}
                         <span>{r.status.toUpperCase()}</span>
                       </span>
                     </td>

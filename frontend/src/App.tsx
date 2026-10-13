@@ -17,9 +17,7 @@ export const App: React.FC = () => {
         {/* Public Login Route */}
         <Route
           path="/login"
-          element={
-            authService.isAuthenticated() ? <Navigate to="/home" replace /> : <LoginPage />
-          }
+          element={<LoginPage />}
         />
 
         {/* Authenticated Routes with Persistent Header & Fixed Bottom Dock */}
@@ -72,14 +70,14 @@ export const App: React.FC = () => {
           }
         />
 
-        {/* Root and Catch-all Redirection */}
+        {/* Root and Catch-all Redirection: Root / always sends to login */}
         <Route
           path="/"
-          element={<Navigate to={authService.isAuthenticated() ? "/home" : "/login"} replace />}
+          element={<Navigate to="/login" replace />}
         />
         <Route
           path="*"
-          element={<Navigate to="/home" replace />}
+          element={<Navigate to="/login" replace />}
         />
       </Routes>
     </BrowserRouter>

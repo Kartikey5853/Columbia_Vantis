@@ -90,21 +90,18 @@ export const ProfilePage: React.FC = () => {
           const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
           setAvatarUrl(dataUrl);
           setAvatarLoadError(false);
-          let updatedUser: any = null;
           try {
-            updatedUser = await authService.updateProfile({ avatar_url: dataUrl });
-          } catch {
-            // Local fallback
-            const cur = authService.getSavedUser() || user || {};
-            updatedUser = { ...cur, avatar_url: dataUrl };
-          }
-          if (updatedUser) {
-            setUser(updatedUser);
-            localStorage.setItem("vantis_user", JSON.stringify(updatedUser));
-            window.dispatchEvent(new Event("storage"));
-            window.dispatchEvent(new CustomEvent("vantis_user_updated", { detail: updatedUser }));
-            setSuccessMessage("Profile photo updated and saved successfully!");
-            setTimeout(() => setSuccessMessage(null), 3500);
+            const updatedUser = await authService.updateProfile({ avatar_url: dataUrl });
+            if (updatedUser) {
+              setUser(updatedUser);
+              localStorage.setItem("vantis_user", JSON.stringify(updatedUser));
+              window.dispatchEvent(new Event("storage"));
+              window.dispatchEvent(new CustomEvent("vantis_user_updated", { detail: updatedUser }));
+              setSuccessMessage("Profile photo updated and saved to database successfully!");
+              setTimeout(() => setSuccessMessage(null), 3500);
+            }
+          } catch (err: any) {
+            setErrorMessage(err.message || "Failed to save avatar photo to database.");
           }
         }
         setIsUploadingAvatar(false);
@@ -125,20 +122,18 @@ export const ProfilePage: React.FC = () => {
   const handleRemoveAvatar = async () => {
     setAvatarUrl("");
     setAvatarLoadError(false);
-    let updatedUser: any = null;
     try {
-      updatedUser = await authService.updateProfile({ avatar_url: "" });
-    } catch {
-      const cur = authService.getSavedUser() || user || {};
-      updatedUser = { ...cur, avatar_url: "" };
-    }
-    if (updatedUser) {
-      setUser(updatedUser);
-      localStorage.setItem("vantis_user", JSON.stringify(updatedUser));
-      window.dispatchEvent(new Event("storage"));
-      window.dispatchEvent(new CustomEvent("vantis_user_updated", { detail: updatedUser }));
-      setSuccessMessage("Profile photo removed.");
-      setTimeout(() => setSuccessMessage(null), 3500);
+      const updatedUser = await authService.updateProfile({ avatar_url: "" });
+      if (updatedUser) {
+        setUser(updatedUser);
+        localStorage.setItem("vantis_user", JSON.stringify(updatedUser));
+        window.dispatchEvent(new Event("storage"));
+        window.dispatchEvent(new CustomEvent("vantis_user_updated", { detail: updatedUser }));
+        setSuccessMessage("Profile photo removed.");
+        setTimeout(() => setSuccessMessage(null), 3500);
+      }
+    } catch (err: any) {
+      setErrorMessage(err.message || "Failed to remove avatar.");
     }
   };
 
@@ -146,23 +141,21 @@ export const ProfilePage: React.FC = () => {
     e.preventDefault();
     setErrorMessage(null);
     setSuccessMessage(null);
-    let updatedUser: any = null;
     try {
-      updatedUser = await authService.updateProfile({
+      const updatedUser = await authService.updateProfile({
         display_name: displayName,
         avatar_url: avatarUrl,
       });
-    } catch {
-      const cur = authService.getSavedUser() || user || {};
-      updatedUser = { ...cur, display_name: displayName, avatar_url: avatarUrl };
-    }
-    if (updatedUser) {
-      setUser(updatedUser);
-      localStorage.setItem("vantis_user", JSON.stringify(updatedUser));
-      window.dispatchEvent(new Event("storage"));
-      window.dispatchEvent(new CustomEvent("vantis_user_updated", { detail: updatedUser }));
-      setSuccessMessage("Profile details successfully saved.");
-      setTimeout(() => setSuccessMessage(null), 3500);
+      if (updatedUser) {
+        setUser(updatedUser);
+        localStorage.setItem("vantis_user", JSON.stringify(updatedUser));
+        window.dispatchEvent(new Event("storage"));
+        window.dispatchEvent(new CustomEvent("vantis_user_updated", { detail: updatedUser }));
+        setSuccessMessage("Profile details successfully saved to database.");
+        setTimeout(() => setSuccessMessage(null), 3500);
+      }
+    } catch (err: any) {
+      setErrorMessage(err.message || "Failed to save profile changes.");
     }
   };
 
@@ -234,7 +227,7 @@ export const ProfilePage: React.FC = () => {
         <div className="p-8 pb-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center gap-6">
           <div className="relative group shrink-0">
             <div className="w-20 h-20 rounded-2xl bg-slate-50 p-1 border border-slate-200 shadow-xs overflow-hidden flex items-center justify-center">
-              {avatarUrl && !avatarLoadError ? (
+              {avatarUrl && !avatarUrl.includes("unsplash.com") && !avatarLoadError ? (
                 <img
                   src={avatarUrl}
                   alt={user?.username}

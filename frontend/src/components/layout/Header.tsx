@@ -74,7 +74,7 @@ export const Header: React.FC<HeaderProps> = ({ user: propUser, onRefresh }) => 
                 onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
                 className="w-9 h-9 rounded-full border border-slate-200 hover:border-[#079FE0] transition-all overflow-hidden flex items-center justify-center bg-sky-50 text-sky-800 font-extrabold text-xs"
               >
-                {user?.avatar_url && !avatarLoadError ? (
+                {user?.avatar_url && !user.avatar_url.includes("unsplash.com") && !avatarLoadError ? (
                   <img
                     src={user.avatar_url}
                     alt={user.username || user.display_name}

@@ -239,11 +239,11 @@ export const CataloguePage: React.FC = () => {
       </div>
 
       {/* Main Catalogue Table */}
-      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs overflow-hidden">
-        <div className="overflow-x-auto">
+      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs overflow-hidden flex flex-col">
+        <div className="overflow-x-auto max-h-[560px] overflow-y-auto">
           <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-slate-50/80 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+            <thead className="sticky top-0 z-10 bg-slate-50/95 backdrop-blur-xs shadow-2xs">
+              <tr className="border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
                 <th className="py-3 px-3 w-8">
                   <input
                     type="checkbox"
@@ -259,7 +259,6 @@ export const CataloguePage: React.FC = () => {
                 <th className="py-3 px-4">EAN</th>
                 <th className="py-3 px-3">Category</th>
                 <th className="py-3 px-3">Gender</th>
-                <th className="py-3 px-3 text-center">Variants</th>
                 <th className="py-3 px-3 text-center">Sizes</th>
                 <th className="py-3 px-3 text-center">Platforms</th>
                 <th className="py-3 px-4">MRP</th>
@@ -269,7 +268,7 @@ export const CataloguePage: React.FC = () => {
             <tbody className="divide-y divide-slate-100 text-xs text-slate-700">
               {isLoading ? (
                 <tr>
-                  <td colSpan={13} className="py-20 text-center">
+                  <td colSpan={12} className="py-20 text-center">
                     <div className="w-8 h-8 border-3 border-sky-200 border-t-sky-500 rounded-full animate-spin mx-auto mb-2" />
                     <span className="text-slate-400 font-semibold">Loading catalogue records...</span>
                   </td>
@@ -344,11 +343,6 @@ export const CataloguePage: React.FC = () => {
                         {/* Gender */}
                         <td className="py-3.5 px-3 font-semibold text-slate-600 whitespace-nowrap">
                           {product.gender}
-                        </td>
-
-                        {/* Variants */}
-                        <td className="py-3.5 px-3 text-center font-bold text-slate-800">
-                          {product.variants_count}
                         </td>
 
                         {/* Sizes */}
@@ -464,7 +458,7 @@ export const CataloguePage: React.FC = () => {
                               {/* Platform Availability Grid (Cards for 7 Platforms) */}
                               <div className="space-y-2 pt-2 border-t border-slate-100">
                                 <div className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                                  Platform Availability (Selected Variant)
+                                  Platform Availability
                                 </div>
                                 <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-3">
                                   {product.platforms.map((plat) => {

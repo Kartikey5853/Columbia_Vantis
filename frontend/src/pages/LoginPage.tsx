@@ -35,15 +35,23 @@ export const LoginPage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-white flex items-center justify-center p-6 select-none">
-      <div className="w-full max-w-sm">
-        {/* Big Columbia Logo only - no extra slogans or subtitles */}
-        <div className="text-center mb-8 flex justify-center">
-          <VantisLogo variant="big" asLink={false} />
-        </div>
+    <div
+      className="min-h-screen bg-cover bg-center bg-no-repeat flex items-center justify-center p-4 sm:p-6 select-none relative"
+      style={{ backgroundImage: "url('/login-bg.png')" }}
+    >
+      {/* Subtle overlay for contrast */}
+      <div className="absolute inset-0 bg-slate-900/10 pointer-events-none" />
 
-        {/* Login Form Container */}
-        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-7 sm:p-8">
+      {/* Login Box */}
+      <div className="relative z-10 w-full max-w-sm bg-white/95 backdrop-blur-md rounded-3xl border border-slate-200/90 shadow-2xl p-7 sm:p-8">
+        {/* Columbia VANTIS Logo INSIDE the box */}
+        <div className="flex justify-center mb-6">
+          <img
+            src="/vantis_big_logo.png"
+            alt="Columbia Sportswear"
+            className="h-20 sm:h-24 w-auto object-contain drop-shadow-none"
+          />
+        </div>
           <form onSubmit={handleSubmit} className="space-y-4">
             {/* Error Banner */}
             {errorMessage && (
@@ -118,7 +126,6 @@ export const LoginPage: React.FC = () => {
               {isLoading ? "Signing in..." : "Sign in"}
             </button>
           </form>
-        </div>
       </div>
     </div>
   );

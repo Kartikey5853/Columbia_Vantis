@@ -63,6 +63,48 @@ export const AnalysisPage: React.FC = () => {
   const [isLoadingHistory, setIsLoadingHistory] = useState<boolean>(false);
   const [selectedRange, setSelectedRange] = useState<string>("ALL");
 
+  const flattenedHistoryRows = React.useMemo(() => {
+    if (!historyData || !historyData.history_points) return [];
+    const rows: Array<{
+      date: string;
+      platform: string;
+      platformName: string;
+      price: number;
+      currentPrice: number;
+      diff: number;
+      diffPct: number;
+    }> = [];
+
+    const statsMap: Record<string, any> = {};
+    (historyData.platform_stats || []).forEach((ps) => {
+      statsMap[ps.platform] = ps;
+    });
+
+    historyData.history_points.forEach((pt) => {
+      const d = pt.date;
+      Object.keys(pt).forEach((k) => {
+        if (k !== "date" && pt[k] !== null && pt[k] !== undefined) {
+          const price = Number(pt[k]);
+          const ps = statsMap[k];
+          const curr = ps?.current_price || price;
+          const diff = curr - price;
+          const diffPct = price > 0 ? Math.round(((curr - price) / price) * 100) : 0;
+          rows.push({
+            date: d,
+            platform: k,
+            platformName: ps?.platform_name || k.toUpperCase(),
+            price,
+            currentPrice: curr,
+            diff,
+            diffPct,
+          });
+        }
+      });
+    });
+
+    return rows.reverse();
+  }, [historyData]);
+
   useEffect(() => {
     loadProductList(1);
   }, [category, platform, sortBy]);
@@ -276,132 +318,12 @@ export const AnalysisPage: React.FC = () => {
         </div>
       </div>
 
-      {/* On-Screen Interactive Product Multi-Platform Price Movement Graph */}
-      {!isFullscreenTable && activeInlineProduct && (
-        <div className="shrink-0 bg-white rounded-2xl border border-slate-200/90 shadow-2xs p-4 space-y-3">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="w-12 h-12 rounded-xl bg-slate-50 border border-slate-100 shrink-0 overflow-hidden p-1 flex items-center justify-center">
-                <img
-                  src={activeInlineProduct.image_url || "/vantis_logo.png"}
-                  alt={activeInlineProduct.title}
-                  className="w-full h-full object-contain"
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).src = "/vantis_logo.png";
-                  }}
-                />
-              </div>
-              <div className="min-w-0 space-y-0.5">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-[10px] font-bold text-sky-700 bg-sky-50 px-2 py-0.5 rounded-md border border-sky-100">
-                    Live Price Telemetry Graph
-                  </span>
-                  {activeInlineProduct.style && (
-                    <span className="font-mono text-[10px] font-bold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
-                      Style: {activeInlineProduct.style}
-                    </span>
-                  )}
-                  <span
-                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                      activeInlineProduct.price_change_percent < 0
-                        ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                        : "bg-rose-50 text-rose-700 border-rose-200"
-                    }`}
-                  >
-                    {Math.abs(activeInlineProduct.price_change_percent)}% {activeInlineProduct.price_change_percent < 0 ? "Price Drop" : "Price Rise"}
-                  </span>
-                </div>
-                <h2 className="text-xs sm:text-sm font-black text-slate-900 truncate">
-                  {activeInlineProduct.title}
-                </h2>
-                <p className="text-[11px] text-slate-500 font-medium">
-                  Current Best: <span className="font-bold text-slate-800">{formatCurrency(activeInlineProduct.lowest_price)}</span> • Range: {formatCurrency(activeInlineProduct.min_recorded_price)} – {formatCurrency(activeInlineProduct.max_recorded_price)}
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
-              <div className="flex items-center bg-slate-100 p-0.5 rounded-lg gap-0.5">
-                {["1W", "1M", "3M", "6M", "ALL"].map((r) => (
-                  <button
-                    key={r}
-                    onClick={() => handleRangeChange(r)}
-                    className={`px-2 py-0.5 rounded-md text-[11px] font-bold transition-all cursor-pointer ${
-                      selectedRange === r ? "bg-white text-slate-900 shadow-2xs" : "text-slate-500 hover:text-slate-800"
-                    }`}
-                  >
-                    {r}
-                  </button>
-                ))}
-              </div>
-              <button
-                onClick={() => openGraphModal(activeInlineProduct)}
-                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-all cursor-pointer shadow-2xs"
-              >
-                <Maximize2 className="w-3.5 h-3.5" />
-                <span>Full Modal</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Interactive Chart */}
-          <div className="h-44 w-full bg-slate-50/50 rounded-xl p-2 border border-slate-100">
-            {isLoadingInlineHistory ? (
-              <div className="h-full flex items-center justify-center">
-                <div className="w-6 h-6 border-2 border-sky-200 border-t-sky-500 rounded-full animate-spin" />
-              </div>
-            ) : inlineHistoryData && inlineHistoryData.history_points && inlineHistoryData.history_points.length > 0 ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={inlineHistoryData.history_points} margin={{ top: 5, right: 15, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-                  <XAxis dataKey="date" stroke="#94a3b8" fontSize={10} tickLine={false} axisLine={{ stroke: "#cbd5e1" }} />
-                  <YAxis stroke="#94a3b8" fontSize={10} tickLine={false} axisLine={false} tickFormatter={(val) => `₹${val.toLocaleString("en-IN")}`} domain={["auto", "auto"]} />
-                  <Tooltip
-                    content={({ active, payload, label }) => {
-                      if (!active || !payload || !payload.length) return null;
-                      return (
-                        <div className="bg-white p-2.5 rounded-xl border border-slate-200 shadow-xl text-xs space-y-1">
-                          <div className="font-bold text-slate-800 border-b border-slate-100 pb-1">{label}</div>
-                          {payload.map((item: any, idx: number) => (
-                            <div key={idx} className="flex items-center justify-between gap-3 text-[11px]">
-                              <span className="font-medium text-slate-600 capitalize">{item.name}:</span>
-                              <span className="font-black text-slate-900">₹{Number(item.value).toLocaleString("en-IN")}</span>
-                            </div>
-                          ))}
-                        </div>
-                      );
-                    }}
-                  />
-                  <Legend wrapperStyle={{ paddingTop: "4px", fontSize: "10px", fontWeight: "600" }} />
-                  {inlineHistoryData.platform_stats.map((ps) => (
-                    <Line
-                      key={ps.platform}
-                      type="monotone"
-                      dataKey={ps.platform}
-                      name={ps.platform_name}
-                      stroke={platformColors[ps.platform] || "#64748b"}
-                      strokeWidth={2}
-                      dot={{ r: 3, strokeWidth: 1.5, fill: "#fff" }}
-                      connectNulls
-                    />
-                  ))}
-                </LineChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="h-full flex items-center justify-center text-xs text-slate-400">
-                Select a product below to inspect its multi-platform price trend.
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
       {/* Main Product Price Change List (Supports Fullscreen Table) */}
       <div
         className={
           isFullscreenTable
             ? "fixed inset-0 z-50 bg-white p-4 sm:p-6 flex flex-col space-y-3 overflow-hidden animate-in fade-in"
-            : "flex-1 min-h-0 flex flex-col overflow-hidden bg-white rounded-2xl border border-slate-200/90 shadow-2xs"
+            : "flex-1 min-h-0 max-h-[580px] flex flex-col overflow-hidden bg-white rounded-2xl border border-slate-200/90 shadow-2xs"
         }
       >
         {isFullscreenTable && (
@@ -428,10 +350,9 @@ export const AnalysisPage: React.FC = () => {
         <div className="shrink-0 p-3.5 sm:px-6 bg-slate-50/80 border-b border-slate-200/80 flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-wider">
           <div className="flex-1">Product &amp; Style Code</div>
           <div className="hidden sm:block w-36 text-center">Historical Trend</div>
-          <div className="w-28 text-right">Recorded Range</div>
+          <div className="w-28 text-right">Previous Price</div>
           <div className="w-28 text-right">Current Price</div>
           <div className="w-32 text-right">Price Status</div>
-          <div className="w-24 text-right">Graph</div>
         </div>
 
         {/* Scrollable Component Body (flex-1 overflow-y-auto) */}
@@ -456,9 +377,9 @@ export const AnalysisPage: React.FC = () => {
               return (
                 <div
                   key={prod.family_id}
-                  onClick={() => selectInlineProduct(prod)}
-                  className={`p-3.5 sm:px-6 flex items-center justify-between gap-4 transition-colors cursor-pointer group ${
-                    isSelectedRow ? "bg-sky-50/60 border-l-4 border-l-[#079FE0]" : "hover:bg-slate-50/70"
+                  onClick={() => openGraphModal(prod)}
+                  className={`p-3.5 sm:px-6 flex items-center justify-between gap-4 transition-colors cursor-pointer group hover:bg-sky-50/50 ${
+                    isSelectedRow ? "bg-sky-50/60 border-l-4 border-l-[#079FE0]" : ""
                   }`}
                 >
                   {/* Left: Product Thumbnail & Identifiers */}
@@ -519,13 +440,16 @@ export const AnalysisPage: React.FC = () => {
                     )}
                   </div>
 
-                  {/* Recorded Range */}
+                  {/* Previous Price */}
                   <div className="w-28 text-right shrink-0">
-                    <span className="text-xs font-bold text-slate-600 block">
-                      {formatCurrency(prod.min_recorded_price)}
+                    <span className="text-xs font-bold text-slate-500 block">
+                      {formatCurrency(
+                        prod.previous_price ||
+                        (prod.min_recorded_price !== prod.lowest_price ? prod.min_recorded_price : prod.max_recorded_price)
+                      )}
                     </span>
                     <span className="text-[10px] text-slate-400 font-medium block">
-                      to {formatCurrency(prod.max_recorded_price)}
+                      Previous
                     </span>
                   </div>
 
@@ -556,20 +480,6 @@ export const AnalysisPage: React.FC = () => {
                         <span>Stable</span>
                       </div>
                     )}
-                  </div>
-
-                  {/* Action CTA */}
-                  <div className="w-24 text-right shrink-0">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        openGraphModal(prod);
-                      }}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-[#079FE0] text-slate-700 hover:text-white text-xs font-bold transition-all cursor-pointer shadow-2xs"
-                    >
-                      <LineChartIcon className="w-3.5 h-3.5" />
-                      <span>Graph</span>
-                    </button>
                   </div>
                 </div>
               );
@@ -794,6 +704,76 @@ export const AnalysisPage: React.FC = () => {
                       Platform statistics will display after history loading finishes.
                     </div>
                   )}
+                </div>
+              </div>
+
+              {/* Tabular Detail of All Historical Recorded Prices */}
+              <div className="space-y-3 pt-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                    Tabular Detail of All Historical Prices
+                  </h4>
+                  <span className="text-[11px] font-semibold text-slate-400">
+                    {flattenedHistoryRows.length} historical records
+                  </span>
+                </div>
+
+                <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="bg-slate-50/80 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                          <th className="py-2.5 px-4">Date / Milestone</th>
+                          <th className="py-2.5 px-4">Platform</th>
+                          <th className="py-2.5 px-4">Recorded Price</th>
+                          <th className="py-2.5 px-4">Current Price</th>
+                          <th className="py-2.5 px-4 text-right">Price Movement</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
+                        {flattenedHistoryRows.length === 0 ? (
+                          <tr>
+                            <td colSpan={5} className="py-8 text-center text-slate-400">
+                              No prior historical checkpoints recorded for this product yet.
+                            </td>
+                          </tr>
+                        ) : (
+                          flattenedHistoryRows.map((row, idx) => (
+                            <tr key={idx} className="hover:bg-slate-50/60 transition-colors">
+                              <td className="py-3 px-4 font-mono font-bold text-slate-800 text-[11px]">
+                                {row.date}
+                              </td>
+                              <td className="py-3 px-4">
+                                <div className="flex items-center gap-2">
+                                  <PlatformLogo platform={row.platform} size="xs" />
+                                  <span className="font-bold text-slate-800">{row.platformName}</span>
+                                </div>
+                              </td>
+                              <td className="py-3 px-4 font-mono font-bold text-slate-900 text-xs">
+                                {formatCurrency(row.price)}
+                              </td>
+                              <td className="py-3 px-4 font-mono text-slate-500">
+                                {formatCurrency(row.currentPrice)}
+                              </td>
+                              <td className="py-3 px-4 text-right">
+                                {row.diff < 0 ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                    {formatCurrency(row.diff)} ({Math.abs(row.diffPct)}% Drop)
+                                  </span>
+                                ) : row.diff > 0 ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                                    +{formatCurrency(row.diff)} (+{row.diffPct}% Rise)
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-400 text-[11px]">Stable</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               </div>
             </div>
