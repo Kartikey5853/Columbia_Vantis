@@ -23,7 +23,7 @@ PLATFORM_METADATA = {
     "tata": {"name": "Tata CLiQ", "logo_key": "tata", "base_url": "https://www.tatacliq.com"},
     "tata_lux": {"name": "Tata CLiQ Luxury", "logo_key": "tata_lux", "base_url": "https://luxury.tatacliq.com"},
     "columbia": {"name": "Columbia", "logo_key": "columbia", "base_url": "https://www.columbiasportswear.co.in"},
-    "adv": {"name": "Advaatars", "logo_key": "adv", "base_url": "https://adventuras.in"},
+    "adv": {"name": "Adventuras", "logo_key": "adv", "base_url": "https://adventuras.in"},
     "myntra": {"name": "Myntra", "logo_key": "myntra", "base_url": "https://www.myntra.com"},
     "ajio": {"name": "AJIO", "logo_key": "ajio", "base_url": "https://www.ajio.com"},
 }
@@ -248,13 +248,74 @@ class CatalogService:
 
             self.master_catalogue_info = {
                 "loaded": True,
-                "filename": "Master_Catalog_ Columbia.xlsx",
+                "filename": "Master_Catalog_Columbia.xlsx",
                 "record_count": len(records),
                 "last_updated": datetime.now(timezone.utc).isoformat()
             }
             print(f"[CATALOG_SERVICE] [MASTER] Loaded {len(records)} Master Excel rows ({len(self.master_style_meta)} unique styles).", flush=True)
+            self.sync_master_to_supabase()
         except Exception as e:
             print(f"[CATALOG_SERVICE] ⚠️ Error loading master_catalog_mappings.json: {e}", flush=True)
+
+    def sync_master_to_supabase(self):
+        """Synchronizes master catalog rows to Supabase 'master_catalog' table via PostgREST."""
+        import httpx
+        url = (os.getenv("SUPABASE_URL", "") or "https://saeekkbjnnksgyikrchk.supabase.co").rstrip("/")
+        key = (
+            os.getenv("SUPABASE_SECRET_KEY")
+            or os.getenv("SUPABASE_KEY")
+            or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+            or os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
+        )
+        if not url or not key or not self.master_records:
+            return
+
+        headers = {
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "Prefer": "resolution=merge-duplicates"
+        }
+
+        try:
+            with httpx.Client(timeout=8.0) as client:
+                chk = client.get(f"{url}/rest/v1/master_catalog?limit=1", headers=headers)
+                if chk.status_code == 404:
+                    print("[CATALOG_SERVICE] [INFO] Table 'master_catalog' not yet created in Supabase. Run migrations/004_create_app_users_and_master_catalog.sql in Supabase SQL editor.", flush=True)
+                    return
+                elif chk.status_code != 200:
+                    return
+
+                cnt_res = client.get(f"{url}/rest/v1/master_catalog?select=id", headers={**headers, "Range": "0-0", "Prefer": "count=exact"})
+                crange = cnt_res.headers.get("content-range", "")
+                if "/" in crange:
+                    total_existing = int(crange.split("/")[1]) if crange.split("/")[1].isdigit() else 0
+                    if total_existing >= len(self.master_records):
+                        print(f"[CATALOG_SERVICE] [SUPABASE] Supabase 'master_catalog' table is up-to-date ({total_existing} records).", flush=True)
+                        return
+
+                print(f"[CATALOG_SERVICE] [SUPABASE] Syncing {len(self.master_records)} Master Excel records to Supabase 'master_catalog'...", flush=True)
+                batch_size = 500
+                total_inserted = 0
+                for i in range(0, len(self.master_records), batch_size):
+                    batch = self.master_records[i : i + batch_size]
+                    rows = []
+                    for rec in batch:
+                        rows.append({
+                            "ean": rec.get("ean"),
+                            "sku": rec.get("sku"),
+                            "style_code": rec.get("style_code"),
+                            "style": rec.get("style") or (rec.get("sku", "").split("-")[0] if rec.get("sku") else "UNKNOWN"),
+                            "soh": rec.get("soh") or 0,
+                            "platform_ids": rec.get("platform_ids") or {}
+                        })
+                    res = client.post(f"{url}/rest/v1/master_catalog", headers=headers, json=rows)
+                    if res.status_code in (200, 201):
+                        total_inserted += len(rows)
+
+                print(f"[CATALOG_SERVICE] [SUPABASE] Successfully stored {total_inserted} Master Excel products in Supabase.", flush=True)
+        except Exception as e:
+            print(f"[CATALOG_SERVICE] ⚠️ Error syncing master catalog to Supabase: {e}", flush=True)
 
     def _resolve_canonical_style(
         self,
@@ -1117,7 +1178,10 @@ class CatalogService:
         enriched = []
         for p in filtered:
             fid = p["family_id"]
-            lowest = p["lowest_price"]
+            pct = 0.0
+            min_p = lowest
+            max_p = lowest
+            spark = [lowest] * 6
             c_data = self.supabase_cache.get(fid)
             if c_data:
                 pct = c_data.get("price_change_percent", 0.0)

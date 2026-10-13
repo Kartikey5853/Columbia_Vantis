@@ -85,7 +85,7 @@ async def get_scrapers_status():
         },
         {
             "platform": "adv",
-            "platform_name": "Advaatars (Adventuras)",
+            "platform_name": "Adventuras",
             "logo_key": "adv",
             "status": "completed",
             "last_run": "11 Oct 2026, 02:15 PM",

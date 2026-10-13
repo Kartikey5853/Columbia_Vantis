@@ -59,7 +59,7 @@ async def upsert_canonical_product(
 async def upsert_canonical_products_batch(
     products: List[NormalizedProduct],
     client: Optional[SupabaseClient] = None,
-    batch_size: int = 500
+    batch_size: int = 100
 ) -> List[Dict[str, Any]]:
     """
     Batches insertion/upsert of products into Supabase (default 500 items per HTTP call).

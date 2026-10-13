@@ -91,12 +91,10 @@ export const ProductDetailsPage: React.FC = () => {
   const activeListing: PlatformListing =
     product.platforms.find((p) => p.platform === selectedPlatformKey) || product.platforms[0];
 
-  // Active platform variants list: fallback to family variants if platform-level variants empty
+  // Active platform variants list: strictly ONLY variants for the selected platform
   const activeVariants: ProductVariant[] =
     activeListing.variants && activeListing.variants.length > 0
       ? activeListing.variants
-      : activeListing.price !== null
-      ? (product.variants || [])
       : [];
 
   return (
@@ -428,8 +426,8 @@ export const ProductDetailsPage: React.FC = () => {
         )}
 
         {/* VARIANTS & SIZES STOCK TABLE */}
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
+        <div className="space-y-3.5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
             <div className="flex items-center gap-2">
               <Layers className="w-4 h-4 text-sky-500" />
               <h3 className="font-extrabold text-sm text-slate-900 uppercase tracking-wider text-[11px]">
@@ -437,8 +435,51 @@ export const ProductDetailsPage: React.FC = () => {
               </h3>
             </div>
             <span className="text-xs font-semibold text-slate-400">
-              {activeVariants.length > 0 ? `${activeVariants.length} variants listed` : "1 standard listing"}
+              {activeVariants.length > 0
+                ? `${activeVariants.length} ${activeListing.platform_name} variant${activeVariants.length > 1 ? "s" : ""}`
+                : `0 variants on ${activeListing.platform_name}`}
             </span>
+          </div>
+
+          {/* Platform Options for Variant Breakdown */}
+          <div className="flex flex-wrap items-center gap-2 pb-1">
+            {product.platforms.map((plat) => {
+              const isSelected = selectedPlatformKey === plat.platform;
+              const hasData = plat.price !== null && plat.price !== undefined;
+              const variantCount = plat.variants?.length || (hasData ? 1 : 0);
+
+              return (
+                <button
+                  key={plat.platform}
+                  type="button"
+                  onClick={() => {
+                    setSelectedPlatformKey(plat.platform);
+                    if (plat.image_url) setSelectedImage(plat.image_url);
+                  }}
+                  className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
+                    isSelected
+                      ? "bg-slate-900 text-white border-slate-900 shadow-sm ring-2 ring-slate-900/10"
+                      : hasData
+                      ? "bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:border-slate-300"
+                      : "bg-slate-50 text-slate-400 border-slate-200/60 opacity-60 hover:opacity-100"
+                  }`}
+                >
+                  <PlatformLogo platform={plat.platform} size="xs" showLabel={false} />
+                  <span>{plat.platform_name}</span>
+                  <span
+                    className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono font-bold ${
+                      isSelected
+                        ? "bg-white/20 text-white"
+                        : hasData
+                        ? "bg-slate-100 text-slate-600"
+                        : "bg-slate-100/60 text-slate-400"
+                    }`}
+                  >
+                    {variantCount}
+                  </span>
+                </button>
+              );
+            })}
           </div>
 
           <div className="overflow-x-auto rounded-2xl border border-slate-200/90">

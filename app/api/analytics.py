@@ -60,7 +60,7 @@ async def get_platform_comparison():
             {"name": "Tata CLiQ", "key": "tata", "avg_discount": 22.0, "in_stock_rate": 79.0, "total_listings": 2108},
             {"name": "Tata CLiQ Luxury", "key": "tata_lux", "avg_discount": 18.0, "in_stock_rate": 85.0, "total_listings": 2244},
             {"name": "Columbia", "key": "columbia", "avg_discount": 15.0, "in_stock_rate": 92.0, "total_listings": 5408},
-            {"name": "Advaatars", "key": "adv", "avg_discount": 25.0, "in_stock_rate": 78.0, "total_listings": 4906},
+            {"name": "Adventuras", "key": "adv", "avg_discount": 25.0, "in_stock_rate": 78.0, "total_listings": 4906},
             {"name": "Myntra", "key": "myntra", "avg_discount": 30.0, "in_stock_rate": 88.0, "total_listings": 1704},
             {"name": "AJIO", "key": "ajio", "avg_discount": 26.5, "in_stock_rate": 81.0, "total_listings": 2210},
         ]

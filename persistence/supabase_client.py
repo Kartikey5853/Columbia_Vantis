@@ -25,7 +25,7 @@ class SupabaseClient:
         self,
         url: Optional[str] = None,
         key: Optional[str] = None,
-        timeout: float = 15.0,
+        timeout: float = 45.0,
         max_connections: int = 10
     ):
         self.url = (url or os.getenv("SUPABASE_URL", "")).rstrip("/")
@@ -48,7 +48,7 @@ class SupabaseClient:
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
-        self.timeout = httpx.Timeout(timeout, connect=10.0)
+        self.timeout = httpx.Timeout(timeout, connect=20.0)
         self.limits = httpx.Limits(max_keepalive_connections=max_connections, max_connections=max_connections)
         self._client: Optional[httpx.AsyncClient] = None
 

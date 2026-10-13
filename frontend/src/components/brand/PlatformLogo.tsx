@@ -66,7 +66,7 @@ export const PlatformLogo: React.FC<PlatformLogoProps> = ({
       case "adv":
       case "adventuras":
       case "advaatars":
-        return "Advaatars";
+        return "Adventuras";
       case "myntra":
         return "Myntra";
       case "ajio":

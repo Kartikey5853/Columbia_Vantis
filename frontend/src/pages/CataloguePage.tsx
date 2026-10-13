@@ -201,7 +201,7 @@ export const CataloguePage: React.FC = () => {
               <option value="tata">Tata CLiQ</option>
               <option value="tata_lux">Tata CLiQ Luxury</option>
               <option value="columbia">Columbia India</option>
-              <option value="adv">Advaatars</option>
+              <option value="adv">Adventuras</option>
               <option value="myntra">Myntra</option>
               <option value="ajio">AJIO</option>
             </select>
@@ -425,14 +425,6 @@ export const CataloguePage: React.FC = () => {
                                 {/* Circular Stat Chips & View Details CTA */}
                                 <div className="flex items-center gap-4">
                                   <div className="flex items-center gap-2">
-                                    <div className="w-14 h-14 rounded-full bg-[#EAF6FE] flex flex-col items-center justify-center text-center">
-                                      <span className="text-base font-extrabold text-[#079FE0] leading-none">
-                                        {product.variants_count}
-                                      </span>
-                                      <span className="text-[10px] text-slate-500 font-medium leading-none mt-0.5">
-                                        Variants
-                                      </span>
-                                    </div>
                                     <div className="w-14 h-14 rounded-full bg-[#EAF6FE] flex flex-col items-center justify-center text-center">
                                       <span className="text-base font-extrabold text-[#079FE0] leading-none">
                                         {product.sizes_count}

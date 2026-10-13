@@ -46,6 +46,7 @@ async def login(req: LoginRequest):
         "role": user["role"]
     }
     access_token = create_access_token(token_data)
+    user_service.record_session(username=user["username"], session_token=access_token)
 
     return LoginResponse(
         access_token=access_token,

@@ -210,7 +210,7 @@ export const AnalysisPage: React.FC = () => {
               <option value="tata">Tata CLiQ</option>
               <option value="tata_lux">Tata CLiQ Luxury</option>
               <option value="myntra">Myntra</option>
-              <option value="adv">Advaatars</option>
+              <option value="adv">Adventuras</option>
               <option value="ajio">AJIO</option>
             </select>
             <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
