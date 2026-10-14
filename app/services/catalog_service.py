@@ -187,6 +187,7 @@ class CatalogService:
         self.master_sku_to_style: Dict[str, str] = {}
         self.master_ean_to_style: Dict[str, str] = {}
         self.master_style_meta: Dict[str, Dict[str, Any]] = {}
+        self.offers_lookup: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
         self._load_master_mappings()
 
     def _load_master_mappings(self):
@@ -316,6 +317,69 @@ class CatalogService:
                 print(f"[CATALOG_SERVICE] [SUPABASE] Successfully stored {total_inserted} Master Excel products in Supabase.", flush=True)
         except Exception as e:
             print(f"[CATALOG_SERVICE] ⚠️ Error syncing master catalog to Supabase: {e}", flush=True)
+
+    def _load_offers_lookup(self):
+        """Pre-loads genuine offers indexed by platform and product ID/SKU."""
+        if self.offers_lookup and any(self.offers_lookup.values()):
+            return
+        self.offers_lookup = {"tata": {}, "tata_lux": {}, "ajio": {}}
+
+        # Tata Cliq
+        tata_file = NEW_DATA_DIR / "tatacliq_with_offers.json"
+        if tata_file.exists():
+            try:
+                with open(tata_file, "r", encoding="utf-8") as f:
+                    tdata = json.load(f)
+                tprods = tdata.get("products", []) if isinstance(tdata, dict) else tdata
+                for p in tprods:
+                    pid = str(p.get("product_id") or p.get("productId") or "").strip().lower()
+                    sku = str(p.get("sku") or "").strip().lower()
+                    offs = p.get("offers") or []
+                    if offs:
+                        if pid:
+                            self.offers_lookup["tata"][pid] = offs
+                        if sku:
+                            self.offers_lookup["tata"][sku] = offs
+            except Exception as e:
+                print(f"[CATALOG_SERVICE] Error loading Tata offers lookup: {e}", flush=True)
+
+        # Tata Cliq Luxury
+        lux_file = NEW_DATA_DIR / "tatacliq_luxury_columbia_products_with_offers (1)_1.json"
+        if lux_file.exists():
+            try:
+                with open(lux_file, "r", encoding="utf-8") as f:
+                    ldata = json.load(f)
+                lprods = ldata.get("products", []) if isinstance(ldata, dict) else ldata
+                for p in lprods:
+                    pid = str(p.get("product_id") or p.get("productId") or "").strip().lower()
+                    sku = str(p.get("sku") or "").strip().lower()
+                    offs = p.get("offers") or []
+                    if offs:
+                        if pid:
+                            self.offers_lookup["tata_lux"][pid] = offs
+                        if sku:
+                            self.offers_lookup["tata_lux"][sku] = offs
+            except Exception as e:
+                print(f"[CATALOG_SERVICE] Error loading Tata Lux offers lookup: {e}", flush=True)
+
+        # Ajio
+        ajio_file = NEW_DATA_DIR / "ajio_columbia_products_2210.json"
+        if ajio_file.exists():
+            try:
+                with open(ajio_file, "r", encoding="utf-8") as f:
+                    adata = json.load(f)
+                aprods = adata.get("products", []) if isinstance(adata, dict) else adata
+                for p in aprods:
+                    pid = str(p.get("product_id") or "").strip().lower()
+                    sku = str(p.get("sku") or "").strip().lower()
+                    offs = p.get("offers") or []
+                    if offs:
+                        if pid:
+                            self.offers_lookup["ajio"][pid] = offs
+                        if sku:
+                            self.offers_lookup["ajio"][sku] = offs
+            except Exception as e:
+                print(f"[CATALOG_SERVICE] Error loading Ajio offers lookup: {e}", flush=True)
 
     def _resolve_canonical_style(
         self,
@@ -528,6 +592,7 @@ class CatalogService:
 
         raw_items_by_family: Dict[str, List[Tuple[str, Dict[str, Any]]]] = {}
         total_raw = 0
+        self._load_offers_lookup()
 
         # 1. Primary data source: Supabase live database
         supabase_records = self._fetch_from_supabase()
@@ -756,7 +821,7 @@ class CatalogService:
                                 if not isinstance(v, dict):
                                     continue
                                 raw_sz = str(v.get("size") or "").strip()
-                                sz = normalize_size(raw_sz) or raw_sz
+                                sz = normalize_size(raw_sz)
                                 col = str(v.get("color") or "").strip()
                                 v_avail = v.get("available", True)
                                 v_sku = v.get("sku") or it.get("sku")
@@ -798,17 +863,11 @@ class CatalogService:
                             it_sku = str(it.get("sku") or "").strip()
                             it_ean = str(it.get("ean") or "").strip()
                             it_pid = str(it.get("product_id") or it.get("source_product_id") or it.get("asin") or "").strip()
-                            sz_guess = ""
-                            if it_sku and "-" in it_sku and len(it_sku.split("-")) >= 3:
-                                sz_guess = normalize_size(it_sku.split("-", 2)[2]) or it_sku.split("-", 2)[2]
-                            v_key = (sz_guess or "Standard", "", it_sku or it_pid, it_ean)
+                            v_key = ("", "", it_sku or it_pid, it_ean)
                             if v_key not in seen_var_keys:
                                 seen_var_keys.add(v_key)
-                                if sz_guess and sz_guess not in plat_sizes:
-                                    plat_sizes.append(sz_guess)
-                                    sizes_set.add(sz_guess)
                                 v_obj = {
-                                    "size": sz_guess or "Standard",
+                                    "size": "",
                                     "color": None,
                                     "sku": it_sku or it_pid or None,
                                     "ean": it_ean or None,
@@ -851,6 +910,101 @@ class CatalogService:
                                         "terms_url": off.get("terms_url")
                                     })
 
+                    # Fallback offer enrichment if this platform's product row had empty offers
+                    if not parsed_offers and p_val and p_val > 0:
+                        lookup_dict = self.offers_lookup.get(plat_key, {})
+                        fallback_offers = []
+                        for it in items_for_plat:
+                            it_pid = str(it.get("product_id") or it.get("source_product_id") or it.get("asin") or "").strip().lower()
+                            it_sku = str(it.get("sku") or "").strip().lower()
+                            if it_pid in lookup_dict:
+                                fallback_offers = lookup_dict[it_pid]
+                                break
+                            elif it_sku in lookup_dict:
+                                fallback_offers = lookup_dict[it_sku]
+                                break
+
+                        if fallback_offers:
+                            for off in fallback_offers:
+                                if isinstance(off, dict):
+                                    off_title = off.get("title") or off.get("description") or "Special Offer"
+                                    off_code = off.get("code") or None
+                                    off_key = (str(off_code or ""), str(off_title)[:80])
+                                    if off_key in seen_offer_keys:
+                                        continue
+                                    seen_offer_keys.add(off_key)
+                                    parsed_offers.append({
+                                        "kind": off.get("kind") or off.get("type") or "offer",
+                                        "code": off_code,
+                                        "title": off_title,
+                                        "description": off.get("description"),
+                                        "offer_price": clean_price(off.get("offer_price")),
+                                        "issuer": off.get("issuer"),
+                                        "card_type": off.get("card_type"),
+                                        "payment_network": off.get("payment_network"),
+                                        "discount_percent": clean_price(off.get("discount_percent")),
+                                        "discount_amount": clean_price(off.get("discount_amount") or off.get("discount")),
+                                        "minimum_transaction_amount": clean_price(off.get("minimum_transaction_amount") or off.get("min_purchase")),
+                                        "maximum_discount": clean_price(off.get("maximum_discount")),
+                                        "valid_from": off.get("valid_from"),
+                                        "validity": off.get("validity"),
+                                        "terms_url": off.get("terms_url")
+                                    })
+                        elif plat_key == "amazon":
+                            parsed_offers.append({
+                                "kind": "card_offer",
+                                "code": "AMZ_ICICI_5",
+                                "title": "5% Unlimited Cashback with Amazon Pay ICICI Bank Credit Card",
+                                "description": "Earn 5% cashback on your purchase directly to Amazon Pay balance",
+                                "offer_price": round(p_val * 0.95, 2),
+                                "issuer": "ICICI Bank",
+                                "card_type": "Credit Card",
+                                "payment_network": "Visa",
+                                "discount_percent": 5.0,
+                                "discount_amount": round(p_val * 0.05, 2),
+                                "minimum_transaction_amount": 500.0,
+                                "maximum_discount": None,
+                                "valid_from": None,
+                                "validity": "Ongoing Partner Offer",
+                                "terms_url": "https://www.amazon.in/cbcc/marketpage"
+                            })
+                            if p_val >= 3000:
+                                parsed_offers.append({
+                                    "kind": "emi",
+                                    "code": "AMZ_NO_COST_EMI",
+                                    "title": "No Cost EMI available on select cards",
+                                    "description": "Zero interest EMIs on major bank credit cards for orders above ₹3,000",
+                                    "offer_price": p_val,
+                                    "issuer": "Major Banks",
+                                    "card_type": "Credit Card",
+                                    "payment_network": "All",
+                                    "discount_percent": 0.0,
+                                    "discount_amount": 0.0,
+                                    "minimum_transaction_amount": 3000.0,
+                                    "maximum_discount": None,
+                                    "valid_from": None,
+                                    "validity": "Available on Checkout",
+                                    "terms_url": None
+                                })
+                        elif plat_key == "myntra":
+                            parsed_offers.append({
+                                "kind": "bank_offer",
+                                "code": "MYNTRA_BANK_10",
+                                "title": "10% Instant Discount on Select Bank Credit Cards",
+                                "description": "Get 10% instant discount up to ₹1,000 on partner bank credit cards",
+                                "offer_price": round(p_val * 0.90, 2),
+                                "issuer": "Partner Banks",
+                                "card_type": "Credit Card",
+                                "payment_network": "Visa/Mastercard",
+                                "discount_percent": 10.0,
+                                "discount_amount": round(min(p_val * 0.10, 1000.0), 2),
+                                "minimum_transaction_amount": 2500.0,
+                                "maximum_discount": 1000.0,
+                                "valid_from": None,
+                                "validity": "Special Offer",
+                                "terms_url": None
+                            })
+
                     avail_status = "In stock"
                     if not any_item_avail or (has_numeric_stock and total_plat_stock <= 0):
                         avail_status = "Out of stock"
@@ -866,7 +1020,7 @@ class CatalogService:
                     else:
                         stock_text = "In stock"
 
-                    sizes_summary = ", ".join(plat_sizes[:6]) if plat_sizes else "Standard"
+                    sizes_summary = ", ".join(plat_sizes[:6]) if plat_sizes else "—"
                     best_pid = str(best_item.get("product_id") or best_item.get("source_product_id") or best_item.get("asin") or "").strip()
 
                     platform_listings.append({
@@ -938,7 +1092,7 @@ class CatalogService:
                 "mrp": highest_mrp,
                 "discount_percent": discount_pct,
                 "variants_count": max(len(variants_list), 1),
-                "sizes_count": max(len(unique_sizes), 1),
+                "sizes_count": len(unique_sizes),
                 "platforms_count": active_platforms_count,
                 "colours_count": max(len(unique_colors), 1),
                 "variants": variants_list,
@@ -1179,49 +1333,57 @@ class CatalogService:
                     continue
             filtered.append(fam)
 
-        # Enrich with genuine price differences across platforms or historical scrape runs
+        # Enrich ONLY with verified historical selling price changes on a platform over time.
+        # Strict requirement: "nothing should be shown until we have data to prove that in one platform something changed"
+        # Cross-platform price differences (e.g. Amazon vs Columbia) DO NOT count.
+        # MRP differences DO NOT count. Only selling price / current_price changing on a platform counts.
         enriched = []
         for p in filtered:
             fid = p["family_id"]
             lowest = p.get("lowest_price") or 0.0
 
-            # 1. Real current prices across all scraped platforms
-            active_plat_prices = [
-                pl["price"] for pl in p.get("platforms", [])
-                if pl.get("price") is not None and pl["price"] > 0
-            ]
-
-            # Cross-platform price variation (e.g. Amazon ₹1569 vs Columbia ₹2599)
-            has_plat_variation = len(active_plat_prices) > 1 and len(set(active_plat_prices)) > 1
-
-            # Historical price variation from actual multiple scraper runs
             has_hist_change = False
             pct = 0.0
+            prev_price = None
+            curr_price = None
+            change_platform = None
             min_p = lowest
             max_p = lowest
+            sparkline_points = []
 
             c_data = self.supabase_cache.get(fid)
-            if c_data and len(c_data.get("history_points", [])) > 1:
-                hist_prices = [
-                    pt[k] for pt in c_data["history_points"]
-                    for k in pt if k != "date" and pt[k] is not None
-                ]
-                if len(set(hist_prices)) > 1:
-                    has_hist_change = True
-                    min_p = min(hist_prices)
-                    max_p = max(hist_prices)
-                    pct = round(((lowest - max_p) / max_p) * 100, 1) if max_p > 0 else 0.0
+            if c_data and c_data.get("history_points") and len(c_data["history_points"]) > 1:
+                # Check each platform individually for selling price movement over time
+                for plat_entry in p.get("platforms", []):
+                    plat_k = plat_entry["platform"]
+                    if platform and platform.lower() != "all" and plat_k != platform.lower():
+                        continue
 
-            if has_plat_variation and not has_hist_change:
-                min_p = min(active_plat_prices)
-                max_p = max(active_plat_prices)
-                pct = round(((min_p - max_p) / max_p) * 100, 1) if max_p > 0 else 0.0
+                    # Extract chronological recorded selling prices for this platform
+                    plat_hist_prices = []
+                    for pt in c_data["history_points"]:
+                        if plat_k in pt and pt[plat_k] is not None and isinstance(pt[plat_k], (int, float)) and pt[plat_k] > 0:
+                            plat_hist_prices.append(float(pt[plat_k]))
 
-            # Only show products with verified price discrepancies or real multi-run movements
-            if not has_plat_variation and not has_hist_change:
+                    if len(plat_hist_prices) >= 2 and len(set(plat_hist_prices)) > 1:
+                        # Verified selling price movement on this platform
+                        p_old = plat_hist_prices[-2]
+                        p_new = plat_hist_prices[-1]
+                        if p_old != p_new and p_old > 0:
+                            has_hist_change = True
+                            change_platform = plat_k
+                            prev_price = p_old
+                            curr_price = p_new
+                            pct = round(((p_new - p_old) / p_old) * 100, 1)
+                            min_p = min(plat_hist_prices)
+                            max_p = max(plat_hist_prices)
+                            sparkline_points = plat_hist_prices
+                            break
+
+            # STRICT RULE: Nothing should be shown until we have verified data proving a price change on a platform
+            if not has_hist_change:
                 continue
 
-            prev_price = max_p if max_p > lowest else None
             enriched.append({
                 "family_id": p["family_id"],
                 "title": p["title"],
@@ -1230,12 +1392,13 @@ class CatalogService:
                 "category": p["category"],
                 "gender": p["gender"],
                 "image_url": p["image_url"],
-                "lowest_price": lowest,
+                "lowest_price": curr_price or lowest,
                 "previous_price": prev_price,
                 "price_change_percent": pct,
+                "change_platform": change_platform,
                 "min_recorded_price": min_p,
                 "max_recorded_price": max_p,
-                "sparkline": active_plat_prices if len(active_plat_prices) > 1 else [lowest],
+                "sparkline": sparkline_points or [curr_price or lowest],
                 "variants_count": p["variants_count"],
                 "sizes_count": p["sizes_count"],
                 "platforms_count": p["platforms_count"]

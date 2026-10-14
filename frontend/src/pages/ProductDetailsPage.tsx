@@ -154,8 +154,11 @@ export const ProductDetailsPage: React.FC = () => {
 
     // Fallback if still empty but listing is present
     if (cards.length === 0 && activeListing.price !== null) {
+      const cleanSz = activeListing.sizes_summary && activeListing.sizes_summary !== "—" && activeListing.sizes_summary !== "Standard"
+        ? activeListing.sizes_summary
+        : "";
       cards.push({
-        size: activeListing.sizes_summary || "Standard",
+        size: cleanSz,
         color: null,
         sku: activeListing.product_id || product.style || null,
         ean: product.ean || null,
@@ -621,7 +624,7 @@ export const ProductDetailsPage: React.FC = () => {
                     <div className="space-y-2">
                       <div className="flex items-center justify-between gap-2">
                         <span className="px-2.5 py-1 bg-slate-100 group-hover:bg-sky-50 group-hover:text-sky-700 rounded-xl text-xs font-mono font-black text-slate-800 transition-colors">
-                          Size: {card.size}
+                          {card.size ? `Size: ${card.size}` : "Single Size"}
                         </span>
                         <span
                           className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold ${
@@ -712,7 +715,7 @@ export const ProductDetailsPage: React.FC = () => {
                       <tr key={vidx} className="hover:bg-slate-50/60 transition-colors">
                         <td className="py-3.5 px-4 font-bold text-slate-900">
                           <span className="inline-block px-2.5 py-1 bg-slate-100 rounded-lg text-xs font-mono font-bold">
-                            {card.size}
+                            {card.size || "—"}
                           </span>
                         </td>
                         <td className="py-3.5 px-4 font-semibold text-slate-800">

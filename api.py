@@ -5,7 +5,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request, Response, HTTPException
 from fastapi.responses import JSONResponse
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -76,10 +76,12 @@ app.include_router(analytics_router)
 app.include_router(master_data_router)
 app.include_router(system_router)
 
-@app.get("/health")
-@app.get("/healthz")
-@app.get("/api/health")
-async def api_health_check():
+@app.api_route("/health", methods=["GET", "HEAD"])
+@app.api_route("/healthz", methods=["GET", "HEAD"])
+@app.api_route("/api/health", methods=["GET", "HEAD"])
+async def api_health_check(request: Request):
+    if request.method == "HEAD":
+        return Response(status_code=200, headers={"Content-Type": "application/json"})
     return {
         "status": "healthy",
         "service": "Columbia Vantis backend status",
@@ -496,6 +498,41 @@ async def deploy_trigger_endpoint_get(
     res = await check_and_trigger_scrapers(force=force, wait_seconds=wait_seconds)
     status_code = 200 if res.get("status") in ("already_completed", "already_running") else 202
     return JSONResponse(status_code=status_code, content=res)
+
+
+@app.api_route("/cron/uptime-trigger", methods=["HEAD", "GET", "POST"], tags=["Scraper Pipeline"])
+@app.api_route("/uptime-trigger", methods=["HEAD", "GET", "POST"], tags=["Scraper Pipeline"])
+@app.api_route("/cron/trigger", methods=["HEAD", "GET", "POST"], tags=["Scraper Pipeline"])
+async def uptime_trigger_endpoint(
+    request: Request,
+    force: bool = Query(False, description="Force run even if already completed today")
+):
+    """
+    Dedicated UptimeRobot / Cron Trigger Endpoint.
+    Configured for UptimeRobot HTTP monitors (https://dashboard.uptimerobot.com/monitors/new/http).
+    Supports HEAD, GET, and POST requests.
+    - Idempotent: checks today's business date and completed scrapers in Supabase.
+    - If not completed today, triggers sequential scraping pipeline asynchronously in background.
+    - Returns HTTP 200 immediately (within milliseconds) to satisfy UptimeRobot's 30-second timeout.
+    - For HEAD requests, returns RFC-compliant headers with no response body.
+    - Guarantees scrapers run at most once per 24 hours (one business date) even if pinged more frequently.
+    """
+    res = await check_and_trigger_scrapers(force=force, wait_seconds=0)
+    status_str = res.get("status", "unknown")
+    job_id = res.get("job_id", "")
+    business_date = res.get("business_date", get_business_date())
+
+    headers = {
+        "X-Scraper-Status": status_str,
+        "X-Job-Id": str(job_id or ""),
+        "X-Business-Date": str(business_date),
+        "Content-Type": "application/json"
+    }
+
+    if request.method == "HEAD":
+        return Response(status_code=200, headers=headers)
+
+    return JSONResponse(status_code=200, content=res, headers=headers)
 
 
 @app.get("/scrape/report")

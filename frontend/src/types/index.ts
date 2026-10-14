@@ -141,6 +141,7 @@ export interface AnalyticsProductRow {
   lowest_price: number;
   previous_price?: number;
   price_change_percent: number;
+  change_platform?: string | null;
   min_recorded_price: number;
   max_recorded_price: number;
   sparkline: number[];

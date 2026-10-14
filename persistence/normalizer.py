@@ -69,15 +69,31 @@ def normalize_size(raw_size: Optional[str]) -> str:
     """
     Normalizes size across all platforms into a unified standard system.
     Strips 'UK ', 'US ', 'EU ', 'Size: ', 'IND ' and normalizes apparel & footwear.
+    Returns empty string "" if the size is missing, None, or a placeholder (e.g. Default Title, OS, OneSize, Standard).
     """
     if not raw_size:
-        return "ONESIZE"
+        return ""
 
-    s = str(raw_size).strip().upper()
+    s = str(raw_size).strip()
+    if not s:
+        return ""
+
+    # Check for placeholder / fake sizes when product has no real sizes
+    FAKE_SIZE_MARKERS = {
+        "DEFAULT TITLE", "DEFAULT", "STANDARD", "REGULAR", "ONESIZE", "ONE SIZE",
+        "ONE-SIZE", "FREE SIZE", "FREESIZE", "OS", "O/S", "NA", "N/A", "NONE",
+        "NO SIZE", "NOSIZE", "ALL", "UNIVERSAL", "0", "0.0"
+    }
+    s_upper = s.upper()
+    if s_upper in FAKE_SIZE_MARKERS:
+        return ""
 
     # Remove common prefix noise
-    s = re.sub(r"^(UK|US|EU|IND|IN|SIZE|SZ|EUR)[\s:\-\._]*", "", s, flags=re.IGNORECASE).strip()
-    s = re.sub(r"[\s:\-\._]*(UK|US|EU|IND|IN)$", "", s, flags=re.IGNORECASE).strip()
+    s_clean = re.sub(r"^(UK|US|EU|IND|IN|SIZE|SZ|EUR)[\s:\-\._]*", "", s_upper, flags=re.IGNORECASE).strip()
+    s_clean = re.sub(r"[\s:\-\._]*(UK|US|EU|IND|IN)$", "", s_clean, flags=re.IGNORECASE).strip()
+
+    if not s_clean or s_clean in FAKE_SIZE_MARKERS:
+        return ""
 
     # Check for apparel mappings
     apparel_map = {
@@ -100,19 +116,13 @@ def normalize_size(raw_size: Optional[str]) -> str:
         "XXXL": "3XL",
         "4XL": "4XL",
         "XXXXL": "4XL",
-        "FREE SIZE": "ONESIZE",
-        "ONE SIZE": "ONESIZE",
-        "OS": "ONESIZE",
-        "O/S": "ONESIZE",
-        "REGULAR": "ONESIZE",
-        "STANDARD": "ONESIZE",
     }
-    if s in apparel_map:
-        return apparel_map[s]
+    if s_clean in apparel_map:
+        return apparel_map[s_clean]
 
     # Handle composite sizes like "M / 40" -> "M" or "8 / 42" -> "8"
-    if "/" in s:
-        part = s.split("/")[0].strip()
+    if "/" in s_clean:
+        part = s_clean.split("/")[0].strip()
         if part in apparel_map:
             return apparel_map[part]
         if re.match(r"^\d+(\.\d+)?$", part):
@@ -124,14 +134,18 @@ def normalize_size(raw_size: Optional[str]) -> str:
 
     # Clean footwear float formats like 8.0 -> 8
     try:
-        f_val = float(s)
+        f_val = float(s_clean)
         if f_val.is_integer():
             return str(int(f_val))
         return str(f_val)
     except ValueError:
         pass
 
-    return s if s else "ONESIZE"
+    # Reject if it looks like a color or non-size text (e.g. length > 12 chars without digits)
+    if len(s_clean) > 12 and not re.search(r"\d", s_clean):
+        return ""
+
+    return s_clean
 
 
 def normalize_offer(raw_offer: Dict[str, Any], platform: str = "") -> Dict[str, Any]:

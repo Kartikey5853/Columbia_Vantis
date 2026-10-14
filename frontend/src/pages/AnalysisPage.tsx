@@ -362,10 +362,12 @@ export const AnalysisPage: React.FC = () => {
               <p className="text-xs font-semibold text-slate-500">Querying Supabase real price telemetry...</p>
             </div>
           ) : products.length === 0 ? (
-            <div className="py-20 text-center space-y-3 max-w-sm mx-auto">
+            <div className="py-20 text-center space-y-3 max-w-md mx-auto px-4">
               <Sparkles className="w-8 h-8 text-[#079FE0] mx-auto" />
-              <h3 className="font-bold text-slate-800 text-sm">No products found</h3>
-              <p className="text-xs text-slate-500">Try adjusting your category filter, platform, or search query.</p>
+              <h3 className="font-bold text-slate-800 text-sm">No Price Changes Recorded Yet</h3>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                The Data Analysis view exclusively tracks products with verified changes in current selling price (not MRP) on a platform over time (e.g. ₹2,000 moving to ₹2,200). Products will appear here once consecutive scrape runs confirm a price shift.
+              </p>
             </div>
           ) : (
             products.map((prod) => {
@@ -422,7 +424,7 @@ export const AnalysisPage: React.FC = () => {
                         : "—"}
                     </span>
                     <span className="text-[10px] text-slate-400 font-medium block">
-                      {prod.previous_price && prod.previous_price !== prod.lowest_price ? "Other Platform" : "Previous"}
+                      {prod.change_platform ? `${prod.change_platform.toUpperCase()} Before` : "Previous"}
                     </span>
                   </div>
 

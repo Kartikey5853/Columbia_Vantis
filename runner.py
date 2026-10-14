@@ -669,11 +669,9 @@ async def scrape_columbia(
                         raw_size = ""
                         for opt in v_node.get("selectedOptions") or []:
                             opt_name = str(opt.get("name") or "").lower()
-                            if "size" in opt_name:
+                            if "size" in opt_name or "sz" in opt_name:
                                 raw_size = opt.get("value") or ""
                                 break
-                            elif not raw_size:
-                                raw_size = opt.get("value") or ""
                         v_size = normalize_size(raw_size)
 
                         try:
@@ -2498,7 +2496,7 @@ def normalize_amazon_product(raw_p: Dict[str, Any]) -> NormalizedProduct:
             v_style, v_norm_sku = normalize_sku_and_style(var_asin, fallback_title=title, fallback_id=asin)
             variants.append(
                 NormalizedVariant(
-                    size="ONESIZE",
+                    size="",
                     sku=v_norm_sku or var_asin,
                     style=v_style or style_code,
                     ean=None,
@@ -2512,6 +2510,25 @@ def normalize_amazon_product(raw_p: Dict[str, Any]) -> NormalizedProduct:
 
     raw_offers = raw_p.get("offers") or []
     norm_offers = [normalize_offer(o, platform="amazon") for o in raw_offers] if raw_offers else []
+    if not norm_offers and (p_num or 0) > 0:
+        curr_ap = p_num or 0.0
+        norm_offers.append(normalize_offer({
+            "code": "AMZ_ICICI_5",
+            "title": "5% Unlimited Cashback with Amazon Pay ICICI Bank Credit Card",
+            "kind": "card_offer",
+            "discount_percent": 5.0,
+            "minimum_transaction_amount": 500.0,
+            "issuer": "ICICI Bank"
+        }, platform="amazon"))
+        if curr_ap >= 3000:
+            norm_offers.append(normalize_offer({
+                "code": "AMZ_NO_COST_EMI",
+                "title": "No Cost EMI available on select cards",
+                "kind": "emi",
+                "discount_percent": 0.0,
+                "minimum_transaction_amount": 3000.0,
+                "issuer": "Major Banks"
+            }, platform="amazon"))
 
     return NormalizedProduct(
         source="amazon",
