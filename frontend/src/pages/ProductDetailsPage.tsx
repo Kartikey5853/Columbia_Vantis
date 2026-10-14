@@ -211,6 +211,7 @@ export const ProductDetailsPage: React.FC = () => {
       available: boolean;
       stock?: number | string | null;
       url?: string | null;
+      image_url?: string | null;
     }> = [];
 
     const rawVariants = activeListing.variants || [];
@@ -234,6 +235,7 @@ export const ProductDetailsPage: React.FC = () => {
               available: v.available !== false,
               stock: v.stock ?? v.quantity ?? activeListing.stock_text,
               url: v.url || activeListing.url,
+              image_url: v.image_url || activeListing.image_url || null,
             });
           }
         } else {
@@ -248,6 +250,7 @@ export const ProductDetailsPage: React.FC = () => {
             available: v.available !== false,
             stock: v.stock ?? v.quantity ?? activeListing.stock_text,
             url: v.url || activeListing.url,
+            image_url: v.image_url || activeListing.image_url || null,
           });
         }
       }
@@ -480,84 +483,6 @@ export const ProductDetailsPage: React.FC = () => {
               })}
             </div>
           </div>
-
-          {/* COLOR / VARIANT SELECTOR */}
-          {distinctColorOptions.length > 0 && (
-            <div className="space-y-2 pt-1 border-t border-slate-100">
-              <div className="flex items-center justify-between text-xs font-bold text-slate-700">
-                <span className="uppercase tracking-wider text-[11px] text-slate-500 font-extrabold flex items-center gap-1.5">
-                  <span>Color / Variant</span>
-                  {selectedColor && (
-                    <span className="text-sky-600 font-black normal-case">
-                      ({selectedColor})
-                    </span>
-                  )}
-                </span>
-                <span className="text-slate-400 font-normal">
-                  {distinctColorOptions.length} colorways available
-                </span>
-              </div>
-
-              <div className="flex flex-wrap gap-2">
-                {distinctColorOptions.map((opt) => {
-                  const isColorSelected =
-                    (selectedColor && selectedColor.toLowerCase() === opt.color.toLowerCase()) ||
-                    (!selectedColor && currentVariant?.color?.toLowerCase() === opt.color.toLowerCase());
-
-                  // Find price of this color on active platform if available
-                  const platVar = activeListing?.variants?.find(
-                    (v) => v.color?.toLowerCase() === opt.color.toLowerCase()
-                  );
-                  const colorPrice = platVar?.price ?? opt.price;
-                  const colorMrp = platVar?.mrp ?? opt.mrp;
-                  const colorDiscount =
-                    colorPrice && colorMrp && colorMrp > colorPrice
-                      ? Math.round(((colorMrp - colorPrice) / colorMrp) * 100)
-                      : 0;
-
-                  return (
-                    <button
-                      key={opt.color}
-                      type="button"
-                      onClick={() => {
-                        setSelectedColor(opt.color);
-                        if (platVar?.sku) setSelectedVariantSku(platVar.sku);
-                        else if (opt.sku) setSelectedVariantSku(opt.sku);
-                        if (opt.image_url) setSelectedImage(opt.image_url);
-                        else if (platVar?.image_url) setSelectedImage(platVar.image_url);
-                      }}
-                      className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
-                        isColorSelected
-                          ? "bg-sky-50 border-sky-500 text-sky-950 ring-2 ring-sky-200 shadow-xs"
-                          : "bg-white border-slate-200 text-slate-700 hover:border-slate-300 hover:bg-slate-50/60"
-                      }`}
-                    >
-                      {opt.image_url ? (
-                        <img
-                          src={opt.image_url}
-                          alt={opt.color}
-                          className="w-5 h-5 rounded-full object-cover border border-slate-200 bg-white"
-                        />
-                      ) : (
-                        <span className="w-3.5 h-3.5 rounded-full border border-slate-300 bg-slate-200" />
-                      )}
-                      <span>{opt.color}</span>
-                      {colorPrice && (
-                        <span className="font-mono text-[11px] text-slate-500">
-                          ₹{colorPrice.toLocaleString("en-IN")}
-                        </span>
-                      )}
-                      {colorDiscount > 0 && (
-                        <span className="px-1.5 py-0.2 bg-emerald-100 text-emerald-800 text-[10px] font-extrabold rounded-md">
-                          {colorDiscount}% off
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
 
           {/* Dynamic Platform Title */}
           <div className="space-y-1 pt-1">
@@ -806,7 +731,7 @@ export const ProductDetailsPage: React.FC = () => {
                 }`}
               >
                 <LayoutGrid className="w-3.5 h-3.5" />
-                <span>Cards ({visibleVariantCards.length})</span>
+                <span>Cards ({displayVariantCards.length})</span>
               </button>
               <button
                 type="button"
@@ -823,22 +748,6 @@ export const ProductDetailsPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Active Color Filter Notice */}
-          {selectedColor && (
-            <div className="flex items-center justify-between text-xs bg-sky-50 border border-sky-200/80 px-3.5 py-2 rounded-xl text-sky-900">
-              <span className="flex items-center gap-1.5 font-medium">
-                Showing inventory for color: <strong className="font-extrabold text-sky-950">{selectedColor}</strong>
-              </span>
-              <button
-                type="button"
-                onClick={() => setSelectedColor(null)}
-                className="text-sky-700 hover:text-sky-950 font-bold underline cursor-pointer text-[11px]"
-              >
-                Show all colors ({displayVariantCards.length})
-              </button>
-            </div>
-          )}
-
           {/* Platform Options for Variant Breakdown */}
           <div className="flex flex-wrap items-center gap-2 pb-1">
             {product.platforms.map((plat) => {
@@ -852,6 +761,8 @@ export const ProductDetailsPage: React.FC = () => {
                   type="button"
                   onClick={() => {
                     setSelectedPlatformKey(plat.platform);
+                    setSelectedVariantSku(null);
+                    setSelectedColor(null);
                     if (plat.image_url) setSelectedImage(plat.image_url);
                   }}
                   className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
@@ -882,80 +793,121 @@ export const ProductDetailsPage: React.FC = () => {
 
           {/* CARD GRID VIEW */}
           {variantViewMode === "cards" ? (
-            visibleVariantCards.length > 0 ? (
+            displayVariantCards.length > 0 ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3.5">
-                {visibleVariantCards.map((card, idx) => (
-                  <div
-                    key={idx}
-                    className="bg-white rounded-2xl border border-slate-200/90 hover:border-sky-300 p-4 shadow-2xs hover:shadow-xs transition-all space-y-3 flex flex-col justify-between group"
-                  >
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="px-2.5 py-1 bg-slate-100 group-hover:bg-sky-50 group-hover:text-sky-700 rounded-xl text-xs font-mono font-black text-slate-800 transition-colors">
-                          {card.size ? `Size: ${card.size}` : "Single Size"}
-                        </span>
-                        <span
-                          className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                            card.available
-                              ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                              : "bg-rose-50 text-rose-700 border border-rose-200"
-                          }`}
-                        >
-                          <span
-                            className={`w-1.5 h-1.5 rounded-full ${
-                              card.available ? "bg-emerald-500" : "bg-rose-500"
-                            }`}
-                          />
-                          <span>{card.available ? "In stock" : "Out of stock"}</span>
-                        </span>
-                      </div>
+                {displayVariantCards.map((card, idx) => {
+                  const isCardSelected =
+                    (selectedVariantSku && card.sku === selectedVariantSku) ||
+                    (!selectedVariantSku && selectedColor && card.color?.toLowerCase() === selectedColor.toLowerCase()) ||
+                    (!selectedVariantSku && !selectedColor && idx === 0);
 
-                      {card.color && (
-                        <p className="text-xs font-semibold text-slate-700 line-clamp-1">
-                          Color: {card.color}
-                        </p>
-                      )}
+                  return (
+                    <div
+                      key={idx}
+                      onClick={() => {
+                        if (card.sku) setSelectedVariantSku(card.sku);
+                        if (card.color) setSelectedColor(card.color);
+                        if (card.image_url) setSelectedImage(card.image_url);
+                      }}
+                      className={`rounded-2xl border p-4 shadow-2xs hover:shadow-xs transition-all space-y-3 flex flex-col justify-between group cursor-pointer ${
+                        isCardSelected
+                          ? "bg-sky-50/40 border-sky-500 ring-2 ring-sky-500/20"
+                          : "bg-white border-slate-200/90 hover:border-sky-300"
+                      }`}
+                    >
+                      <div className="space-y-2.5">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            {card.image_url ? (
+                              <img
+                                src={card.image_url}
+                                alt={card.color || card.size || "variant"}
+                                className="w-10 h-10 rounded-xl object-cover border border-slate-200 bg-white shrink-0"
+                              />
+                            ) : (
+                              <div className="w-10 h-10 rounded-xl border border-slate-200 bg-slate-100 flex items-center justify-center shrink-0">
+                                <Package className="w-4 h-4 text-slate-400" />
+                              </div>
+                            )}
+                            <div>
+                              <span className="px-2 py-0.5 bg-slate-100 group-hover:bg-sky-100 group-hover:text-sky-800 rounded-lg text-xs font-mono font-black text-slate-800 transition-colors">
+                                {card.size ? `Size: ${card.size}` : "One Size"}
+                              </span>
+                              {card.color && (
+                                <p className="text-[11px] font-bold text-slate-700 mt-1 line-clamp-1">
+                                  {card.color}
+                                </p>
+                              )}
+                            </div>
+                          </div>
 
-                      <div className="text-[11px] font-mono text-slate-400 truncate">
-                        ID: {card.sku || "—"}
-                      </div>
-
-                      {card.stock && card.available && (
-                        <div className="text-[11px] text-slate-500 font-medium">
-                          Stock:{" "}
-                          <span className="font-bold text-slate-700">
-                            {typeof card.stock === "number" ? `${card.stock} units` : card.stock}
-                          </span>
+                          <div className="flex flex-col items-end gap-1">
+                            <span
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                card.available
+                                  ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                  : "bg-rose-50 text-rose-700 border border-rose-200"
+                              }`}
+                            >
+                              <span
+                                className={`w-1.5 h-1.5 rounded-full ${
+                                  card.available ? "bg-emerald-500" : "bg-rose-500"
+                                }`}
+                              />
+                              <span>{card.available ? "In stock" : "Out of stock"}</span>
+                            </span>
+                            {isCardSelected && (
+                              <span className="text-[10px] font-black text-sky-600 uppercase tracking-wider">
+                                Selected ✓
+                              </span>
+                            )}
+                          </div>
                         </div>
-                      )}
-                    </div>
 
-                    <div className="pt-2.5 border-t border-slate-100 flex items-center justify-between gap-2">
-                      <div>
-                        <div className="text-sm font-black text-slate-900">
-                          {card.price ? `₹${card.price.toLocaleString("en-IN")}` : "—"}
-                        </div>
-                        {card.mrp && card.mrp > (card.price || 0) && (
-                          <div className="text-[10px] font-mono text-slate-400 line-through">
-                            MRP ₹{card.mrp.toLocaleString("en-IN")}
+                        {card.sku && (
+                          <div className="text-[11px] font-mono text-slate-400 truncate">
+                            SKU: {card.sku}
+                          </div>
+                        )}
+
+                        {card.stock && card.available && (
+                          <div className="text-[11px] text-slate-500 font-medium">
+                            Stock:{" "}
+                            <span className="font-bold text-slate-700">
+                              {typeof card.stock === "number" ? `${card.stock} units` : card.stock}
+                            </span>
                           </div>
                         )}
                       </div>
 
-                      {card.url && (
-                        <a
-                          href={card.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-all shadow-2xs cursor-pointer"
-                        >
-                          <span>View</span>
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      )}
+                      <div className="pt-2.5 border-t border-slate-100 flex items-center justify-between gap-2">
+                        <div>
+                          <div className="text-sm font-black text-slate-900">
+                            {card.price ? `₹${card.price.toLocaleString("en-IN")}` : "—"}
+                          </div>
+                          {card.mrp && card.mrp > (card.price || 0) && (
+                            <div className="text-[10px] font-mono text-slate-400 line-through">
+                              MRP ₹{card.mrp.toLocaleString("en-IN")}
+                            </div>
+                          )}
+                        </div>
+
+                        {card.url && (
+                          <a
+                            href={card.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-all shadow-2xs cursor-pointer"
+                          >
+                            <span>View</span>
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <div className="py-12 text-center text-xs text-slate-400 font-semibold bg-slate-50/50 rounded-2xl border border-slate-200">
@@ -978,64 +930,94 @@ export const ProductDetailsPage: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
-                  {visibleVariantCards.length > 0 ? (
-                    visibleVariantCards.map((card, vidx) => (
-                      <tr key={vidx} className="hover:bg-slate-50/60 transition-colors">
-                        <td className="py-3.5 px-4 font-bold text-slate-900">
-                          <span className="inline-block px-2.5 py-1 bg-slate-100 rounded-lg text-xs font-mono font-bold">
-                            {card.size || "—"}
-                          </span>
-                        </td>
-                        <td className="py-3.5 px-4 font-semibold text-slate-800">
-                          {card.color || activeListing.listing_title}
-                        </td>
-                        <td className="py-3.5 px-4 font-mono text-[11px] text-slate-500">
-                          {card.sku || product.style || "—"}
-                        </td>
-                        <td className="py-3.5 px-4 whitespace-nowrap">
-                          <div className="flex items-center gap-1.5">
-                            <span
-                              className={`w-2 h-2 rounded-full ${
-                                card.available ? "bg-emerald-500" : "bg-rose-400"
-                              }`}
-                            />
-                            <span
-                              className={`font-bold ${
-                                card.available ? "text-emerald-700" : "text-rose-600"
-                              }`}
-                            >
-                              {card.available ? "In stock" : "Out of stock"}
+                  {displayVariantCards.length > 0 ? (
+                    displayVariantCards.map((card, vidx) => {
+                      const isCardSelected =
+                        (selectedVariantSku && card.sku === selectedVariantSku) ||
+                        (!selectedVariantSku && selectedColor && card.color?.toLowerCase() === selectedColor.toLowerCase()) ||
+                        (!selectedVariantSku && !selectedColor && vidx === 0);
+
+                      return (
+                        <tr
+                          key={vidx}
+                          onClick={() => {
+                            if (card.sku) setSelectedVariantSku(card.sku);
+                            if (card.color) setSelectedColor(card.color);
+                            if (card.image_url) setSelectedImage(card.image_url);
+                          }}
+                          className={`hover:bg-slate-50/80 transition-colors cursor-pointer ${
+                            isCardSelected ? "bg-sky-50/50" : ""
+                          }`}
+                        >
+                          <td className="py-3.5 px-4 font-bold text-slate-900">
+                            <span className="inline-block px-2.5 py-1 bg-slate-100 rounded-lg text-xs font-mono font-bold">
+                              {card.size || "—"}
                             </span>
-                            {card.stock && card.available && (
-                              <span className="text-[11px] text-slate-400 font-normal">
-                                ({typeof card.stock === "number" ? `${card.stock} units` : card.stock})
+                          </td>
+                          <td className="py-3.5 px-4 font-semibold text-slate-800">
+                            <div className="flex items-center gap-2">
+                              {card.image_url && (
+                                <img
+                                  src={card.image_url}
+                                  alt={card.color || "variant"}
+                                  className="w-6 h-6 rounded-md object-cover border border-slate-200 shrink-0"
+                                />
+                              )}
+                              <span>{card.color || activeListing.listing_title}</span>
+                              {isCardSelected && (
+                                <span className="text-[10px] text-sky-600 font-black">✓</span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="py-3.5 px-4 font-mono text-[11px] text-slate-500">
+                            {card.sku || product.style || "—"}
+                          </td>
+                          <td className="py-3.5 px-4 whitespace-nowrap">
+                            <div className="flex items-center gap-1.5">
+                              <span
+                                className={`w-2 h-2 rounded-full ${
+                                  card.available ? "bg-emerald-500" : "bg-rose-400"
+                                }`}
+                              />
+                              <span
+                                className={`font-bold ${
+                                  card.available ? "text-emerald-700" : "text-rose-600"
+                                }`}
+                              >
+                                {card.available ? "In stock" : "Out of stock"}
                               </span>
+                              {card.stock && card.available && (
+                                <span className="text-[11px] text-slate-400 font-normal">
+                                  ({typeof card.stock === "number" ? `${card.stock} units` : card.stock})
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="py-3.5 px-4 font-extrabold text-slate-900">
+                            {card.price ? `₹${card.price.toLocaleString("en-IN")}` : "—"}
+                          </td>
+                          <td className="py-3.5 px-4 font-mono text-slate-500">
+                            {card.mrp ? `₹${card.mrp.toLocaleString("en-IN")}` : "—"}
+                          </td>
+                          <td className="py-3.5 px-4 text-right">
+                            {card.url ? (
+                              <a
+                                href={card.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-all cursor-pointer"
+                              >
+                                <span>View</span>
+                                <ExternalLink className="w-3 h-3 text-slate-400" />
+                              </a>
+                            ) : (
+                              <span className="text-slate-300 italic text-xs">Unlisted</span>
                             )}
-                          </div>
-                        </td>
-                        <td className="py-3.5 px-4 font-extrabold text-slate-900">
-                          {card.price ? `₹${card.price.toLocaleString("en-IN")}` : "—"}
-                        </td>
-                        <td className="py-3.5 px-4 font-mono text-slate-500">
-                          {card.mrp ? `₹${card.mrp.toLocaleString("en-IN")}` : "—"}
-                        </td>
-                        <td className="py-3.5 px-4 text-right">
-                          {card.url ? (
-                            <a
-                              href={card.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-all cursor-pointer"
-                            >
-                              <span>View</span>
-                              <ExternalLink className="w-3 h-3 text-slate-400" />
-                            </a>
-                          ) : (
-                            <span className="text-slate-300 italic text-xs">Unlisted</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))
+                          </td>
+                        </tr>
+                      );
+                    })
                   ) : (
                     <tr>
                       <td colSpan={7} className="py-8 text-center text-xs text-slate-400 font-semibold">

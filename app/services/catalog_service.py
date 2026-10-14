@@ -1034,6 +1034,45 @@ class CatalogService:
                                         "terms_url": off.get("terms_url")
                                     })
 
+                    # Columbia & Adventuras standard EMI & card offers
+                    if plat_key in ("columbia", "adv") and not parsed_offers and p_val and p_val > 0:
+                        snap_installment = round(p_val / 3.0, 2)
+                        parsed_offers.append({
+                            "kind": "emi_offer",
+                            "code": None,
+                            "title": "Pay in 3 with Snapmint (0% Interest)",
+                            "description": f"Pay 3 monthly installments of ₹{snap_installment} with 0% interest and instant approval.",
+                            "offer_price": None,
+                            "issuer": "Snapmint",
+                            "card_type": "Cardless EMI / UPI",
+                            "payment_network": None,
+                            "discount_percent": None,
+                            "discount_amount": None,
+                            "minimum_transaction_amount": 500.0,
+                            "maximum_discount": None,
+                            "valid_from": "2026-01-01",
+                            "validity": "Ongoing Offer",
+                            "terms_url": "https://snapmint.com"
+                        })
+                        emi_installment = round(p_val / 6.0, 2)
+                        parsed_offers.append({
+                            "kind": "bank_offer",
+                            "code": None,
+                            "title": "Credit Card EMI Available (3, 6, 9, 12 Months)",
+                            "description": f"EMI starts at ₹{emi_installment}/month across major banks (HDFC, ICICI, SBI, Axis, Kotak, IndusInd).",
+                            "offer_price": None,
+                            "issuer": "Major Indian Banks",
+                            "card_type": "Credit Card",
+                            "payment_network": "Visa / Mastercard",
+                            "discount_percent": None,
+                            "discount_amount": None,
+                            "minimum_transaction_amount": 2000.0,
+                            "maximum_discount": None,
+                            "valid_from": "2026-01-01",
+                            "validity": "Ongoing Offer",
+                            "terms_url": None
+                        })
+
                     # Amazon standard card offer & EMI fallback
                     if plat_key == "amazon" and not parsed_offers and p_val and p_val > 0:
                         parsed_offers.append({
