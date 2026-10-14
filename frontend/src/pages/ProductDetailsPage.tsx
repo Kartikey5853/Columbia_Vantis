@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, useSearchParams, Link } from "react-router-dom";
 import {
   ArrowLeft,
   RotateCw,
@@ -21,6 +21,9 @@ import PlatformLogo from "../components/brand/PlatformLogo";
 
 export const ProductDetailsPage: React.FC = () => {
   const { familyId } = useParams<{ familyId: string }>();
+  const [searchParams] = useSearchParams();
+  const queryParam = (searchParams.get("q") || searchParams.get("ean") || searchParams.get("sku") || "").trim().toLowerCase();
+
   const [product, setProduct] = useState<ProductFamily | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -28,6 +31,8 @@ export const ProductDetailsPage: React.FC = () => {
   // User selections
   const [selectedImage, setSelectedImage] = useState<string>("");
   const [selectedPlatformKey, setSelectedPlatformKey] = useState<string>("columbia");
+  const [selectedColor, setSelectedColor] = useState<string | null>(null);
+  const [selectedVariantSku, setSelectedVariantSku] = useState<string | null>(null);
   const [selectedOfferModal, setSelectedOfferModal] = useState<ProductOffer | null>(null);
 
   useEffect(() => {
@@ -42,7 +47,34 @@ export const ProductDetailsPage: React.FC = () => {
     try {
       const data = await productService.getProductDetails(id);
       setProduct(data);
-      setSelectedImage(data.image_url || "");
+
+      // Pre-select variant based on query parameter (EAN, SKU, or Color) or product EAN
+      let initialVar: ProductVariant | undefined;
+      const allVars = data.variants || [];
+
+      if (queryParam) {
+        initialVar = allVars.find(
+          (v) =>
+            v.ean?.toLowerCase() === queryParam ||
+            v.sku?.toLowerCase() === queryParam ||
+            v.color?.toLowerCase() === queryParam
+        );
+      }
+      if (!initialVar && data.ean) {
+        initialVar = allVars.find((v) => v.ean?.toLowerCase() === data.ean?.toLowerCase());
+      }
+      if (!initialVar && allVars.length > 0) {
+        initialVar = allVars.find((v) => v.color && v.image_url) || allVars[0];
+      }
+
+      if (initialVar) {
+        if (initialVar.color) setSelectedColor(initialVar.color);
+        if (initialVar.sku) setSelectedVariantSku(initialVar.sku);
+        if (initialVar.image_url) setSelectedImage(initialVar.image_url);
+      } else {
+        setSelectedImage(data.image_url || "");
+      }
+
       // Default to first platform that has active price or listing
       const firstActive = data.platforms.find((p) => p.price !== null && p.price !== undefined);
       if (firstActive) {
@@ -70,13 +102,108 @@ export const ProductDetailsPage: React.FC = () => {
       ? activeListing.variants
       : [];
 
+  // Distinct colors across product and all platform variants
+  const distinctColorOptions = useMemo(() => {
+    if (!product) return [];
+    const colorMap = new Map<string, {
+      color: string;
+      image_url?: string | null;
+      sku?: string | null;
+      ean?: string | null;
+      title?: string | null;
+      price?: number | null;
+      mrp?: number | null;
+    }>();
+
+    const allVars = [...(product.variants || [])];
+    for (const plat of product.platforms || []) {
+      if (plat.variants) {
+        allVars.push(...plat.variants);
+      }
+    }
+
+    for (const v of allVars) {
+      const c = v.color?.trim();
+      if (!c) continue;
+      const existing = colorMap.get(c);
+      if (!existing) {
+        colorMap.set(c, {
+          color: c,
+          image_url: v.image_url,
+          sku: v.sku,
+          ean: v.ean,
+          title: v.title,
+          price: v.price,
+          mrp: v.mrp,
+        });
+      } else {
+        if (!existing.image_url && v.image_url) existing.image_url = v.image_url;
+        if (!existing.price && v.price) existing.price = v.price;
+        if (!existing.mrp && v.mrp) existing.mrp = v.mrp;
+        if (!existing.ean && v.ean) existing.ean = v.ean;
+      }
+    }
+
+    return Array.from(colorMap.values());
+  }, [product]);
+
+  // Find variant on selected platform matching the selected color or SKU
+  const currentVariant: ProductVariant | undefined = useMemo(() => {
+    if (!activeListing?.variants || activeListing.variants.length === 0) return undefined;
+    if (selectedVariantSku) {
+      const matchSku = activeListing.variants.find((v) => v.sku?.toLowerCase() === selectedVariantSku.toLowerCase());
+      if (matchSku) return matchSku;
+    }
+    if (selectedColor) {
+      const matchCol = activeListing.variants.find((v) => v.color?.toLowerCase() === selectedColor.toLowerCase());
+      if (matchCol) return matchCol;
+    }
+    return activeListing.variants[0];
+  }, [activeListing, selectedVariantSku, selectedColor]);
+
+  const activePrice = currentVariant?.price ?? activeListing?.price;
+  const activeMrp = currentVariant?.mrp ?? activeListing?.mrp ?? product?.mrp;
+  const activeDiscountPct = useMemo(() => {
+    if (activePrice && activeMrp && activeMrp > activePrice) {
+      return Math.round(((activeMrp - activePrice) / activeMrp) * 100);
+    }
+    return 0;
+  }, [activePrice, activeMrp]);
+
+  const activeTitle = currentVariant?.title || activeListing?.listing_title || product?.title;
+  const activeSku = currentVariant?.sku || product?.style || activeListing?.product_id;
+  const activeEan = currentVariant?.ean || product?.ean;
+
+  // Selected image resolution: variant image -> selectedImage -> platform image -> product image
+  const currentImage = selectedImage || currentVariant?.image_url || activeListing?.image_url || product?.image_url;
+
+  // Build images list for current color / variant
+  const allImages = useMemo(() => {
+    if (!product) return [];
+    const imgs: string[] = [];
+    if (currentVariant?.image_url) imgs.push(currentVariant.image_url);
+    if (activeListing?.image_url && !imgs.includes(activeListing.image_url)) imgs.push(activeListing.image_url);
+    if (product.image_url && !imgs.includes(product.image_url)) imgs.push(product.image_url);
+    for (const g of product.gallery_images || []) {
+      if (g && !imgs.includes(g)) imgs.push(g);
+    }
+    return imgs.filter(Boolean);
+  }, [product, currentVariant, activeListing]);
+
   // Derive individual cards for ALL sizes on this single platform
   const displayVariantCards = useMemo(() => {
     if (!product || !activeListing) return [];
 
+    const isAccessory =
+      product.category === "Accessories" ||
+      product.category === "Bags" ||
+      product.category === "Equipment" ||
+      /beanie|cap|hat|backpack|glove|mitt|socks|belt|wallet|bandana|gaiter/i.test(product.title);
+
     const cards: Array<{
       size: string;
       color?: string | null;
+      title?: string | null;
       sku?: string | null;
       ean?: string | null;
       price?: number | null;
@@ -91,6 +218,7 @@ export const ProductDetailsPage: React.FC = () => {
     if (rawVariants.length > 0) {
       for (const v of rawVariants) {
         const rawSize = (v.size || "").trim();
+        const displaySz = rawSize || (isAccessory ? "One Size" : "Standard");
         // If size has comma-separated values (e.g. "S, M, L, XL"), split into separate cards
         if (rawSize.includes(",")) {
           const individualSizes = rawSize.split(",").map((s) => s.trim()).filter(Boolean);
@@ -98,6 +226,7 @@ export const ProductDetailsPage: React.FC = () => {
             cards.push({
               size: s,
               color: v.color || null,
+              title: v.title || null,
               sku: v.sku || activeListing.product_id || null,
               ean: v.ean || null,
               price: v.price ?? activeListing.price,
@@ -109,8 +238,9 @@ export const ProductDetailsPage: React.FC = () => {
           }
         } else {
           cards.push({
-            size: rawSize || "Standard",
+            size: displaySz,
             color: v.color || null,
+            title: v.title || null,
             sku: v.sku || activeListing.product_id || null,
             ean: v.ean || null,
             price: v.price ?? activeListing.price,
@@ -140,6 +270,7 @@ export const ProductDetailsPage: React.FC = () => {
           cards.push({
             size: sz,
             color: null,
+            title: null,
             sku: activeListing.product_id || product.style || null,
             ean: product.ean || null,
             price: activeListing.price,
@@ -156,10 +287,11 @@ export const ProductDetailsPage: React.FC = () => {
     if (cards.length === 0 && activeListing.price !== null) {
       const cleanSz = activeListing.sizes_summary && activeListing.sizes_summary !== "—" && activeListing.sizes_summary !== "Standard"
         ? activeListing.sizes_summary
-        : "";
+        : (isAccessory ? "One Size" : "Standard");
       cards.push({
         size: cleanSz,
         color: null,
+        title: null,
         sku: activeListing.product_id || product.style || null,
         ean: product.ean || null,
         price: activeListing.price,
@@ -172,6 +304,15 @@ export const ProductDetailsPage: React.FC = () => {
 
     return cards;
   }, [activeListing, product]);
+
+  // Filter cards by selectedColor if selected
+  const visibleVariantCards = useMemo(() => {
+    if (!selectedColor) return displayVariantCards;
+    const matching = displayVariantCards.filter(
+      (c) => c.color?.toLowerCase() === selectedColor.toLowerCase()
+    );
+    return matching.length > 0 ? matching : displayVariantCards;
+  }, [displayVariantCards, selectedColor]);
 
   if (isLoading) {
     return (
@@ -199,11 +340,6 @@ export const ProductDetailsPage: React.FC = () => {
       </div>
     );
   }
-
-  // Thumbnails gallery
-  const allImages = Array.from(
-    new Set([product.image_url, ...product.gallery_images].filter(Boolean) as string[])
-  );
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-8 py-6 space-y-8">
@@ -233,36 +369,38 @@ export const ProductDetailsPage: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 bg-white p-6 sm:p-8 rounded-3xl border border-slate-200/90 shadow-sm">
         {/* Left Column (lg: 5 cols): All Images & Main Preview for Selected Platform */}
         <div className="lg:col-span-5 flex flex-col-reverse sm:flex-row gap-4">
-          {/* Vertical Thumbnail Strip */}
-          <div className="flex sm:flex-col gap-2 shrink-0 overflow-x-auto sm:overflow-visible">
-            {allImages.slice(0, 5).map((img, idx) => (
-              <button
-                key={idx}
-                onClick={() => setSelectedImage(img)}
-                className={`w-14 h-14 rounded-xl border p-1 bg-slate-50 overflow-hidden transition-all ${
-                  (selectedImage || activeListing.image_url || product.image_url) === img
-                    ? "border-sky-500 ring-2 ring-sky-200"
-                    : "border-slate-200 hover:border-slate-300 opacity-80 hover:opacity-100"
-                }`}
-              >
-                <img
-                  src={img}
-                  alt={`Thumb ${idx + 1}`}
-                  className="w-full h-full object-contain mix-blend-multiply"
-                />
-              </button>
-            ))}
-          </div>
+          {/* Vertical Thumbnail Strip - Only shown when multiple images exist */}
+          {allImages.length > 1 && (
+            <div className="flex sm:flex-col gap-2 shrink-0 overflow-x-auto sm:overflow-visible">
+              {allImages.slice(0, 5).map((img, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => setSelectedImage(img)}
+                  className={`w-14 h-14 rounded-xl border p-1 bg-slate-50 overflow-hidden transition-all cursor-pointer ${
+                    (selectedImage || currentImage) === img
+                      ? "border-sky-500 ring-2 ring-sky-200"
+                      : "border-slate-200 hover:border-slate-300 opacity-80 hover:opacity-100"
+                  }`}
+                >
+                  <img
+                    src={img}
+                    alt={`Thumb ${idx + 1}`}
+                    className="w-full h-full object-contain mix-blend-multiply"
+                  />
+                </button>
+              ))}
+            </div>
+          )}
 
-          {/* Large Main Preview */}
-          <div className="relative flex-1 bg-slate-50/70 rounded-2xl border border-slate-100 p-6 flex items-center justify-center min-h-[320px]">
+          {/* Large Main Preview - centered and full width when no thumbnails strip */}
+          <div className="relative flex-1 w-full bg-slate-50/70 rounded-2xl border border-slate-100 p-6 flex items-center justify-center min-h-[320px]">
             <img
-              src={selectedImage || activeListing.image_url || product.image_url || "/vantis_logo.png"}
-              alt={activeListing.listing_title || product.title}
+              src={selectedImage || currentImage || "/vantis_logo.png"}
+              alt={activeTitle || product.title}
               className="max-h-[320px] w-full object-contain mix-blend-multiply transition-all hover:scale-105"
             />
             <button
-              onClick={() => window.open(selectedImage || activeListing.image_url || product.image_url || "", "_blank")}
+              onClick={() => window.open(selectedImage || currentImage || "", "_blank")}
               className="absolute bottom-3 right-3 p-2 rounded-xl bg-white/90 border border-slate-200 text-slate-500 hover:text-slate-900 shadow-xs cursor-pointer"
               title="Expand full image"
             >
@@ -343,13 +481,91 @@ export const ProductDetailsPage: React.FC = () => {
             </div>
           </div>
 
+          {/* COLOR / VARIANT SELECTOR */}
+          {distinctColorOptions.length > 0 && (
+            <div className="space-y-2 pt-1 border-t border-slate-100">
+              <div className="flex items-center justify-between text-xs font-bold text-slate-700">
+                <span className="uppercase tracking-wider text-[11px] text-slate-500 font-extrabold flex items-center gap-1.5">
+                  <span>Color / Variant</span>
+                  {selectedColor && (
+                    <span className="text-sky-600 font-black normal-case">
+                      ({selectedColor})
+                    </span>
+                  )}
+                </span>
+                <span className="text-slate-400 font-normal">
+                  {distinctColorOptions.length} colorways available
+                </span>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {distinctColorOptions.map((opt) => {
+                  const isColorSelected =
+                    (selectedColor && selectedColor.toLowerCase() === opt.color.toLowerCase()) ||
+                    (!selectedColor && currentVariant?.color?.toLowerCase() === opt.color.toLowerCase());
+
+                  // Find price of this color on active platform if available
+                  const platVar = activeListing?.variants?.find(
+                    (v) => v.color?.toLowerCase() === opt.color.toLowerCase()
+                  );
+                  const colorPrice = platVar?.price ?? opt.price;
+                  const colorMrp = platVar?.mrp ?? opt.mrp;
+                  const colorDiscount =
+                    colorPrice && colorMrp && colorMrp > colorPrice
+                      ? Math.round(((colorMrp - colorPrice) / colorMrp) * 100)
+                      : 0;
+
+                  return (
+                    <button
+                      key={opt.color}
+                      type="button"
+                      onClick={() => {
+                        setSelectedColor(opt.color);
+                        if (platVar?.sku) setSelectedVariantSku(platVar.sku);
+                        else if (opt.sku) setSelectedVariantSku(opt.sku);
+                        if (opt.image_url) setSelectedImage(opt.image_url);
+                        else if (platVar?.image_url) setSelectedImage(platVar.image_url);
+                      }}
+                      className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
+                        isColorSelected
+                          ? "bg-sky-50 border-sky-500 text-sky-950 ring-2 ring-sky-200 shadow-xs"
+                          : "bg-white border-slate-200 text-slate-700 hover:border-slate-300 hover:bg-slate-50/60"
+                      }`}
+                    >
+                      {opt.image_url ? (
+                        <img
+                          src={opt.image_url}
+                          alt={opt.color}
+                          className="w-5 h-5 rounded-full object-cover border border-slate-200 bg-white"
+                        />
+                      ) : (
+                        <span className="w-3.5 h-3.5 rounded-full border border-slate-300 bg-slate-200" />
+                      )}
+                      <span>{opt.color}</span>
+                      {colorPrice && (
+                        <span className="font-mono text-[11px] text-slate-500">
+                          ₹{colorPrice.toLocaleString("en-IN")}
+                        </span>
+                      )}
+                      {colorDiscount > 0 && (
+                        <span className="px-1.5 py-0.2 bg-emerald-100 text-emerald-800 text-[10px] font-extrabold rounded-md">
+                          {colorDiscount}% off
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Dynamic Platform Title */}
           <div className="space-y-1 pt-1">
             <div className="inline-flex items-center gap-1.5 text-xs font-bold text-sky-600 uppercase tracking-wider">
               <span>{activeListing.platform_name} Listing Details</span>
             </div>
             <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight leading-snug">
-              {activeListing.listing_title || product.title}
+              {activeTitle || activeListing.listing_title || product.title}
             </h1>
           </div>
 
@@ -361,17 +577,25 @@ export const ProductDetailsPage: React.FC = () => {
                 <span className="font-bold text-slate-900">{activeListing.product_id}</span>
               </span>
             )}
-            {activeListing.product_id && product.style && <span className="text-slate-200">|</span>}
+            {activeListing.product_id && (product.style || activeSku) && <span className="text-slate-200">|</span>}
             {product.style && (
               <span>
                 Style: <span className="font-semibold text-slate-800">{product.style}</span>
               </span>
             )}
-            {product.ean && (
+            {activeSku && activeSku !== product.style && (
               <>
                 <span className="text-slate-200">|</span>
                 <span>
-                  EAN: <span className="font-semibold text-slate-800">{product.ean}</span>
+                  SKU: <span className="font-semibold text-slate-800">{activeSku}</span>
+                </span>
+              </>
+            )}
+            {activeEan && (
+              <>
+                <span className="text-slate-200">|</span>
+                <span>
+                  EAN: <span className="font-semibold text-slate-800">{activeEan}</span>
                 </span>
               </>
             )}
@@ -389,15 +613,20 @@ export const ProductDetailsPage: React.FC = () => {
           <div className="p-4 bg-slate-50/80 rounded-2xl border border-slate-200/80 flex flex-wrap items-center justify-between gap-4">
             <div>
               <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
-                {activeListing.platform_name} Price
+                {activeListing.platform_name} Price {selectedColor ? `• ${selectedColor}` : ""}
               </span>
               <div className="flex items-baseline gap-3 mt-0.5">
                 <span className="text-2xl sm:text-3xl font-black text-slate-900">
-                  {activeListing.price != null ? `₹${activeListing.price.toLocaleString("en-IN")}` : "—"}
+                  {activePrice != null ? `₹${activePrice.toLocaleString("en-IN")}` : "—"}
                 </span>
-                {(activeListing.mrp || product.mrp) && (
+                {activeMrp && (
                   <span className="text-xs font-bold text-slate-400">
-                    MRP: ₹{(activeListing.mrp || product.mrp)?.toLocaleString("en-IN")}
+                    MRP: ₹{activeMrp.toLocaleString("en-IN")}
+                  </span>
+                )}
+                {activeDiscountPct > 0 && (
+                  <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-extrabold rounded-md">
+                    {activeDiscountPct}% OFF
                   </span>
                 )}
               </div>
@@ -577,7 +806,7 @@ export const ProductDetailsPage: React.FC = () => {
                 }`}
               >
                 <LayoutGrid className="w-3.5 h-3.5" />
-                <span>Cards ({displayVariantCards.length})</span>
+                <span>Cards ({visibleVariantCards.length})</span>
               </button>
               <button
                 type="button"
@@ -593,6 +822,22 @@ export const ProductDetailsPage: React.FC = () => {
               </button>
             </div>
           </div>
+
+          {/* Active Color Filter Notice */}
+          {selectedColor && (
+            <div className="flex items-center justify-between text-xs bg-sky-50 border border-sky-200/80 px-3.5 py-2 rounded-xl text-sky-900">
+              <span className="flex items-center gap-1.5 font-medium">
+                Showing inventory for color: <strong className="font-extrabold text-sky-950">{selectedColor}</strong>
+              </span>
+              <button
+                type="button"
+                onClick={() => setSelectedColor(null)}
+                className="text-sky-700 hover:text-sky-950 font-bold underline cursor-pointer text-[11px]"
+              >
+                Show all colors ({displayVariantCards.length})
+              </button>
+            </div>
+          )}
 
           {/* Platform Options for Variant Breakdown */}
           <div className="flex flex-wrap items-center gap-2 pb-1">
@@ -635,11 +880,11 @@ export const ProductDetailsPage: React.FC = () => {
             })}
           </div>
 
-          {/* CARD GRID VIEW (Default: One card for each size on this platform) */}
+          {/* CARD GRID VIEW */}
           {variantViewMode === "cards" ? (
-            displayVariantCards.length > 0 ? (
+            visibleVariantCards.length > 0 ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3.5">
-                {displayVariantCards.map((card, idx) => (
+                {visibleVariantCards.map((card, idx) => (
                   <div
                     key={idx}
                     className="bg-white rounded-2xl border border-slate-200/90 hover:border-sky-300 p-4 shadow-2xs hover:shadow-xs transition-all space-y-3 flex flex-col justify-between group"
@@ -733,8 +978,8 @@ export const ProductDetailsPage: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
-                  {displayVariantCards.length > 0 ? (
-                    displayVariantCards.map((card, vidx) => (
+                  {visibleVariantCards.length > 0 ? (
+                    visibleVariantCards.map((card, vidx) => (
                       <tr key={vidx} className="hover:bg-slate-50/60 transition-colors">
                         <td className="py-3.5 px-4 font-bold text-slate-900">
                           <span className="inline-block px-2.5 py-1 bg-slate-100 rounded-lg text-xs font-mono font-bold">

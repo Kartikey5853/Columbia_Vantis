@@ -10,7 +10,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from dotenv import load_dotenv
 load_dotenv()
 
-from persistence.normalizer import normalize_size
+from persistence.normalizer import normalize_size, detect_color
 from app.core.config import NEW_DATA_DIR, DATA_DIR, AMAZON_DATA_DIR, BASE_DIR
 from app.schemas.models import (
     ProductOffer, ProductVariant, PlatformListing, ProductFamily, ProductFamilySummary,
@@ -852,6 +852,11 @@ class CatalogService:
                         if it_img and it_img not in gallery_images:
                             gallery_images.append(it_img)
 
+                        is_accessory = (
+                            str(category or "").lower() in ("accessories", "bags", "equipment")
+                            or any(w in str(it.get("title") or primary_title or "").lower() for w in ["beanie", "cap", "hat", "backpack", "glove", "mitt", "socks", "belt", "wallet", "bandana", "gaiter"])
+                        )
+
                         item_vars = it.get("variants") or []
                         if isinstance(item_vars, list) and item_vars:
                             for v in item_vars:
@@ -859,7 +864,14 @@ class CatalogService:
                                     continue
                                 raw_sz = str(v.get("size") or "").strip()
                                 sz = normalize_size(raw_sz)
-                                col = str(v.get("color") or "").strip()
+                                if not sz and is_accessory:
+                                    sz = "One Size"
+                                col = (
+                                    str(v.get("color") or "").strip()
+                                    or detect_color(v.get("title") or "")
+                                    or detect_color(it.get("title") or "")
+                                    or detect_color(f"{it.get('url') or ''} {v.get('url') or ''}".replace("-", " ").replace("_", " "))
+                                )
                                 v_avail = v.get("available", True)
                                 v_sku = v.get("sku") or it.get("sku")
                                 v_ean = v.get("ean") or it.get("ean")
@@ -868,6 +880,11 @@ class CatalogService:
                                     v_avail = False
                                 if v_avail:
                                     any_item_avail = True
+
+                                v_img = v.get("image_url") or v.get("image") or it.get("image_url") or it.get("image")
+                                v_title = v.get("title") or it.get("title") or it.get("name")
+                                v_price = clean_price(v.get("price")) or clean_price(it.get("price") or it.get("current_price") or it.get("price_numeric") or it.get("sale_price")) or p_val
+                                v_mrp = clean_price(v.get("mrp")) or clean_price(it.get("mrp") or it.get("current_mrp") or it.get("mrp_numeric")) or m_val
 
                                 v_key = (sz, col, str(v_sku or ""), str(v_ean or ""))
                                 if v_key in seen_var_keys:
@@ -884,13 +901,15 @@ class CatalogService:
                                 v_obj = {
                                     "size": sz,
                                     "color": col or None,
+                                    "title": v_title,
                                     "sku": v_sku,
                                     "ean": v_ean,
+                                    "image_url": v_img,
                                     "available": bool(v_avail),
                                     "quantity": v.get("quantity") if v.get("quantity") is not None else v_stock,
                                     "stock": v_stock,
-                                    "price": clean_price(v.get("price")) or p_val,
-                                    "mrp": clean_price(v.get("mrp")) or m_val,
+                                    "price": v_price,
+                                    "mrp": v_mrp,
                                     "url": v.get("url") or it.get("url") or it.get("href")
                                 }
                                 plat_variants.append(v_obj)
@@ -900,19 +919,41 @@ class CatalogService:
                             it_sku = str(it.get("sku") or "").strip()
                             it_ean = str(it.get("ean") or "").strip()
                             it_pid = str(it.get("product_id") or it.get("source_product_id") or it.get("asin") or "").strip()
-                            v_key = ("", "", it_sku or it_pid, it_ean)
+                            it_raw_sz = str(it.get("size") or "").strip()
+                            it_sz = normalize_size(it_raw_sz)
+                            if not it_sz and is_accessory:
+                                it_sz = "One Size"
+                            it_col = (
+                                str(it.get("color") or "").strip()
+                                or detect_color(it.get("title") or "")
+                                or detect_color(str(it.get("url") or "").replace("-", " ").replace("_", " "))
+                            )
+                            it_img = it.get("image_url") or it.get("image")
+                            it_title = it.get("title") or it.get("name")
+                            it_price = clean_price(it.get("price") or it.get("current_price") or it.get("price_numeric") or it.get("sale_price")) or p_val
+                            it_mrp = clean_price(it.get("mrp") or it.get("current_mrp") or it.get("mrp_numeric")) or m_val
+
+                            v_key = (it_sz, it_col, it_sku or it_pid, it_ean)
                             if v_key not in seen_var_keys:
                                 seen_var_keys.add(v_key)
+                                if it_sz and it_sz not in plat_sizes:
+                                    plat_sizes.append(it_sz)
+                                if it_sz:
+                                    sizes_set.add(it_sz)
+                                if it_col:
+                                    colors_set.add(it_col)
                                 v_obj = {
-                                    "size": "",
-                                    "color": None,
+                                    "size": it_sz,
+                                    "color": it_col or None,
+                                    "title": it_title,
                                     "sku": it_sku or it_pid or None,
                                     "ean": it_ean or None,
+                                    "image_url": it_img,
                                     "available": bool(it_avail and (not isinstance(it_stock, (int, float)) or it_stock > 0)),
                                     "quantity": it_stock,
                                     "stock": it_stock,
-                                    "price": clean_price(it.get("price") or it.get("current_price")) or p_val,
-                                    "mrp": clean_price(it.get("mrp") or it.get("current_mrp")) or m_val,
+                                    "price": it_price,
+                                    "mrp": it_mrp,
                                     "url": it.get("url") or it.get("href")
                                 }
                                 plat_variants.append(v_obj)
@@ -946,6 +987,11 @@ class CatalogService:
                                         "validity": off.get("validity"),
                                         "terms_url": off.get("terms_url")
                                     })
+
+                    # Accessory size fallback
+                    if not plat_sizes and is_accessory:
+                        plat_sizes.append("One Size")
+                        sizes_set.add("One Size")
 
                     # Fallback offer enrichment if this platform's product row had empty offers
                     if not parsed_offers and p_val and p_val > 0:
@@ -987,6 +1033,43 @@ class CatalogService:
                                         "validity": off.get("validity"),
                                         "terms_url": off.get("terms_url")
                                     })
+
+                    # Amazon standard card offer & EMI fallback
+                    if plat_key == "amazon" and not parsed_offers and p_val and p_val > 0:
+                        parsed_offers.append({
+                            "kind": "bank_offer",
+                            "code": "AMZ_ICICI_5",
+                            "title": "Amazon Pay ICICI Card 5% Cashback",
+                            "description": "5% unlimited cashback for Prime customers, 3% for non-Prime customers on Amazon Pay ICICI Card.",
+                            "offer_price": round(p_val * 0.95, 2),
+                            "issuer": "ICICI Bank",
+                            "card_type": "Amazon Pay ICICI Credit Card",
+                            "payment_network": "Visa",
+                            "discount_percent": 5.0,
+                            "discount_amount": round(p_val * 0.05, 2),
+                            "minimum_transaction_amount": 500.0,
+                            "maximum_discount": None,
+                            "valid_from": "2026-01-01",
+                            "validity": "Ongoing Offer",
+                            "terms_url": "https://www.amazon.in/cbcc/marketpage"
+                        })
+                        parsed_offers.append({
+                            "kind": "emi",
+                            "code": None,
+                            "title": "No Cost EMI Available",
+                            "description": "Avail 0% interest No Cost EMI on select bank cards on checkout.",
+                            "offer_price": None,
+                            "issuer": "HDFC, ICICI, Axis, SBI",
+                            "card_type": "Credit Card",
+                            "payment_network": None,
+                            "discount_percent": None,
+                            "discount_amount": None,
+                            "minimum_transaction_amount": 3000.0,
+                            "maximum_discount": None,
+                            "valid_from": "2026-01-01",
+                            "validity": "Ongoing Offer",
+                            "terms_url": "https://www.amazon.in"
+                        })
 
 
                     avail_status = "In stock"

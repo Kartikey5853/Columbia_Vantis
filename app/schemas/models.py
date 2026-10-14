@@ -64,6 +64,8 @@ class ProductVariant(BaseModel):
     price: Optional[float] = None
     mrp: Optional[float] = None
     url: Optional[str] = None
+    image_url: Optional[str] = None
+    title: Optional[str] = None
 
 class PlatformListing(BaseModel):
     platform: str

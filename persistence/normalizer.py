@@ -78,13 +78,21 @@ def normalize_size(raw_size: Optional[str]) -> str:
     if not s:
         return ""
 
-    # Check for placeholder / fake sizes when product has no real sizes
+    # Legitimate single-size markers
+    ONESIZE_MARKERS = {"ONESIZE", "ONE SIZE", "ONE-SIZE", "OS", "O/S"}
+    FREESIZE_MARKERS = {"FREE SIZE", "FREESIZE"}
+
+    s_upper = s.upper()
+    if s_upper in ONESIZE_MARKERS:
+        return "One Size"
+    if s_upper in FREESIZE_MARKERS:
+        return "Free Size"
+
+    # Check for placeholder / fake non-sizes
     FAKE_SIZE_MARKERS = {
-        "DEFAULT TITLE", "DEFAULT", "STANDARD", "REGULAR", "ONESIZE", "ONE SIZE",
-        "ONE-SIZE", "FREE SIZE", "FREESIZE", "OS", "O/S", "NA", "N/A", "NONE",
+        "DEFAULT TITLE", "DEFAULT", "STANDARD", "REGULAR", "NA", "N/A", "NONE",
         "NO SIZE", "NOSIZE", "ALL", "UNIVERSAL", "0", "0.0"
     }
-    s_upper = s.upper()
     if s_upper in FAKE_SIZE_MARKERS:
         return ""
 
@@ -92,6 +100,10 @@ def normalize_size(raw_size: Optional[str]) -> str:
     s_clean = re.sub(r"^(UK|US|EU|IND|IN|SIZE|SZ|EUR)[\s:\-\._]*", "", s_upper, flags=re.IGNORECASE).strip()
     s_clean = re.sub(r"[\s:\-\._]*(UK|US|EU|IND|IN)$", "", s_clean, flags=re.IGNORECASE).strip()
 
+    if s_clean in ONESIZE_MARKERS:
+        return "One Size"
+    if s_clean in FREESIZE_MARKERS:
+        return "Free Size"
     if not s_clean or s_clean in FAKE_SIZE_MARKERS:
         return ""
 
@@ -202,3 +214,28 @@ def normalize_offer(raw_offer: Dict[str, Any], platform: str = "") -> Dict[str, 
         "issuer": issuer,
         "valid_until": raw_offer.get("valid_until") or raw_offer.get("validity")
     }
+
+
+KNOWN_COLORS = [
+    "Bright Orange", "Dark Coral", "Purple Dahlia", "Dark Stone", "Collegiate Navy",
+    "Compass Blue", "Ancient Fossil", "Dark Mountain", "Sea Salt", "City Grey",
+    "Nocturnal", "Stone", "Shark", "Fossil", "Carbon", "Cypress",
+    "Black", "Blue", "Grey", "Gray", "Peach", "Beige", "Purple", "Orange", "Red",
+    "Green", "Brown", "Navy", "White", "Yellow", "Pink", "Teal", "Olive", "Maroon",
+    "Khaki", "Turquoise", "Charcoal", "Rust", "Burgundy", "Coral", "Tan", "Gold",
+    "Silver", "Bronze", "Cyan", "Lime", "Indigo", "Violet", "Plum", "Magenta", "Aqua"
+]
+
+def detect_color(text: Optional[str]) -> Optional[str]:
+    """
+    Extracts canonical color name from title, variant description, or SKU text.
+    """
+    if not text:
+        return None
+    clean_text = str(text)
+    for c in KNOWN_COLORS:
+        pattern = r"\b" + re.escape(c) + r"\b"
+        if re.search(pattern, clean_text, re.IGNORECASE):
+            return c
+    return None
+

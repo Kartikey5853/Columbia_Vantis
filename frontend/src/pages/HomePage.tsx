@@ -108,7 +108,7 @@ export const HomePage: React.FC = () => {
   };
 
   const handleCardClick = (familyId: string) => {
-    navigate(`/products/${encodeURIComponent(familyId)}`);
+    navigate(`/products/${encodeURIComponent(familyId)}${searchTerm ? `?q=${encodeURIComponent(searchTerm.trim())}` : ""}`);
   };
 
   const handleBulkSearch = async (identifiers: string[]) => {

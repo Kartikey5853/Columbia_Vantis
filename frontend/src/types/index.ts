@@ -40,6 +40,8 @@ export interface ProductVariant {
   price?: number | null;
   mrp?: number | null;
   url?: string | null;
+  image_url?: string | null;
+  title?: string | null;
 }
 
 export interface PlatformListing {
