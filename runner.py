@@ -723,16 +723,16 @@ async def scrape_columbia(
                             "code": "SNAPMINT_3EMI",
                             "title": "3 Interest-Free EMIs via Snapmint (No Cost)",
                             "kind": "emi",
-                            "discount_percent": 0.0,
+                            "discount_percent": None,
                             "minimum_transaction_amount": 1000.0,
                             "issuer": "Snapmint"
                         }, "columbia"))
                     if curr_p >= 3000:
                         columbia_offers.append(normalize_offer({
                             "code": "BANK_EMI",
-                            "title": "Up to 12-Month Low-Cost Bank EMI on Credit Cards",
-                            "kind": "card_offer",
-                            "discount_percent": 5.0,
+                            "title": "Credit Card EMI Available (3, 6, 9, 12 Months)",
+                            "kind": "emi",
+                            "discount_percent": None,
                             "minimum_transaction_amount": 3000.0,
                             "issuer": "Major Banks"
                         }, "columbia"))
@@ -1106,13 +1106,15 @@ async def scrape_adv(
     print(f"[adv](init) Adventuras Scrape Run ID: {run_id} (Date: {run['business_date']}, Status: {run['status']})", flush=True)
 
     completed_pages = await get_completed_listing_pages(run_id, client=cli)
+    if run.get("status") == "completed" or limit:
+        completed_pages = set()
     start_page = max(completed_pages) + 1 if completed_pages else 1
     if completed_pages:
         print(f"[adv](checkpoint) Resuming Adventuras from page {start_page} ({len(completed_pages)} pages already completed in DB).", flush=True)
 
     await update_run_stage(run_id, "products", client=cli)
 
-    total_persisted_products = run.get("completed_products") or 0
+    total_persisted_products = 0 if run.get("status") == "completed" else (run.get("completed_products") or 0)
     total_persisted_variants = 0
     total_prices_recorded = 0
     all_pages_done = set(completed_pages)
@@ -1239,7 +1241,7 @@ async def scrape_adv(
                                 "code": "SNAPMINT_3EMI",
                                 "title": "Pay in 3 with Snapmint (0% Interest)",
                                 "kind": "emi",
-                                "discount_percent": 0.0,
+                                "discount_percent": None,
                                 "minimum_transaction_amount": 1000.0,
                                 "issuer": "Snapmint"
                             }, "adv"))
@@ -1247,8 +1249,8 @@ async def scrape_adv(
                             adv_offers.append(normalize_offer({
                                 "code": "BANK_EMI",
                                 "title": "Credit Card EMI Available (3, 6, 9, 12 Months)",
-                                "kind": "card_offer",
-                                "discount_percent": 5.0,
+                                "kind": "emi",
+                                "discount_percent": None,
                                 "minimum_transaction_amount": 3000.0,
                                 "issuer": "Major Banks"
                             }, "adv"))

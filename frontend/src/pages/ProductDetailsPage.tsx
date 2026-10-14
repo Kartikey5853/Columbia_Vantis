@@ -520,12 +520,35 @@ export const ProductDetailsPage: React.FC = () => {
                   <p className="text-[11px] text-slate-500 line-clamp-2">
                     {off.description || off.issuer || "Special discount at checkout."}
                   </p>
-                  {(off.discount_amount || off.discount_percent || off.offer_price) && (
-                    <div className="text-[11px] font-bold text-emerald-600 pt-0.5">
-                      {off.discount_amount && `Flat ₹${off.discount_amount} Off`}
-                      {off.discount_percent && `${off.discount_percent}% Instant Discount`}
-                      {off.offer_price && `Effective Price: ₹${off.offer_price.toLocaleString("en-IN")}`}
+                  {off.kind === "emi" ? (
+                    <div className="text-[11px] font-bold text-sky-700 pt-0.5 flex flex-wrap items-center gap-1.5">
+                      <span className="bg-sky-50 px-2 py-0.5 rounded border border-sky-200">
+                        0% Interest EMI Available
+                      </span>
+                      {off.issuer && (
+                        <span className="text-slate-500 font-medium">via {off.issuer}</span>
+                      )}
                     </div>
+                  ) : (
+                    Boolean(off.discount_amount || off.discount_percent || (off.offer_price && activeListing.price && off.offer_price < activeListing.price)) && (
+                      <div className="text-[11px] font-bold text-emerald-600 pt-0.5 flex flex-wrap items-center gap-1.5">
+                        {Boolean(off.discount_amount) && (
+                          <span className="bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                            Flat ₹{off.discount_amount} Off
+                          </span>
+                        )}
+                        {Boolean(off.discount_percent) && (
+                          <span className="bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                            {off.discount_percent}% Instant Discount
+                          </span>
+                        )}
+                        {Boolean(off.offer_price && activeListing.price && off.offer_price < activeListing.price) && (
+                          <span className="text-slate-700 font-semibold">
+                            Effective: ₹{off.offer_price?.toLocaleString("en-IN")}
+                          </span>
+                        )}
+                      </div>
+                    )
                   )}
                 </div>
               ))}

@@ -56,7 +56,9 @@ def detect_category(title: str) -> str:
         return "Boots"
     if any(k in t for k in ["shoe", "shoes", "sneaker", "footwear", "runner"]):
         return "Hiking Shoes" if "hik" in t or "trail" in t else "Shoes"
-    if any(k in t for k in ["jacket", "parka", "windbreaker", "coat", "hoodie"]):
+    if any(k in t for k in ["vest", "vests"]):
+        return "Vests"
+    if any(k in t for k in ["jacket", "parka", "windbreaker", "coat", "hoodie", "anorak"]):
         return "Jackets"
     if any(k in t for k in ["pant", "pants", "trouser", "trousers"]):
         return "Pants"
@@ -68,6 +70,8 @@ def detect_category(title: str) -> str:
         return "Shorts"
     if any(k in t for k in ["backpack", "bag", "tote", "pack"]):
         return "Backpacks & Bags"
+    if any(k in t for k in ["sock", "socks"]):
+        return "Socks"
     if any(k in t for k in ["cap", "hat", "beanie", "glove", "gloves", "belt"]):
         return "Accessories"
     return "Apparel"
@@ -106,60 +110,71 @@ def detect_tags(title: str, category: str, gender: str) -> List[str]:
 
 def get_canonical_family_key(title: str, style: Optional[str], ean: Optional[str]) -> str:
     if style:
-        return f"STYLE_{style}"
+        return f"STYLE_{style.upper()}"
     if ean and len(str(ean).strip()) >= 10:
         return f"EAN_{str(ean).strip()}"
     
     t = (title or "").lower()
+    gender = detect_gender(t)
+    cat = detect_category(t)
+
     t = re.sub(r'^(columbia\s+sportswear|columbia)\s*', '', t)
     t = re.sub(r'\b(men\'?s?|women\'?s?|unisex|kids|boys|girls)\b', '', t)
-    colors = r'\b(black|white|grey|gray|blue|navy|brown|beige|red|green|maroon|yellow|orange|olive|graphite|stone|pink|purple|charcoal)\b'
+    colors = r'\b(black|white|grey|gray|blue|navy|brown|beige|red|green|maroon|yellow|orange|olive|graphite|stone|pink|purple|charcoal|multi|collegiate|assortes)\b'
     t = re.sub(colors, '', t)
     t = re.sub(r'\bupto\s+[-]?\d+\s*c\b', '', t)
     t = re.sub(r'\(.*?\)', '', t)
     t = re.sub(r'[^a-z0-9]+', ' ', t)
-    words = [w for w in t.split() if w not in ('and', 'or', 'with', 'for', 'the', 'in', 'on', 'upto', 'fit', 'solid', 'c', 'to')]
+    words = [w for w in t.split() if w not in ('and', 'or', 'with', 'for', 'the', 'in', 'on', 'upto', 'fit', 'solid', 'c', 'to', 'of')]
     
-    # Specific known popular model groups
+    g_tag = gender.lower()
+    c_tag = cat.lower().replace(" ", "_").replace("&", "and")
+
+    # Specific known popular model groups qualified with gender & category
+    model_name = None
     if 'peakfreak' in words:
         if 'titanium' in words:
-            return 'MODEL_peakfreak_titanium'
-        if 'ii' in words or '2' in words:
-            return 'MODEL_peakfreak_ii'
-        if 'x2' in words:
-            return 'MODEL_peakfreak_x2'
-        return 'MODEL_peakfreak'
-    if 'newton' in words and 'ridge' in words:
-        return 'MODEL_newton_ridge_plus'
-    if 'crestwood' in words:
-        return 'MODEL_crestwood_waterproof'
-    if 'redmond' in words:
-        return 'MODEL_redmond_iii'
-    if 'facet' in words:
-        return 'MODEL_facet_75'
-    if 'konos' in words:
-        return 'MODEL_konos_trs'
-    if 'steens' in words and 'mountain' in words:
-        return 'MODEL_steens_mountain'
-    if 'silver' in words and 'falls' in words:
-        return 'MODEL_silver_falls'
-    if 'fast' in words and 'trek' in words:
-        return 'MODEL_fast_trek_ii'
-    if 'delta' in words and 'ridge' in words:
-        return 'MODEL_delta_ridge'
-    if 'cascades' in words and 'explorer' in words:
-        return 'MODEL_cascades_explorer'
-    if 'bugaboo' in words:
-        return 'MODEL_bugaboo_iv'
-    if 'suttle' in words and 'mountain' in words:
-        return 'MODEL_suttle_mountain'
-    if 'heavenly' in words:
-        return 'MODEL_heavenly_jacket'
-    if 'klamath' in words and 'range' in words:
-        return 'MODEL_klamath_range'
+            model_name = 'peakfreak_titanium'
+        elif 'ii' in words or '2' in words:
+            model_name = 'peakfreak_ii'
+        elif 'x2' in words:
+            model_name = 'peakfreak_x2'
+        else:
+            model_name = 'peakfreak'
+    elif 'newton' in words and 'ridge' in words:
+        model_name = 'newton_ridge_plus'
+    elif 'crestwood' in words:
+        model_name = 'crestwood_waterproof'
+    elif 'redmond' in words:
+        model_name = 'redmond_iii'
+    elif 'facet' in words:
+        model_name = 'facet_75'
+    elif 'konos' in words:
+        model_name = 'konos_trs'
+    elif 'steens' in words and 'mountain' in words:
+        model_name = 'steens_mountain'
+    elif 'silver' in words and 'falls' in words:
+        model_name = 'silver_falls'
+    elif 'fast' in words and 'trek' in words:
+        model_name = 'fast_trek_ii'
+    elif 'delta' in words and 'ridge' in words:
+        model_name = 'delta_ridge'
+    elif 'cascades' in words and 'explorer' in words:
+        model_name = 'cascades_explorer'
+    elif 'bugaboo' in words:
+        model_name = 'bugaboo_iv'
+    elif 'suttle' in words and 'mountain' in words:
+        model_name = 'suttle_mountain'
+    elif 'heavenly' in words:
+        model_name = 'heavenly_jacket'
+    elif 'klamath' in words and 'range' in words:
+        model_name = 'klamath_range'
+
+    if model_name:
+        return f"MODEL_{g_tag}_{c_tag}_{model_name}"
         
-    core = " ".join(words[:4])
-    return f"TITLE_{core}" if core else f"HASH_{hashlib.md5(title.encode()).hexdigest()[:10]}"
+    core = "_".join(words[:6])
+    return f"TITLE_{g_tag}_{c_tag}_{core}" if core else f"HASH_{hashlib.md5(title.encode()).hexdigest()[:10]}"
 
 
 class CatalogService:
@@ -574,19 +589,23 @@ class CatalogService:
         start_time = time.time()
         cache_file = DATA_DIR / "supabase_catalog_cache.json"
 
-        # Check fast disk cache
+        # Check fast disk cache with 15-minute TTL
         if not force and cache_file.exists():
             try:
-                with open(cache_file, "r", encoding="utf-8") as f:
-                    cached = json.load(f)
-                if cached and "families" in cached and cached["families"]:
-                    self.families = cached["families"]
-                    self.raw_records_count = cached.get("raw_records_count", len(self.families))
-                    self._build_indices()
-                    self.is_loaded = True
-                    self.load_time_seconds = round(time.time() - start_time, 2)
-                    print(f"[CATALOG_SERVICE] Loaded {len(self.families)} product families from disk cache in {self.load_time_seconds}s.", flush=True)
-                    return
+                mtime = cache_file.stat().st_mtime
+                if (time.time() - mtime) < 900:  # 15 minutes TTL
+                    with open(cache_file, "r", encoding="utf-8") as f:
+                        cached = json.load(f)
+                    if cached and "families" in cached and cached["families"]:
+                        self.families = cached["families"]
+                        self.raw_records_count = cached.get("raw_records_count", len(self.families))
+                        self._build_indices()
+                        self.is_loaded = True
+                        self.load_time_seconds = round(time.time() - start_time, 2)
+                        print(f"[CATALOG_SERVICE] Loaded {len(self.families)} product families from disk cache in {self.load_time_seconds}s.", flush=True)
+                        return
+                else:
+                    print(f"[CATALOG_SERVICE] Disk cache is older than 15 minutes. Refreshing fresh catalog from database...", flush=True)
             except Exception as e:
                 print(f"[CATALOG_SERVICE] Cache read error: {e}, falling back to fresh load", flush=True)
 
@@ -604,6 +623,13 @@ class CatalogService:
             url = str(item.get("url") or "").strip()
             if not title and not pid and not sku:
                 continue
+
+            # Filter out promotional non-product digital vouchers or extreme price outliers
+            t_lower = title.lower()
+            p_check = clean_price(item.get("price") or item.get("current_price"))
+            if any(k in t_lower for k in ["gyftr", "gift voucher", "gift card", "e-gift"]) or (p_check is not None and p_check <= 100):
+                continue
+
             total_raw += 1
             style = self._resolve_canonical_style(plat_key, item, title, sku, ean, url, pid)
             fkey = get_canonical_family_key(title or pid or sku, style, ean)
@@ -652,6 +678,11 @@ class CatalogService:
 
                             url = str(item.get("url") or item.get("href") or "").strip()
                             if not title and not pid and not sku:
+                                continue
+
+                            t_lower = title.lower()
+                            p_check = clean_price(item.get("price") or item.get("current_price"))
+                            if any(k in t_lower for k in ["gyftr", "gift voucher", "gift card", "e-gift"]) or (p_check is not None and p_check <= 100):
                                 continue
 
                             style = self._resolve_canonical_style(plat_key, item, title, sku, ean, url, pid)
@@ -768,15 +799,6 @@ class CatalogService:
                 items_for_plat = platform_groups.get(plat_key, [])
 
                 if items_for_plat:
-                    # Prefer an item with a title and image as the primary representative for this platform
-                    best_item = items_for_plat[0]
-                    for cand_item in items_for_plat:
-                        if cand_item.get("title") and (cand_item.get("image_url") or cand_item.get("image")):
-                            best_item = cand_item
-                            break
-                        elif cand_item.get("title") and not best_item.get("title"):
-                            best_item = cand_item
-
                     plat_prices = [
                         clean_price(it.get("price") or it.get("current_price") or it.get("price_numeric") or it.get("sale_price"))
                         for it in items_for_plat
@@ -790,7 +812,22 @@ class CatalogService:
 
                     p_val = min(plat_prices) if plat_prices else lowest_price
                     m_val = max(plat_mrps) if plat_mrps else highest_mrp
-                    diff = round(p_val - lowest_price, 2)
+                    diff = round(p_val - lowest_price, 2) if (p_val and lowest_price) else 0.0
+
+                    # Prefer an item whose price matches p_val and has title and image
+                    best_item = items_for_plat[0]
+                    for cand_item in items_for_plat:
+                        c_p = clean_price(cand_item.get("price") or cand_item.get("current_price") or cand_item.get("price_numeric") or cand_item.get("sale_price"))
+                        if c_p == p_val and cand_item.get("title") and (cand_item.get("image_url") or cand_item.get("image")):
+                            best_item = cand_item
+                            break
+                    else:
+                        for cand_item in items_for_plat:
+                            if cand_item.get("title") and (cand_item.get("image_url") or cand_item.get("image")):
+                                best_item = cand_item
+                                break
+                            elif cand_item.get("title") and not best_item.get("title"):
+                                best_item = cand_item
                     
                     # Aggregate variants, sizes, offers, and stock across all items for this platform
                     plat_sizes = []
@@ -950,60 +987,7 @@ class CatalogService:
                                         "validity": off.get("validity"),
                                         "terms_url": off.get("terms_url")
                                     })
-                        elif plat_key == "amazon":
-                            parsed_offers.append({
-                                "kind": "card_offer",
-                                "code": "AMZ_ICICI_5",
-                                "title": "5% Unlimited Cashback with Amazon Pay ICICI Bank Credit Card",
-                                "description": "Earn 5% cashback on your purchase directly to Amazon Pay balance",
-                                "offer_price": round(p_val * 0.95, 2),
-                                "issuer": "ICICI Bank",
-                                "card_type": "Credit Card",
-                                "payment_network": "Visa",
-                                "discount_percent": 5.0,
-                                "discount_amount": round(p_val * 0.05, 2),
-                                "minimum_transaction_amount": 500.0,
-                                "maximum_discount": None,
-                                "valid_from": None,
-                                "validity": "Ongoing Partner Offer",
-                                "terms_url": "https://www.amazon.in/cbcc/marketpage"
-                            })
-                            if p_val >= 3000:
-                                parsed_offers.append({
-                                    "kind": "emi",
-                                    "code": "AMZ_NO_COST_EMI",
-                                    "title": "No Cost EMI available on select cards",
-                                    "description": "Zero interest EMIs on major bank credit cards for orders above ₹3,000",
-                                    "offer_price": p_val,
-                                    "issuer": "Major Banks",
-                                    "card_type": "Credit Card",
-                                    "payment_network": "All",
-                                    "discount_percent": 0.0,
-                                    "discount_amount": 0.0,
-                                    "minimum_transaction_amount": 3000.0,
-                                    "maximum_discount": None,
-                                    "valid_from": None,
-                                    "validity": "Available on Checkout",
-                                    "terms_url": None
-                                })
-                        elif plat_key == "myntra":
-                            parsed_offers.append({
-                                "kind": "bank_offer",
-                                "code": "MYNTRA_BANK_10",
-                                "title": "10% Instant Discount on Select Bank Credit Cards",
-                                "description": "Get 10% instant discount up to ₹1,000 on partner bank credit cards",
-                                "offer_price": round(p_val * 0.90, 2),
-                                "issuer": "Partner Banks",
-                                "card_type": "Credit Card",
-                                "payment_network": "Visa/Mastercard",
-                                "discount_percent": 10.0,
-                                "discount_amount": round(min(p_val * 0.10, 1000.0), 2),
-                                "minimum_transaction_amount": 2500.0,
-                                "maximum_discount": 1000.0,
-                                "valid_from": None,
-                                "validity": "Special Offer",
-                                "terms_url": None
-                            })
+
 
                     avail_status = "In stock"
                     if not any_item_avail or (has_numeric_stock and total_plat_stock <= 0):
