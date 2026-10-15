@@ -317,15 +317,22 @@ export const ProductDetailsPage: React.FC = () => {
   const variantColorGroups = useMemo(() => {
     const map = new Map<string, {
       colorName: string;
+      skuCode: string | null;
       imageUrl: string | null;
       cards: typeof displayVariantCards;
     }>();
 
     for (const card of visibleVariantCards) {
-      const cName = card.color?.trim() || "Standard / Default Colorway";
+      // Differentiate by Color and/or SKU family code
+      const skuBase = card.sku ? card.sku.split("-").slice(0, 2).join("-") : "";
+      const cName = card.color?.trim() 
+        ? (skuBase ? `${card.color.trim()} (${skuBase})` : card.color.trim())
+        : (skuBase ? `Variant SKU: ${skuBase}` : "Standard / Default Colorway");
+
       if (!map.has(cName)) {
         map.set(cName, {
           colorName: cName,
+          skuCode: skuBase || null,
           imageUrl: card.image_url || null,
           cards: [],
         });
@@ -767,13 +774,23 @@ export const ProductDetailsPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Note to User Banner */}
+          {/* Platform-Specific Note to User Banner */}
           <div className="p-3.5 bg-amber-50/80 border border-amber-200/90 rounded-2xl flex items-start gap-3 text-xs text-amber-950">
             <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
             <div className="space-y-0.5">
-              <span className="font-extrabold text-amber-950">Note to User:</span>
+              <span className="font-extrabold text-amber-950">
+                Note to User ({selectedPlatformKey === "amazon" ? "Amazon" : selectedPlatformKey === "tata" ? "Tata CLiQ" : selectedPlatformKey === "tata_lux" ? "Tata CLiQ Luxury" : selectedPlatformKey === "columbia" ? "Columbia Official" : selectedPlatformKey === "adv" ? "Adventuras" : "Platform"}):
+              </span>
               <p className="text-amber-800 leading-relaxed">
-                Marketplaces like Tata CLiQ index each variant under separate seller SKU codes. Sizes and color variants that are completely out of stock at seller hubs are omitted from their catalog API, so only currently active inventory is displayed.
+                {selectedPlatformKey === "tata" || selectedPlatformKey === "tata_lux" ? (
+                  "Tata CLiQ indexes each variant under a separate marketplace seller SKU. Color and size variants that are completely out of stock at seller hubs are omitted from their catalog endpoints, and warehouse stock units are not publicly exposed (shown as In Stock or Out of Stock)."
+                ) : selectedPlatformKey === "amazon" ? (
+                  "Amazon listing pages do not provide detailed size swatches or exact warehouse inventory on search tiles. Sizes cannot be fully determined until the individual ASIN page is loaded, and stock is indicated as In Stock or Out of Stock."
+                ) : selectedPlatformKey === "columbia" || selectedPlatformKey === "adv" ? (
+                  "Columbia & Adventuras provide direct per-variant live warehouse inventory. Inactive or out-of-stock sizes have 0 units and are excluded from active purchases."
+                ) : (
+                  "Marketplaces only return active inventory for indexed seller SKUs. Variants completely out of stock at seller hubs are omitted."
+                )}
               </p>
             </div>
           </div>

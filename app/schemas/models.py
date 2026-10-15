@@ -84,6 +84,7 @@ class PlatformListing(BaseModel):
     sizes_available_count: int = 0
     sizes_summary: str = ""
     offers: List[ProductOffer] = []
+    variants: List[ProductVariant] = []
     last_updated: Optional[str] = None
 
 class ProductFamily(BaseModel):

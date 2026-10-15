@@ -1217,7 +1217,7 @@ class CatalogService:
                                     continue
                                 seen_var_keys.add(v_key)
 
-                                if sz and sz not in plat_sizes:
+                                if sz and v_avail and sz not in plat_sizes:
                                     plat_sizes.append(sz)
                                 if sz:
                                     sizes_set.add(sz)
@@ -1437,20 +1437,23 @@ class CatalogService:
                         })
 
 
+                    # Real inventory counts only apply to direct store APIs (columbia, adv) where per-variant inventory is actual
+                    is_direct_inventory_platform = plat_key in ("columbia", "adv")
+
                     avail_status = "In stock"
-                    if not any_item_avail or (has_numeric_stock and total_plat_stock <= 0):
+                    if not any_item_avail or (is_direct_inventory_platform and has_numeric_stock and total_plat_stock <= 0):
                         avail_status = "Out of stock"
-                    elif has_numeric_stock and 0 < total_plat_stock <= 5:
+                    elif is_direct_inventory_platform and has_numeric_stock and 0 < total_plat_stock <= 5:
                         avail_status = "Limited stock"
 
                     if avail_status == "Out of stock":
                         stock_text = "Out of stock"
-                    elif avail_status == "Limited stock":
+                    elif is_direct_inventory_platform and avail_status == "Limited stock":
                         stock_text = f"Only {total_plat_stock} left"
-                    elif has_numeric_stock and total_plat_stock > 0:
+                    elif is_direct_inventory_platform and has_numeric_stock and total_plat_stock > 0:
                         stock_text = f"{total_plat_stock} units in stock"
                     else:
-                        stock_text = "In stock"
+                        stock_text = "In stock" if any_item_avail else "Out of stock"
 
                     sizes_summary = ", ".join(plat_sizes[:6]) if plat_sizes else "—"
                     best_pid = str(best_item.get("product_id") or best_item.get("source_product_id") or best_item.get("asin") or "").strip()
