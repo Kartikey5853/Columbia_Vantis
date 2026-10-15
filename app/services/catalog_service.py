@@ -266,6 +266,7 @@ class CatalogService:
         self.supabase_cache: Dict[str, Any] = {}
         self.master_records: List[Dict[str, Any]] = []
         self.master_pid_to_style: Dict[str, str] = {}
+        self.master_pid_to_record: Dict[str, Dict[str, Any]] = {}
         self.master_sku_to_style: Dict[str, str] = {}
         self.master_ean_to_style: Dict[str, str] = {}
         self.master_style_meta: Dict[str, Dict[str, Any]] = {}
@@ -327,6 +328,8 @@ class CatalogService:
                         continue
                     self.master_pid_to_style[f"{pk}:{pval_str.lower()}"] = style
                     self.master_pid_to_style[pval_str.lower()] = style
+                    self.master_pid_to_record[f"{pk}:{pval_str.lower()}"] = rec
+                    self.master_pid_to_record[pval_str.lower()] = rec
                     meta["pids"].setdefault(pk, set()).add(pval_str)
 
             self.master_catalogue_info = {
@@ -1212,6 +1215,30 @@ class CatalogService:
                                 v_price = clean_price(v.get("price")) or clean_price(it.get("price") or it.get("current_price") or it.get("price_numeric") or it.get("sale_price")) or p_val
                                 v_mrp = clean_price(v.get("mrp")) or clean_price(it.get("mrp") or it.get("current_mrp") or it.get("mrp_numeric")) or m_val
 
+                                # Enrich variant from Master Catalog if SKU, EAN, size or color is missing
+                                m_rec = None
+                                v_lookup_key = str(v_sku or "").strip().lower()
+                                if v_lookup_key:
+                                    m_rec = self.master_pid_to_record.get(f"{plat_key}:{v_lookup_key}") or self.master_pid_to_record.get(v_lookup_key)
+                                if not m_rec:
+                                    it_lookup_key = str(it.get("product_id") or it.get("source_product_id") or it.get("asin") or it.get("sku") or "").strip().lower()
+                                    if it_lookup_key:
+                                        m_rec = self.master_pid_to_record.get(f"{plat_key}:{it_lookup_key}") or self.master_pid_to_record.get(it_lookup_key)
+
+                                if m_rec:
+                                    if not v_sku or v_sku == it.get("sku"):
+                                        v_sku = m_rec.get("sku") or v_sku
+                                    if not v_ean:
+                                        v_ean = m_rec.get("ean") or v_ean
+                                    if (not sz or sz in ("One Size", "Standard")) and m_rec.get("sku") and "-" in m_rec.get("sku"):
+                                        parts = m_rec.get("sku").split("-")
+                                        if len(parts) >= 3:
+                                            cand_sz = normalize_size(parts[-1])
+                                            if cand_sz:
+                                                sz = cand_sz
+                                    if not col and m_rec.get("style_code"):
+                                        col = detect_color(m_rec.get("style_code")) or m_rec.get("style_code")
+
                                 v_key = (sz, col, str(v_sku or ""), str(v_ean or ""))
                                 if v_key in seen_var_keys:
                                     continue
@@ -1254,6 +1281,27 @@ class CatalogService:
                                 or detect_color(it.get("title") or "")
                                 or detect_color(str(it.get("url") or "").replace("-", " ").replace("_", " "))
                             )
+                            # Enrich synthesized variant from Master Catalog
+                            m_rec = None
+                            for cand_k in (f"{plat_key}:{it_pid.lower()}", it_pid.lower(), f"{plat_key}:{it_sku.lower()}", it_sku.lower()):
+                                if cand_k and cand_k in self.master_pid_to_record:
+                                    m_rec = self.master_pid_to_record[cand_k]
+                                    break
+
+                            if m_rec:
+                                if not it_sku or it_sku == it_pid:
+                                    it_sku = m_rec.get("sku") or it_sku
+                                if not it_ean:
+                                    it_ean = m_rec.get("ean") or it_ean
+                                if (not it_sz or it_sz in ("One Size", "Standard")) and m_rec.get("sku") and "-" in m_rec.get("sku"):
+                                    parts = m_rec.get("sku").split("-")
+                                    if len(parts) >= 3:
+                                        cand_sz = normalize_size(parts[-1])
+                                        if cand_sz:
+                                            it_sz = cand_sz
+                                if not it_col and m_rec.get("style_code"):
+                                    it_col = detect_color(m_rec.get("style_code")) or m_rec.get("style_code")
+
                             it_img = it.get("image_url") or it.get("image")
                             it_title = it.get("title") or it.get("name")
                             it_price = clean_price(it.get("price") or it.get("current_price") or it.get("price_numeric") or it.get("sale_price")) or p_val
@@ -1262,7 +1310,7 @@ class CatalogService:
                             v_key = (it_sz, it_col, it_sku or it_pid, it_ean)
                             if v_key not in seen_var_keys:
                                 seen_var_keys.add(v_key)
-                                if it_sz and it_sz not in plat_sizes:
+                                if it_sz and it_avail and it_sz not in plat_sizes:
                                     plat_sizes.append(it_sz)
                                 if it_sz:
                                     sizes_set.add(it_sz)
