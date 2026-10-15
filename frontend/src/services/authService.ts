@@ -13,6 +13,8 @@ export const authService = {
       username: username.trim(),
       password,
       remember_me: rememberMe,
+    }, {
+      timeout: 120000,
     });
     const { access_token, user } = response.data;
     localStorage.setItem("vantis_token", access_token);

@@ -415,7 +415,7 @@
     const uniqueUrls = [...new Set(rawCatalogProducts.map(p => p.url).filter(Boolean))];
     log(`Fetching PDP offers & exact stock for ${uniqueUrls.length} unique styles...`);
 
-    const CONCURRENCY = 4;
+    const CONCURRENCY = 3;
     let nextUrlIndex = 0;
     let completedPdp = 0;
 

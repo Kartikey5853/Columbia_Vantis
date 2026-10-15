@@ -69,10 +69,6 @@ async def get_platform_comparison():
 @router.get("/categories")
 async def get_category_insights():
     catalog_service.load_catalog()
-    cat_counts: Dict[str, int] = {}
-    for fam in catalog_service.families_list:
-        c = fam["category"]
-        cat_counts[c] = cat_counts.get(c, 0) + 1
     return {
-        "categories": [{"name": k, "count": v} for k, v in sorted(cat_counts.items(), key=lambda x: -x[1])]
+        "categories": catalog_service.get_category_counts()
     }

@@ -40,7 +40,7 @@
     // ============================================================
     const PAGE_SIZE = 45;
     const MAX_PAGES = 50;
-    const CONCURRENCY = 4;
+    const CONCURRENCY = 3;
 
     const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     const randomDelay = (min = 1200, max = 2500) => min + Math.floor(Math.random() * (max - min));

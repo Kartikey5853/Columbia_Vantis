@@ -18,7 +18,7 @@
         1500 + Math.floor(Math.random() * 2000);
 
     const PAGE_SIZE = 40;
-    const CONCURRENCY = 5;
+    const CONCURRENCY = 3;
 
     const BASE_URL =
         "https://searchbff.tatacliq.com/products/mpl/search";

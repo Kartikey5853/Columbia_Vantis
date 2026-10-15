@@ -256,19 +256,14 @@ export const ProductDetailsPage: React.FC = () => {
       }
     }
 
-    // If no variants or only 1 lumped variant, but multiple sizes are known for this platform:
-    if (
-      cards.length === 0 ||
-      (cards.length === 1 && (activeListing.sizes_summary?.includes(",") || (product.sizes && product.sizes.length > 1)))
-    ) {
-      const candidateSizes = activeListing.sizes_summary?.includes(",")
-        ? activeListing.sizes_summary.split(",").map((s) => s.trim()).filter(Boolean)
-        : product.sizes && product.sizes.length > 1
-        ? product.sizes
-        : [];
+    // If no variants were parsed, but multiple sizes were recorded in sizes_summary for THIS platform:
+    if (cards.length === 0 && activeListing.sizes_summary?.includes(",")) {
+      const candidateSizes = activeListing.sizes_summary
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
 
-      if (candidateSizes.length > 1) {
-        cards.length = 0;
+      if (candidateSizes.length > 0) {
         for (const sz of candidateSizes) {
           cards.push({
             size: sz,

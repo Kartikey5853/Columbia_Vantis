@@ -4,6 +4,8 @@ import os
 import time
 import math
 import hashlib
+import sqlite3
+import gc
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
@@ -177,19 +179,84 @@ def get_canonical_family_key(title: str, style: Optional[str], ean: Optional[str
     return f"TITLE_{g_tag}_{c_tag}_{core}" if core else f"HASH_{hashlib.md5(title.encode()).hexdigest()[:10]}"
 
 
+class FamiliesProxy:
+    """Zero-memory dictionary-like proxy that reads product families on-demand from disk-backed SQLite."""
+    def __init__(self, service: "CatalogService"):
+        self._service = service
+
+    def __len__(self) -> int:
+        return self._service.total_count
+
+    def __contains__(self, key: Any) -> bool:
+        if not key:
+            return False
+        return self._service.get_family_by_id(str(key)) is not None
+
+    def __getitem__(self, key: str) -> Dict[str, Any]:
+        item = self._service.get_family_by_id(str(key))
+        if item is None:
+            raise KeyError(key)
+        return item
+
+    def get(self, key: str, default: Any = None) -> Any:
+        item = self._service.get_family_by_id(str(key))
+        return item if item is not None else default
+
+    def values(self):
+        return self._service.iter_families()
+
+    def items(self):
+        for fam in self._service.iter_families():
+            yield fam.get("family_id", ""), fam
+
+    def keys(self):
+        for fam in self._service.iter_families():
+            yield fam.get("family_id", "")
+
+
+class FamiliesListProxy:
+    """Zero-memory list-like proxy that streams single pages of product families from SQLite."""
+    def __init__(self, service: "CatalogService"):
+        self._service = service
+
+    def __len__(self) -> int:
+        return self._service.total_count
+
+    def __iter__(self):
+        return self._service.iter_families()
+
+    def __getitem__(self, idx: Any) -> Any:
+        if isinstance(idx, slice):
+            start = idx.start or 0
+            stop = idx.stop if idx.stop is not None else self._service.total_count
+            limit = max(0, stop - start)
+            return self._service.get_families_slice(start, limit)
+        elif isinstance(idx, int):
+            if idx < 0:
+                idx = self._service.total_count + idx
+            items = self._service.get_families_slice(idx, 1)
+            if not items:
+                raise IndexError("list index out of range")
+            return items[0]
+        raise TypeError(f"Invalid index type: {type(idx)}")
+
+
 class CatalogService:
     def __init__(self):
         self.is_loaded = False
         self.load_time_seconds = 0.0
         self.raw_records_count = 0
-        self.families: Dict[str, Dict[str, Any]] = {}
-        self.families_list: List[Dict[str, Any]] = []
+        self.total_count = 0
+        self.db_path = DATA_DIR / "catalog_cache.db"
+        self.families = FamiliesProxy(self)
+        self.families_list = FamiliesListProxy(self)
         self.index_by_sku: Dict[str, str] = {}
         self.index_by_ean: Dict[str, str] = {}
         self.index_by_style: Dict[str, str] = {}
         self.index_by_pid: Dict[str, str] = {}
         self.all_categories: List[str] = []
         self.all_genders: List[str] = []
+        self.summary_cache: Dict[str, Any] = {}
         self.master_catalogue_info: Dict[str, Any] = {
             "loaded": False,
             "filename": None,
@@ -515,99 +582,358 @@ class CatalogService:
             print(f"[CATALOG_SERVICE] ⚠️ Error fetching products from Supabase: {e}", flush=True)
             return []
 
-    def _build_indices(self):
-        self.families_list = list(self.families.values())
-        self.families_list.sort(key=lambda x: (x.get("platforms_count", 0), -x.get("lowest_price", 0)), reverse=True)
-        self.index_by_sku.clear()
-        self.index_by_ean.clear()
-        self.index_by_style.clear()
-        self.index_by_pid.clear()
+    def _get_connection(self):
+        self.db_path = DATA_DIR / "catalog_cache.db"
+        conn = sqlite3.connect(str(self.db_path), timeout=30.0, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        return conn
 
-        cats = set()
-        gens = set()
-        for fam in self.families_list:
-            fid = fam["family_id"]
-            if fam.get("category"):
-                cats.add(fam["category"])
-            if fam.get("gender"):
-                gens.add(fam["gender"])
-            style_val = str(fam.get("style") or "").strip()
-            if style_val:
-                sl = style_val.lower()
-                self.index_by_style[sl] = fid
-                self.index_by_sku[sl] = fid
-                if len(sl) >= 5:
-                    self.index_by_style[sl[:5]] = fid
-                # Index all Master Excel SKUs, Style Codes, EANs, and PIDs for this style
-                meta = self.master_style_meta.get(style_val.upper())
-                if meta:
-                    for sc in meta["style_codes"]:
-                        self.index_by_style[sc.lower()] = fid
-                        self.index_by_sku[sc.lower()] = fid
-                    for msku in meta["skus"]:
-                        self.index_by_sku[msku.lower()] = fid
-                    for mean in meta["eans"]:
-                        self.index_by_ean[mean.lower()] = fid
-                    for pk, pid_set in meta["pids"].items():
-                        for mpid in pid_set:
-                            self.index_by_pid[mpid.lower()] = fid
+    def _save_to_sqlite(self, processed_families: Dict[str, Dict[str, Any]], raw_records_count: int):
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        self.db_path = DATA_DIR / "catalog_cache.db"
+        conn = sqlite3.connect(str(self.db_path), timeout=30.0)
+        cur = conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA synchronous=NORMAL")
 
-            if fam.get("ean"):
-                self.index_by_ean[str(fam["ean"]).lower()] = fid
-            if fam.get("sku"):
-                sku_l = str(fam["sku"]).lower()
-                self.index_by_sku[sku_l] = fid
-                if "-" in sku_l:
-                    parts = sku_l.split("-")
-                    self.index_by_style[parts[0]] = fid
-                    if len(parts) >= 2:
-                        self.index_by_style[f"{parts[0]}-{parts[1]}"] = fid
-            for p in fam.get("platforms", []):
-                if p.get("product_id"):
-                    for sub_pid in str(p["product_id"]).split(","):
-                        sp = sub_pid.strip().lower()
-                        if sp:
-                            self.index_by_pid[sp] = fid
-            for v in fam.get("variants", []):
-                if v.get("sku"):
-                    vsku_l = str(v["sku"]).lower()
-                    self.index_by_sku[vsku_l] = fid
-                    if "-" in vsku_l:
-                        vparts = vsku_l.split("-")
-                        self.index_by_style[vparts[0]] = fid
-                        if len(vparts) >= 2:
-                            self.index_by_style[f"{vparts[0]}-{vparts[1]}"] = fid
-                if v.get("ean"):
-                    self.index_by_ean[str(v["ean"]).lower()] = fid
-        self.all_categories = sorted(list(cats))
-        self.all_genders = sorted(list(gens))
+        cur.execute("DROP TABLE IF EXISTS product_families")
+        cur.execute("DROP TABLE IF EXISTS lookup_index")
+        cur.execute("DROP TABLE IF EXISTS catalog_metadata")
+
+        cur.execute("""CREATE TABLE product_families (
+            family_id TEXT PRIMARY KEY,
+            title TEXT,
+            brand TEXT,
+            style TEXT,
+            ean TEXT,
+            sku TEXT,
+            category TEXT,
+            gender TEXT,
+            lowest_price REAL,
+            mrp REAL,
+            discount_percent REAL,
+            variants_count INTEGER,
+            sizes_count INTEGER,
+            platforms_count INTEGER,
+            colours_count INTEGER,
+            has_amazon INTEGER DEFAULT 0,
+            has_tata INTEGER DEFAULT 0,
+            has_tata_lux INTEGER DEFAULT 0,
+            has_columbia INTEGER DEFAULT 0,
+            has_adv INTEGER DEFAULT 0,
+            has_myntra INTEGER DEFAULT 0,
+            has_ajio INTEGER DEFAULT 0,
+            image_url TEXT,
+            data_json TEXT,
+            created_at REAL
+        )""")
+
+        cur.execute("""CREATE TABLE lookup_index (
+            term TEXT,
+            kind TEXT,
+            family_id TEXT
+        )""")
+
+        cur.execute("""CREATE TABLE catalog_metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )""")
+
+        family_rows = []
+        lookup_rows = []
+        seen_lookup = set()
+        cats_set = set()
+        gens_set = set()
+        all_prices = []
+        total_variants = 0
+        offers_count = 0
+        now_ts = time.time()
+
+        for fid, fam in processed_families.items():
+            title = fam.get("title") or ""
+            brand = fam.get("brand") or "Columbia"
+            style = fam.get("style") or ""
+            ean = fam.get("ean") or ""
+            sku = fam.get("sku") or ""
+            cat = fam.get("category") or ""
+            gen = fam.get("gender") or ""
+            lowest_p = float(fam.get("lowest_price") or 0.0)
+            mrp_val = float(fam.get("mrp") or 0.0)
+            disc_pct = float(fam.get("discount_percent") or 0.0)
+            var_cnt = int(fam.get("variants_count") or 1)
+            sz_cnt = int(fam.get("sizes_count") or 0)
+            plat_cnt = int(fam.get("platforms_count") or 0)
+            col_cnt = int(fam.get("colours_count") or 1)
+            img_url = fam.get("image_url") or ""
+
+            if cat:
+                cats_set.add(cat)
+            if gen:
+                gens_set.add(gen)
+            if lowest_p > 0:
+                all_prices.append(lowest_p)
+            total_variants += var_cnt
+
+            plats = fam.get("platforms") or []
+            has_amz = 1 if any(p.get("platform") == "amazon" and p.get("price") is not None for p in plats) else 0
+            has_tata = 1 if any(p.get("platform") == "tata" and p.get("price") is not None for p in plats) else 0
+            has_lux = 1 if any(p.get("platform") == "tata_lux" and p.get("price") is not None for p in plats) else 0
+            has_col = 1 if any(p.get("platform") == "columbia" and p.get("price") is not None for p in plats) else 0
+            has_adv = 1 if any(p.get("platform") == "adv" and p.get("price") is not None for p in plats) else 0
+            has_myn = 1 if any(p.get("platform") == "myntra" and p.get("price") is not None for p in plats) else 0
+            has_aji = 1 if any(p.get("platform") == "ajio" and p.get("price") is not None for p in plats) else 0
+
+            for p in plats:
+                offers_count += len(p.get("offers") or [])
+
+            family_rows.append((
+                fid, title, brand, style, ean, sku, cat, gen,
+                lowest_p, mrp_val, disc_pct, var_cnt, sz_cnt, plat_cnt, col_cnt,
+                has_amz, has_tata, has_lux, has_col, has_adv, has_myn, has_aji,
+                img_url, json.dumps(fam), now_ts
+            ))
+
+            if style:
+                s_low = style.lower()
+                if (s_low, fid) not in seen_lookup:
+                    seen_lookup.add((s_low, fid))
+                    lookup_rows.append((s_low, "style", fid))
+                if len(s_low) >= 5 and (s_low[:5], fid) not in seen_lookup:
+                    seen_lookup.add((s_low[:5], fid))
+                    lookup_rows.append((s_low[:5], "style", fid))
+
+            if sku:
+                sku_low = sku.lower()
+                if (sku_low, fid) not in seen_lookup:
+                    seen_lookup.add((sku_low, fid))
+                    lookup_rows.append((sku_low, "sku", fid))
+                if "-" in sku_low:
+                    base_sku = sku_low.split("-")[0]
+                    if (base_sku, fid) not in seen_lookup:
+                        seen_lookup.add((base_sku, fid))
+                        lookup_rows.append((base_sku, "sku", fid))
+
+            if ean:
+                ean_low = str(ean).lower()
+                if (ean_low, fid) not in seen_lookup:
+                    seen_lookup.add((ean_low, fid))
+                    lookup_rows.append((ean_low, "ean", fid))
+
+            for p in plats:
+                pid = str(p.get("product_id") or "").strip().lower()
+                if pid and (pid, fid) not in seen_lookup:
+                    seen_lookup.add((pid, fid))
+                    lookup_rows.append((pid, "pid", fid))
+
+            for v in fam.get("variants") or []:
+                v_sku = str(v.get("sku") or "").strip().lower()
+                if v_sku and (v_sku, fid) not in seen_lookup:
+                    seen_lookup.add((v_sku, fid))
+                    lookup_rows.append((v_sku, "sku", fid))
+                v_ean = str(v.get("ean") or "").strip().lower()
+                if v_ean and (v_ean, fid) not in seen_lookup:
+                    seen_lookup.add((v_ean, fid))
+                    lookup_rows.append((v_ean, "ean", fid))
+
+        for m_style, meta in self.master_style_meta.items():
+            fid_cand = f"STYLE_{m_style.upper()}"
+            if fid_cand in processed_families:
+                for sc in meta.get("style_codes", set()):
+                    sc_l = sc.lower()
+                    if (sc_l, fid_cand) not in seen_lookup:
+                        seen_lookup.add((sc_l, fid_cand))
+                        lookup_rows.append((sc_l, "style", fid_cand))
+                for msku in meta.get("skus", set()):
+                    msku_l = msku.lower()
+                    if (msku_l, fid_cand) not in seen_lookup:
+                        seen_lookup.add((msku_l, fid_cand))
+                        lookup_rows.append((msku_l, "sku", fid_cand))
+                for mean in meta.get("eans", set()):
+                    mean_l = mean.lower()
+                    if (mean_l, fid_cand) not in seen_lookup:
+                        seen_lookup.add((mean_l, fid_cand))
+                        lookup_rows.append((mean_l, "ean", fid_cand))
+                for pk, pid_set in meta.get("pids", {}).items():
+                    for mpid in pid_set:
+                        mpid_l = mpid.lower()
+                        if (mpid_l, fid_cand) not in seen_lookup:
+                            seen_lookup.add((mpid_l, fid_cand))
+                            lookup_rows.append((mpid_l, "pid", fid_cand))
+
+        cur.executemany("""INSERT INTO product_families (
+            family_id, title, brand, style, ean, sku, category, gender,
+            lowest_price, mrp, discount_percent, variants_count, sizes_count, platforms_count, colours_count,
+            has_amazon, has_tata, has_tata_lux, has_columbia, has_adv, has_myntra, has_ajio,
+            image_url, data_json, created_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", family_rows)
+
+        cur.executemany("INSERT INTO lookup_index (term, kind, family_id) VALUES (?,?,?)", lookup_rows)
+
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_pf_cat ON product_families(category)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_pf_gen ON product_families(gender)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_pf_price ON product_families(lowest_price)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_pf_sort_default ON product_families(platforms_count DESC, lowest_price DESC)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_pf_plat ON product_families(platforms_count)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_pf_var ON product_families(variants_count)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_pf_title ON product_families(title)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_pf_style ON product_families(style)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_pf_sku ON product_families(sku)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_pf_ean ON product_families(ean)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_li_term ON lookup_index(term)")
+
+        summary_data = {
+            "total_products": len(family_rows),
+            "total_variants": total_variants,
+            "total_platforms": 7,
+            "active_offers_count": offers_count,
+            "avg_discount_percent": 24.5,
+            "lowest_catalog_price": min(all_prices) if all_prices else 999.0,
+            "highest_catalog_price": max(all_prices) if all_prices else 29999.0
+        }
+        categories_list = sorted(list(cats_set))
+        genders_list = sorted(list(gens_set))
+
+        meta_rows = [
+            ("summary", json.dumps(summary_data)),
+            ("categories", json.dumps(categories_list)),
+            ("genders", json.dumps(genders_list)),
+            ("raw_records_count", str(raw_records_count)),
+            ("total_families", str(len(family_rows))),
+            ("saved_at", str(now_ts))
+        ]
+        cur.executemany("INSERT OR REPLACE INTO catalog_metadata (key, value) VALUES (?,?)", meta_rows)
+        conn.commit()
+        conn.close()
+
+        self.all_categories = categories_list
+        self.all_genders = genders_list
+        self.summary_cache = summary_data
+        self.total_count = len(family_rows)
+        self.raw_records_count = raw_records_count
+
+    def _load_from_sqlite(self) -> bool:
+        self.db_path = DATA_DIR / "catalog_cache.db"
+        if not self.db_path.exists():
+            return False
+        conn = self._get_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM product_families")
+            row = cur.fetchone()
+            if not row or row[0] == 0:
+                return False
+            self.total_count = row[0]
+
+            cur.execute("SELECT key, value FROM catalog_metadata")
+            meta = {r["key"]: r["value"] for r in cur.fetchall()}
+            if "categories" in meta:
+                self.all_categories = json.loads(meta["categories"])
+            if "genders" in meta:
+                self.all_genders = json.loads(meta["genders"])
+            if "summary" in meta:
+                self.summary_cache = json.loads(meta["summary"])
+            if "raw_records_count" in meta:
+                self.raw_records_count = int(meta["raw_records_count"])
+            else:
+                self.raw_records_count = self.total_count
+            return True
+        except Exception:
+            return False
+        finally:
+            conn.close()
+
+    def get_family_by_id(self, family_id: str) -> Optional[Dict[str, Any]]:
+        if not self.is_loaded or self.total_count == 0:
+            self.load_catalog()
+        conn = self._get_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT data_json FROM product_families WHERE family_id = ?", (family_id,))
+            row = cur.fetchone()
+            if row and row["data_json"]:
+                return json.loads(row["data_json"])
+            return None
+        finally:
+            conn.close()
+
+    def get_families_slice(self, offset: int, limit: int) -> List[Dict[str, Any]]:
+        if not self.is_loaded or self.total_count == 0:
+            self.load_catalog()
+        conn = self._get_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT data_json FROM product_families ORDER BY platforms_count DESC, lowest_price DESC LIMIT ? OFFSET ?", (limit, offset))
+            return [json.loads(r["data_json"]) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+    def iter_families(self):
+        if not self.is_loaded or self.total_count == 0:
+            self.load_catalog()
+        conn = self._get_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT data_json FROM product_families ORDER BY platforms_count DESC, lowest_price DESC")
+            while True:
+                rows = cur.fetchmany(100)
+                if not rows:
+                    break
+                for r in rows:
+                    yield json.loads(r["data_json"])
+        finally:
+            conn.close()
+
+    def get_category_counts(self) -> List[Dict[str, Any]]:
+        if not self.is_loaded or self.total_count == 0:
+            self.load_catalog()
+        conn = self._get_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT category, COUNT(*) as cnt FROM product_families WHERE category IS NOT NULL AND category != '' GROUP BY category ORDER BY cnt DESC")
+            return [{"name": r["category"], "count": r["cnt"]} for r in cur.fetchall()]
+        finally:
+            conn.close()
 
     def load_catalog(self, force: bool = False):
-        if self.is_loaded and not force and len(self.families) > 0:
+        if self.is_loaded and not force and self.total_count > 0:
             return
 
         start_time = time.time()
+        self.db_path = DATA_DIR / "catalog_cache.db"
         cache_file = DATA_DIR / "supabase_catalog_cache.json"
 
-        # Check fast disk cache with 15-minute TTL
+        # 1. Fast path: SQLite database already exists and has records
+        if not force and self.db_path.exists():
+            try:
+                if self._load_from_sqlite():
+                    self.is_loaded = True
+                    self.load_time_seconds = round(time.time() - start_time, 2)
+                    print(f"[CATALOG_SERVICE] Initialized disk-backed catalog ({self.total_count} families) from SQLite in {self.load_time_seconds}s (RAM: minimal single-page).", flush=True)
+                    return
+            except Exception as e:
+                print(f"[CATALOG_SERVICE] SQLite cache read error: {e}, will rebuild", flush=True)
+
+        # 2. Fast path: Build SQLite from JSON cache if present
         if not force and cache_file.exists():
             try:
-                mtime = cache_file.stat().st_mtime
-                if (time.time() - mtime) < 900:  # 15 minutes TTL
-                    with open(cache_file, "r", encoding="utf-8") as f:
-                        cached = json.load(f)
-                    if cached and "families" in cached and cached["families"]:
-                        self.families = cached["families"]
-                        self.raw_records_count = cached.get("raw_records_count", len(self.families))
-                        self._build_indices()
-                        self.is_loaded = True
-                        self.load_time_seconds = round(time.time() - start_time, 2)
-                        print(f"[CATALOG_SERVICE] Loaded {len(self.families)} product families from disk cache in {self.load_time_seconds}s.", flush=True)
-                        return
-                else:
-                    print(f"[CATALOG_SERVICE] Disk cache is older than 15 minutes. Refreshing fresh catalog from database...", flush=True)
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    cached = json.load(f)
+                if cached and "families" in cached and cached["families"]:
+                    fams = cached["families"]
+                    raw_cnt = cached.get("raw_records_count", len(fams))
+                    self._save_to_sqlite(fams, raw_cnt)
+                    del fams
+                    del cached
+                    gc.collect()
+                    self._load_from_sqlite()
+                    self.is_loaded = True
+                    self.load_time_seconds = round(time.time() - start_time, 2)
+                    print(f"[CATALOG_SERVICE] Built SQLite catalog ({self.total_count} families) from JSON cache in {self.load_time_seconds}s.", flush=True)
+                    return
             except Exception as e:
-                print(f"[CATALOG_SERVICE] Cache read error: {e}, falling back to fresh load", flush=True)
+                print(f"[CATALOG_SERVICE] Cache read error: {e}, falling back to fresh build", flush=True)
 
         raw_items_by_family: Dict[str, List[Tuple[str, Dict[str, Any]]]] = {}
         total_raw = 0
@@ -1208,23 +1534,27 @@ class CatalogService:
                 "data_freshness": "12 Oct 2026, IST"
             }
 
-        self.families = processed_families
-        self._build_indices()
+        self._save_to_sqlite(processed_families, self.raw_records_count)
         self.load_time_seconds = time.time() - start_time
-        self.is_loaded = len(self.families) > 0
+        self.is_loaded = self.total_count > 0
 
-        # Save to disk cache for ultra-fast startup
+        # Save to disk cache for backup
         try:
             DATA_DIR.mkdir(parents=True, exist_ok=True)
             with open(cache_file, "w", encoding="utf-8") as f:
                 json.dump({
-                    "families": self.families,
+                    "families": processed_families,
                     "raw_records_count": self.raw_records_count,
                     "saved_at": time.time()
                 }, f)
-            print(f"[CATALOG_SERVICE] Saved {len(self.families)} families to disk cache ({cache_file}).", flush=True)
+            print(f"[CATALOG_SERVICE] Saved {len(processed_families)} families to disk cache ({cache_file}).", flush=True)
         except Exception as e:
             print(f"[CATALOG_SERVICE] [WARN] Failed to write disk cache: {e}", flush=True)
+
+        # Clear large in-memory objects to keep Python RAM minimal
+        del processed_families
+        del raw_items_by_family
+        gc.collect()
 
         # Load Supabase real price history cache if available
         cache_path = BASE_DIR / "data" / "supabase_price_history_cache.json"
@@ -1237,87 +1567,39 @@ class CatalogService:
                 print(f"[CATALOG_SERVICE] [WARN] Failed to load Supabase cache: {e}", flush=True)
 
     def search(self, query: str, limit: int = 50) -> List[Dict[str, Any]]:
-        if not self.is_loaded or len(self.families) == 0:
-            self.load_catalog(force=True)
-        if not query or not query.strip():
-            return self.families_list[:limit]
-
-        q = query.strip().lower()
-
-        # 1. Exact identifier match (Style, Style Code, SKU, EAN, Platform Product ID / ASIN)
-        for idx in (self.index_by_style, self.index_by_sku, self.index_by_ean, self.index_by_pid):
-            if q in idx and idx[q] in self.families:
-                return [self.families[idx[q]]]
-
-        # Check if query is a SKU or Style Code whose base style is indexed
-        if "-" in q:
-            base_part = q.split("-")[0]
-            if base_part in self.index_by_style and self.index_by_style[base_part] in self.families:
-                return [self.families[self.index_by_style[base_part]]]
-
-        # 2. Substring / token matching across family + all variants & platform IDs
-        tokens = [t for t in q.split() if len(t) > 1]
-        matches = []
-        for fam in self.families_list:
-            score = 0
-            t_lower = fam["title"].lower()
-            style_lower = (fam.get("style") or "").lower()
-            ean_lower = (fam.get("ean") or "").lower()
-            sku_lower = (fam.get("sku") or "").lower()
-
-            if q == style_lower or q == ean_lower or q == sku_lower:
-                score += 200
-            elif q in style_lower or q in ean_lower or q in sku_lower:
-                score += 120
-            elif any(q in str(v.get("sku") or "").lower() or q in str(v.get("ean") or "").lower() for v in fam.get("variants", [])):
-                score += 110
-            elif any(q in str(p.get("product_id") or "").lower() for p in fam.get("platforms", [])):
-                score += 110
-            elif q in t_lower:
-                score += 60
-            else:
-                for tok in tokens:
-                    if tok in style_lower or tok in ean_lower or tok in sku_lower:
-                        score += 35
-                    elif tok in t_lower:
-                        score += 15
-
-            if score > 0:
-                matches.append((score, fam))
-
-        matches.sort(key=lambda x: (x[0], x[1]["platforms_count"]), reverse=True)
-        return [m[1] for m in matches[:limit]]
+        res = self.paginate_catalog(page=1, page_size=limit, search=query)
+        return res.get("products", [])
 
     def bulk_search(self, identifiers: List[str]) -> List[Dict[str, Any]]:
-        if not self.is_loaded or len(self.families) == 0:
+        if not self.is_loaded or self.total_count == 0:
             self.load_catalog(force=True)
-        matched_ids = set()
-        results = []
+        matched_ids = []
+        conn = self._get_connection()
+        try:
+            cur = conn.cursor()
+            for raw_id in identifiers:
+                ident = str(raw_id).strip().lower()
+                if not ident:
+                    continue
+                cur.execute("SELECT family_id FROM lookup_index WHERE term = ? LIMIT 1", (ident,))
+                r = cur.fetchone()
+                if r and r[0] not in matched_ids:
+                    matched_ids.append(r[0])
+                elif "-" in ident:
+                    base_id = ident.split("-")[0]
+                    cur.execute("SELECT family_id FROM lookup_index WHERE term = ? LIMIT 1", (base_id,))
+                    r2 = cur.fetchone()
+                    if r2 and r2[0] not in matched_ids:
+                        matched_ids.append(r2[0])
 
-        for raw_id in identifiers:
-            ident = str(raw_id).strip().lower()
-            if not ident:
-                continue
-
-            fid = (
-                self.index_by_style.get(ident) or
-                self.index_by_ean.get(ident) or
-                self.index_by_sku.get(ident) or
-                self.index_by_pid.get(ident)
-            )
-
-            if fid and fid in self.families and fid not in matched_ids:
-                matched_ids.add(fid)
-                results.append(self.families[fid])
-            else:
-                # Fallback to search query for this identifier
-                sub_res = self.search(ident, limit=1)
-                for r in sub_res:
-                    if r["family_id"] not in matched_ids:
-                        matched_ids.add(r["family_id"])
-                        results.append(r)
-
-        return results
+            results = []
+            for fid in matched_ids:
+                fam = self.get_family_by_id(fid)
+                if fam:
+                    results.append(fam)
+            return results
+        finally:
+            conn.close()
 
     def paginate_catalog(
         self,
@@ -1331,82 +1613,141 @@ class CatalogService:
         max_price: Optional[float] = None,
         sort_by: str = "relevance"
     ) -> Dict[str, Any]:
-        if not self.is_loaded or len(self.families) == 0:
-            self.load_catalog(force=True)
+        if not self.is_loaded or self.total_count == 0:
+            self.load_catalog()
 
-        if search and search.strip():
-            candidate_list = self.search(search, limit=5000)
-        else:
-            candidate_list = self.families_list
+        conn = self._get_connection()
+        try:
+            cur = conn.cursor()
+            where_clauses = ["1=1"]
+            params = []
 
-        filtered = []
-        for fam in candidate_list:
-            if category and category.lower() != "all" and fam["category"].lower() != category.lower():
-                continue
-            if gender and gender.lower() != "all" and fam["gender"].lower() != gender.lower():
-                continue
-            if min_price is not None and fam["lowest_price"] < min_price:
-                continue
-            if max_price is not None and fam["lowest_price"] > max_price:
-                continue
+            # Category filter
+            if category and category.lower() != "all":
+                where_clauses.append("LOWER(category) = LOWER(?)")
+                params.append(category)
+
+            # Gender filter
+            if gender and gender.lower() != "all":
+                where_clauses.append("LOWER(gender) = LOWER(?)")
+                params.append(gender)
+
+            # Price filters
+            if min_price is not None:
+                where_clauses.append("lowest_price >= ?")
+                params.append(min_price)
+            if max_price is not None:
+                where_clauses.append("lowest_price <= ?")
+                params.append(max_price)
+
+            # Platform filter
             if platform and platform.lower() != "all":
-                has_plat = any(p["platform"] == platform.lower() and p["price"] is not None for p in fam["platforms"])
-                if not has_plat:
-                    continue
-            filtered.append(fam)
+                p_key = platform.lower()
+                valid_platforms = {
+                    "amazon": "has_amazon", "tata": "has_tata", "tata_lux": "has_tata_lux",
+                    "columbia": "has_columbia", "adv": "has_adv", "myntra": "has_myntra", "ajio": "has_ajio"
+                }
+                col_name = valid_platforms.get(p_key)
+                if col_name:
+                    where_clauses.append(f"{col_name} = 1")
 
-        # Sorting
-        if sort_by == "name" or sort_by == "title":
-            filtered.sort(key=lambda x: x["title"].lower())
-        elif sort_by == "price_asc" or sort_by == "price_low":
-            filtered.sort(key=lambda x: x["lowest_price"])
-        elif sort_by == "price_desc" or sort_by == "price_high":
-            filtered.sort(key=lambda x: x["lowest_price"], reverse=True)
-        elif sort_by == "variants":
-            filtered.sort(key=lambda x: x["variants_count"], reverse=True)
-        elif sort_by == "platforms":
-            filtered.sort(key=lambda x: x["platforms_count"], reverse=True)
+            # Search filter
+            if search and search.strip():
+                q = search.strip().lower()
+                # Check lookup_index for exact identifier
+                cur.execute("SELECT DISTINCT family_id FROM lookup_index WHERE term = ?", (q,))
+                matched_fids = [r[0] for r in cur.fetchall()]
+                if not matched_fids and "-" in q:
+                    base_q = q.split("-")[0]
+                    cur.execute("SELECT DISTINCT family_id FROM lookup_index WHERE term = ?", (base_q,))
+                    matched_fids = [r[0] for r in cur.fetchall()]
 
-        total_records = len(filtered)
-        total_pages = max(1, math.ceil(total_records / page_size))
-        current_page = max(1, min(page, total_pages))
+                if matched_fids:
+                    placeholders = ",".join("?" * len(matched_fids))
+                    where_clauses.append(f"family_id IN ({placeholders})")
+                    params.extend(matched_fids)
+                else:
+                    tokens = [t for t in q.split() if len(t) > 1]
+                    if tokens:
+                        token_clauses = []
+                        for tok in tokens:
+                            token_clauses.append("(LOWER(title) LIKE ? OR LOWER(style) LIKE ? OR LOWER(sku) LIKE ? OR LOWER(ean) LIKE ?)")
+                            tok_param = f"%{tok}%"
+                            params.extend([tok_param, tok_param, tok_param, tok_param])
+                        where_clauses.append(f"({' AND '.join(token_clauses)})")
+                    else:
+                        q_param = f"%{q}%"
+                        where_clauses.append("(LOWER(title) LIKE ? OR LOWER(style) LIKE ? OR LOWER(sku) LIKE ? OR LOWER(ean) LIKE ?)")
+                        params.extend([q_param, q_param, q_param, q_param])
 
-        start_idx = (current_page - 1) * page_size
-        end_idx = start_idx + page_size
-        paged_items = filtered[start_idx:end_idx]
+            where_sql = " AND ".join(where_clauses)
 
-        return {
-            "total_records": total_records,
-            "page": current_page,
-            "page_size": page_size,
-            "total_pages": total_pages,
-            "categories": ["All"] + self.all_categories,
-            "genders": ["All"] + self.all_genders,
-            "products": paged_items
-        }
+            # Count total matching records
+            cur.execute(f"SELECT COUNT(*) FROM product_families WHERE {where_sql}", params)
+            total_records = cur.fetchone()[0]
 
-    def get_family_by_id(self, family_id: str) -> Optional[Dict[str, Any]]:
-        if not self.is_loaded or len(self.families) == 0:
-            self.load_catalog(force=True)
-        return self.families.get(family_id)
+            # Sorting
+            if sort_by in ("name", "title"):
+                order_sql = "ORDER BY title COLLATE NOCASE ASC"
+            elif sort_by in ("price_asc", "price_low"):
+                order_sql = "ORDER BY lowest_price ASC"
+            elif sort_by in ("price_desc", "price_high"):
+                order_sql = "ORDER BY lowest_price DESC"
+            elif sort_by == "variants":
+                order_sql = "ORDER BY variants_count DESC"
+            elif sort_by == "platforms":
+                order_sql = "ORDER BY platforms_count DESC, lowest_price DESC"
+            else:
+                order_sql = "ORDER BY platforms_count DESC, lowest_price DESC"
+
+            total_pages = max(1, math.ceil(total_records / page_size))
+            current_page = max(1, min(page, total_pages))
+            offset = (current_page - 1) * page_size
+
+            # Single page query - keeps memory strictly bounded
+            query_sql = f"SELECT data_json FROM product_families WHERE {where_sql} {order_sql} LIMIT ? OFFSET ?"
+            query_params = list(params) + [page_size, offset]
+
+            cur.execute(query_sql, query_params)
+            paged_items = [json.loads(r["data_json"]) for r in cur.fetchall()]
+
+            return {
+                "total_records": total_records,
+                "page": current_page,
+                "page_size": page_size,
+                "total_pages": total_pages,
+                "categories": ["All"] + self.all_categories,
+                "genders": ["All"] + self.all_genders,
+                "products": paged_items
+            }
+        finally:
+            conn.close()
 
     def get_summary(self) -> Dict[str, Any]:
-        if not self.is_loaded or len(self.families) == 0:
-            self.load_catalog(force=True)
-        total_prods = len(self.families_list)
-        total_vars = sum(f["variants_count"] for f in self.families_list)
-        all_prices = [f["lowest_price"] for f in self.families_list if f["lowest_price"] > 0]
-        offers_count = sum(len(p.get("offers", [])) for f in self.families_list for p in f["platforms"])
-
-        return {
-            "total_products": total_prods,
-            "total_variants": total_vars,
-            "total_platforms": 7,
-            "active_offers_count": offers_count,
-            "avg_discount_percent": 24.5,
-            "lowest_catalog_price": min(all_prices) if all_prices else 999.0,
-            "highest_catalog_price": max(all_prices) if all_prices else 29999.0,
-        }
+        if not self.is_loaded or self.total_count == 0:
+            self.load_catalog()
+        if self.summary_cache:
+            return self.summary_cache
+        conn = self._get_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*), SUM(variants_count), MIN(lowest_price), MAX(lowest_price) FROM product_families WHERE lowest_price > 0")
+            row = cur.fetchone()
+            tot = row[0] or 0
+            vars_cnt = row[1] or 0
+            min_p = row[2] or 999.0
+            max_p = row[3] or 29999.0
+            return {
+                "total_products": tot,
+                "total_variants": vars_cnt,
+                "total_platforms": 7,
+                "active_offers_count": 0,
+                "avg_discount_percent": 24.5,
+                "lowest_catalog_price": min_p,
+                "highest_catalog_price": max_p,
+            }
+        finally:
+            conn.close()
 
     def get_analytics_products(
         self,
@@ -1418,24 +1759,36 @@ class CatalogService:
         page: int = 1,
         page_size: int = 20
     ) -> Dict[str, Any]:
-        if not self.is_loaded or len(self.families) == 0:
-            self.load_catalog(force=True)
+        if not self.is_loaded or self.total_count == 0:
+            self.load_catalog()
 
-        # Filter candidate products
-        if search and search.strip():
-            candidate_list = self.search(search, limit=500)
-        else:
-            candidate_list = self.families_list
+        # If no verified historical cache exists, return empty analytics list
+        if not self.supabase_cache:
+            return {
+                "total_records": 0,
+                "page": 1,
+                "page_size": page_size,
+                "total_pages": 1,
+                "products": []
+            }
 
+        candidate_fids = list(self.supabase_cache.keys())
         filtered = []
-        for fam in candidate_list:
-            if category and category.lower() != "all" and fam["category"].lower() != category.lower():
+        for fid in candidate_fids:
+            fam = self.get_family_by_id(fid)
+            if not fam:
                 continue
-            if gender and gender.lower() != "all" and fam["gender"].lower() != gender.lower():
+            if category and category.lower() != "all" and fam.get("category", "").lower() != category.lower():
+                continue
+            if gender and gender.lower() != "all" and fam.get("gender", "").lower() != gender.lower():
                 continue
             if platform and platform.lower() != "all":
-                has_plat = any(p["platform"] == platform.lower() and p["price"] is not None for p in fam["platforms"])
+                has_plat = any(p["platform"] == platform.lower() and p["price"] is not None for p in fam.get("platforms", []))
                 if not has_plat:
+                    continue
+            if search and search.strip():
+                q = search.strip().lower()
+                if q not in fam.get("title", "").lower() and q not in str(fam.get("style", "")).lower() and q not in str(fam.get("sku", "")).lower():
                     continue
             filtered.append(fam)
 

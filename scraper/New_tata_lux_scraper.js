@@ -18,7 +18,7 @@
     const PAGE_SIZE = 24;
     const LISTING_RETRIES = 3;
     const PDP_RETRIES = 3;
-    const CONCURRENCY = 5;
+    const CONCURRENCY = 3;
 
     const LISTING_BASE =
         "https://cliqapi.tatacliq.com/cliq-api/v1/lux/search";

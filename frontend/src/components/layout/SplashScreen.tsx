@@ -3,13 +3,13 @@ import VantisLogo from "../brand/VantisLogo";
 import apiClient from "../../services/apiClient";
 
 interface SplashScreenProps {
-  onComplete: () => void;
+  onComplete?: () => void;
   maxWaitSeconds?: number;
 }
 
 export const SplashScreen: React.FC<SplashScreenProps> = ({
   onComplete,
-  maxWaitSeconds = 40,
+  maxWaitSeconds = 90,
 }) => {
   const [secondsElapsed, setSecondsElapsed] = useState(0);
   const [isServerReady, setIsServerReady] = useState(false);
@@ -18,7 +18,9 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
   const finish = () => {
     if (!completedRef.current) {
       completedRef.current = true;
-      onComplete();
+      if (onComplete) {
+        onComplete();
+      }
     }
   };
 
