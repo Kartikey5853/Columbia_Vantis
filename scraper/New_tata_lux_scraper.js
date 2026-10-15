@@ -553,7 +553,6 @@
                     embedded?.productCategoryId ||
                     (html.match(/"category_id"\s*:\s*"([^\"]+)"/)?.[1]) || "";
 
-                // Fetch Offers
                 product.offers = await fetchLuxuryProductOffers(
                     product.product_id,
                     sellerId,
@@ -561,6 +560,29 @@
                     brandCode,
                     product.price
                 );
+
+                if ((!product.offers || product.offers.length === 0) && embedded?.potentialPromotions) {
+                    const promos = Array.isArray(embedded.potentialPromotions)
+                        ? embedded.potentialPromotions
+                        : [embedded.potentialPromotions];
+                    product.offers = promos.map(p => ({
+                        kind: "promo_code",
+                        code: p.promoID || p.code || "",
+                        title: p.title || p.promoID || "Special Promotion",
+                        description: `Active promotion: ${p.title || p.promoID || ""}`,
+                        offer_price: null,
+                        issuer: "Tata CLiQ Luxury",
+                        card_type: "",
+                        payment_network: "",
+                        discount_percent: null,
+                        discount_amount: null,
+                        minimum_transaction_amount: null,
+                        maximum_discount: null,
+                        valid_from: p.startDate || null,
+                        validity: p.endDate || "Active Campaign",
+                        terms_url: ""
+                    })).filter(o => o.code || o.title);
+                }
             } catch (err) {
                 product.variants = [];
                 product.offers = [];

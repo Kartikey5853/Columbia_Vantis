@@ -11,7 +11,7 @@ router = APIRouter(prefix="/api/products", tags=["Products & Catalogue"])
 @router.get("", response_model=PaginatedProductsResponse)
 async def list_products(
     page: int = Query(1, ge=1, description="Page number"),
-    page_size: int = Query(50, ge=1, le=100, description="Items per page"),
+    page_size: int = Query(10, ge=1, le=100, description="Items per page"),
     search: Optional[str] = Query(None, description="Search term for SKU, EAN, or title"),
     category: Optional[str] = Query(None, description="Category filter"),
     gender: Optional[str] = Query(None, description="Gender filter"),

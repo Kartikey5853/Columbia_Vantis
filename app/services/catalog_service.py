@@ -1604,7 +1604,7 @@ class CatalogService:
     def paginate_catalog(
         self,
         page: int = 1,
-        page_size: int = 50,
+        page_size: int = 10,
         search: Optional[str] = None,
         category: Optional[str] = None,
         gender: Optional[str] = None,

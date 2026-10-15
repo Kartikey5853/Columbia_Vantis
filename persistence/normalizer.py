@@ -96,14 +96,23 @@ def normalize_size(raw_size: Optional[str]) -> str:
     if s_upper in FAKE_SIZE_MARKERS:
         return ""
 
-    # Remove common prefix noise
-    s_clean = re.sub(r"^(UK|US|EU|IND|IN|SIZE|SZ|EUR)[\s:\-\._]*", "", s_upper, flags=re.IGNORECASE).strip()
+    # Preserve dual/torso sizes like S/M, L/XL
+    TORSO_SIZES = {"S/M": "S/M", "L/XL": "L/XL", "M/L": "M/L", "XS/S": "XS/S"}
+    if s_upper in TORSO_SIZES:
+        return TORSO_SIZES[s_upper]
+
+    # Remove common prefix noise including UK/IND, /IND, UK-, IND-, etc.
+    s_clean = re.sub(r"^(UK\s*/\s*IND|UK|US|EU|IND|IN|SIZE|SZ|EUR)[\s:\-\._/]*", "", s_upper, flags=re.IGNORECASE).strip()
+    s_clean = re.sub(r"^[/:\-\s]+", "", s_clean).strip()
     s_clean = re.sub(r"[\s:\-\._]*(UK|US|EU|IND|IN)$", "", s_clean, flags=re.IGNORECASE).strip()
+    s_clean = re.sub(r"[/:\-\s]+$", "", s_clean).strip()
 
     if s_clean in ONESIZE_MARKERS:
         return "One Size"
     if s_clean in FREESIZE_MARKERS:
         return "Free Size"
+    if s_clean in TORSO_SIZES:
+        return TORSO_SIZES[s_clean]
     if not s_clean or s_clean in FAKE_SIZE_MARKERS:
         return ""
 
@@ -134,6 +143,8 @@ def normalize_size(raw_size: Optional[str]) -> str:
 
     # Handle composite sizes like "M / 40" -> "M" or "8 / 42" -> "8"
     if "/" in s_clean:
+        if s_clean in TORSO_SIZES:
+            return TORSO_SIZES[s_clean]
         part = s_clean.split("/")[0].strip()
         if part in apparel_map:
             return apparel_map[part]

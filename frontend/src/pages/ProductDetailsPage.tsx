@@ -14,6 +14,7 @@ import {
   Check,
   LayoutGrid,
   List,
+  Info,
 } from "lucide-react";
 import productService from "../services/productService";
 import { ProductFamily, PlatformListing, ProductVariant, ProductOffer } from "../types";
@@ -311,6 +312,29 @@ export const ProductDetailsPage: React.FC = () => {
     );
     return matching.length > 0 ? matching : displayVariantCards;
   }, [displayVariantCards, selectedColor]);
+
+  // Group variant cards by colorway / variant so each variant and its sizes are clearly distinguished
+  const variantColorGroups = useMemo(() => {
+    const map = new Map<string, {
+      colorName: string;
+      imageUrl: string | null;
+      cards: typeof displayVariantCards;
+    }>();
+
+    for (const card of visibleVariantCards) {
+      const cName = card.color?.trim() || "Standard / Default Colorway";
+      if (!map.has(cName)) {
+        map.set(cName, {
+          colorName: cName,
+          imageUrl: card.image_url || null,
+          cards: [],
+        });
+      }
+      map.get(cName)!.cards.push(card);
+    }
+
+    return Array.from(map.values());
+  }, [visibleVariantCards]);
 
   if (isLoading) {
     return (
@@ -706,7 +730,7 @@ export const ProductDetailsPage: React.FC = () => {
         )}
 
         {/* VARIANTS & SIZES STOCK SECTION */}
-        <div className="space-y-3.5">
+        <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
             <div className="flex items-center gap-2">
               <Layers className="w-4 h-4 text-sky-500" />
@@ -740,6 +764,17 @@ export const ProductDetailsPage: React.FC = () => {
                 <List className="w-3.5 h-3.5" />
                 <span>Table</span>
               </button>
+            </div>
+          </div>
+
+          {/* Note to User Banner */}
+          <div className="p-3.5 bg-amber-50/80 border border-amber-200/90 rounded-2xl flex items-start gap-3 text-xs text-amber-950">
+            <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <div className="space-y-0.5">
+              <span className="font-extrabold text-amber-950">Note to User:</span>
+              <p className="text-amber-800 leading-relaxed">
+                Marketplaces like Tata CLiQ index each variant under separate seller SKU codes. Sizes and color variants that are completely out of stock at seller hubs are omitted from their catalog API, so only currently active inventory is displayed.
+              </p>
             </div>
           </div>
 
@@ -786,123 +821,128 @@ export const ProductDetailsPage: React.FC = () => {
             })}
           </div>
 
-          {/* CARD GRID VIEW */}
+          {/* CARD GRID VIEW: Grouped by Variant / Colorway */}
           {variantViewMode === "cards" ? (
-            displayVariantCards.length > 0 ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3.5">
-                {displayVariantCards.map((card, idx) => {
-                  const isCardSelected =
-                    (selectedVariantSku && card.sku === selectedVariantSku) ||
-                    (!selectedVariantSku && selectedColor && card.color?.toLowerCase() === selectedColor.toLowerCase()) ||
-                    (!selectedVariantSku && !selectedColor && idx === 0);
+            variantColorGroups.length > 0 ? (
+              <div className="space-y-6">
+                {variantColorGroups.map((group, gIdx) => (
+                  <div key={gIdx} className="bg-slate-50/60 p-4 sm:p-5 rounded-2xl border border-slate-200/80 space-y-3.5">
+                    {/* Variant Group Header */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/70 pb-3">
+                      <div className="flex items-center gap-2.5">
+                        {group.imageUrl ? (
+                          <img
+                            src={group.imageUrl}
+                            alt={group.colorName}
+                            className="w-8 h-8 rounded-lg object-cover border border-slate-200 bg-white shrink-0"
+                          />
+                        ) : (
+                          <div className="w-8 h-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center shrink-0">
+                            <Package className="w-4 h-4 text-slate-400" />
+                          </div>
+                        )}
+                        <div>
+                          <span className="font-black text-xs sm:text-sm text-slate-900">
+                            Variant: {group.colorName}
+                          </span>
+                          <span className="ml-2 text-[10px] font-bold text-slate-500 bg-white border border-slate-200 px-2 py-0.5 rounded-full">
+                            {group.cards.length} {group.cards.length === 1 ? "Size" : "Sizes"}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
 
-                  return (
-                    <div
-                      key={idx}
-                      onClick={() => {
-                        if (card.sku) setSelectedVariantSku(card.sku);
-                        if (card.color) setSelectedColor(card.color);
-                        if (card.image_url) setSelectedImage(card.image_url);
-                      }}
-                      className={`rounded-2xl border p-4 shadow-2xs hover:shadow-xs transition-all space-y-3 flex flex-col justify-between group cursor-pointer ${
-                        isCardSelected
-                          ? "bg-sky-50/40 border-sky-500 ring-2 ring-sky-500/20"
-                          : "bg-white border-slate-200/90 hover:border-sky-300"
-                      }`}
-                    >
-                      <div className="space-y-2.5">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="flex items-center gap-2">
-                            {card.image_url ? (
-                              <img
-                                src={card.image_url}
-                                alt={card.color || card.size || "variant"}
-                                className="w-10 h-10 rounded-xl object-cover border border-slate-200 bg-white shrink-0"
-                              />
-                            ) : (
-                              <div className="w-10 h-10 rounded-xl border border-slate-200 bg-slate-100 flex items-center justify-center shrink-0">
-                                <Package className="w-4 h-4 text-slate-400" />
+                    {/* Sizes Grid inside this Variant */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+                      {group.cards.map((card, idx) => {
+                        const isCardSelected =
+                          (selectedVariantSku && card.sku === selectedVariantSku) ||
+                          (!selectedVariantSku && selectedColor && card.color?.toLowerCase() === selectedColor.toLowerCase()) ||
+                          (!selectedVariantSku && !selectedColor && gIdx === 0 && idx === 0);
+
+                        return (
+                          <div
+                            key={idx}
+                            onClick={() => {
+                              if (card.sku) setSelectedVariantSku(card.sku);
+                              if (card.color) setSelectedColor(card.color);
+                              if (card.image_url) setSelectedImage(card.image_url);
+                            }}
+                            className={`rounded-2xl border p-3.5 shadow-2xs hover:shadow-xs transition-all space-y-2.5 flex flex-col justify-between group cursor-pointer ${
+                              isCardSelected
+                                ? "bg-sky-50/50 border-sky-500 ring-2 ring-sky-500/20"
+                                : "bg-white border-slate-200/90 hover:border-sky-300"
+                            }`}
+                          >
+                            <div className="space-y-2">
+                              <div className="flex items-start justify-between gap-1.5">
+                                <span className="px-2.5 py-1 bg-slate-100 group-hover:bg-sky-100 group-hover:text-sky-800 rounded-lg text-xs font-mono font-black text-slate-900 transition-colors">
+                                  {card.size ? `Size: ${card.size}` : "One Size"}
+                                </span>
+
+                                <span
+                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                    card.available
+                                      ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                      : "bg-rose-50 text-rose-700 border border-rose-200"
+                                  }`}
+                                >
+                                  <span
+                                    className={`w-1.5 h-1.5 rounded-full ${
+                                      card.available ? "bg-emerald-500" : "bg-rose-500"
+                                    }`}
+                                  />
+                                  <span>{card.available ? "In stock" : "Out of stock"}</span>
+                                </span>
                               </div>
-                            )}
-                            <div>
-                              <span className="px-2 py-0.5 bg-slate-100 group-hover:bg-sky-100 group-hover:text-sky-800 rounded-lg text-xs font-mono font-black text-slate-800 transition-colors">
-                                {card.size ? `Size: ${card.size}` : "One Size"}
-                              </span>
-                              {card.color && (
-                                <p className="text-[11px] font-bold text-slate-700 mt-1 line-clamp-1">
-                                  {card.color}
-                                </p>
+
+                              {card.sku && (
+                                <div className="text-[10px] font-mono text-slate-400 truncate">
+                                  SKU: {card.sku}
+                                </div>
+                              )}
+
+                              {card.stock && card.available && (
+                                <div className="text-[10px] text-slate-500 font-medium">
+                                  Stock:{" "}
+                                  <span className="font-bold text-slate-700">
+                                    {typeof card.stock === "number" ? `${card.stock} units` : card.stock}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+                              <div>
+                                <div className="text-xs sm:text-sm font-black text-slate-900">
+                                  {card.price ? `₹${card.price.toLocaleString("en-IN")}` : "—"}
+                                </div>
+                                {card.mrp && card.mrp > (card.price || 0) && (
+                                  <div className="text-[9px] font-mono text-slate-400 line-through">
+                                    MRP ₹{card.mrp.toLocaleString("en-IN")}
+                                  </div>
+                                )}
+                              </div>
+
+                              {card.url && (
+                                <a
+                                  href={card.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-[11px] font-bold transition-all shadow-2xs cursor-pointer"
+                                >
+                                  <span>View</span>
+                                  <ExternalLink className="w-2.5 h-2.5" />
+                                </a>
                               )}
                             </div>
                           </div>
-
-                          <div className="flex flex-col items-end gap-1">
-                            <span
-                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                card.available
-                                  ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                                  : "bg-rose-50 text-rose-700 border border-rose-200"
-                              }`}
-                            >
-                              <span
-                                className={`w-1.5 h-1.5 rounded-full ${
-                                  card.available ? "bg-emerald-500" : "bg-rose-500"
-                                }`}
-                              />
-                              <span>{card.available ? "In stock" : "Out of stock"}</span>
-                            </span>
-                            {isCardSelected && (
-                              <span className="text-[10px] font-black text-sky-600 uppercase tracking-wider">
-                                Selected ✓
-                              </span>
-                            )}
-                          </div>
-                        </div>
-
-                        {card.sku && (
-                          <div className="text-[11px] font-mono text-slate-400 truncate">
-                            SKU: {card.sku}
-                          </div>
-                        )}
-
-                        {card.stock && card.available && (
-                          <div className="text-[11px] text-slate-500 font-medium">
-                            Stock:{" "}
-                            <span className="font-bold text-slate-700">
-                              {typeof card.stock === "number" ? `${card.stock} units` : card.stock}
-                            </span>
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="pt-2.5 border-t border-slate-100 flex items-center justify-between gap-2">
-                        <div>
-                          <div className="text-sm font-black text-slate-900">
-                            {card.price ? `₹${card.price.toLocaleString("en-IN")}` : "—"}
-                          </div>
-                          {card.mrp && card.mrp > (card.price || 0) && (
-                            <div className="text-[10px] font-mono text-slate-400 line-through">
-                              MRP ₹{card.mrp.toLocaleString("en-IN")}
-                            </div>
-                          )}
-                        </div>
-
-                        {card.url && (
-                          <a
-                            href={card.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-all shadow-2xs cursor-pointer"
-                          >
-                            <span>View</span>
-                            <ExternalLink className="w-3 h-3" />
-                          </a>
-                        )}
-                      </div>
+                        );
+                      })}
                     </div>
-                  );
-                })}
+                  </div>
+                ))}
               </div>
             ) : (
               <div className="py-12 text-center text-xs text-slate-400 font-semibold bg-slate-50/50 rounded-2xl border border-slate-200">

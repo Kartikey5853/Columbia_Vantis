@@ -2,6 +2,7 @@ import asyncio
 import json
 import random
 import html
+import re
 from playwright.async_api import async_playwright
 from playwright._impl._errors import Error as PlaywrightError
 from selectolax.parser import HTMLParser
@@ -135,9 +136,16 @@ def parse(html_doc):
                 pass
 
 
-        # -------------------------
-        # Main Product
-        # -------------------------
+        # Extract size from title if available (e.g. ", L |", "Size 9", "- Small")
+        size_cand = ""
+        if title:
+            m_sz = re.search(r",\s*([0-9]+(?:\.[0-9]+)?(?:\s*UK|\s*US)?|XXS|XS|S|M|L|XL|XXL|3XL|Small|Medium|Large|X-Large|XX-Large)\b", title, re.IGNORECASE)
+            if m_sz:
+                size_cand = m_sz.group(1).strip()
+            else:
+                m_sz2 = re.search(r"[-–|]\s*([0-9]+(?:\.[0-9]+)?\s*UK|[0-9]+(?:\.[0-9]+)?\s*US)\b", title, re.IGNORECASE)
+                if m_sz2:
+                    size_cand = m_sz2.group(1).strip()
 
         parsed.append({
 
@@ -148,6 +156,8 @@ def parse(html_doc):
             "family": [asin] + variants,
 
             "title": title,
+
+            "size": size_cand,
 
             "price": price,
 

@@ -9,6 +9,7 @@ import {
   ExternalLink,
   ArrowRight,
   SlidersHorizontal,
+  X,
 } from "lucide-react";
 import productService from "../services/productService";
 import { ProductFamilySummary, PaginatedProductsResponse, PlatformListing } from "../types";
@@ -27,7 +28,7 @@ export const CataloguePage: React.FC = () => {
 
   // Filters & Pagination
   const [page, setPage] = useState<number>(1);
-  const [pageSize, setPageSize] = useState<number>(50);
+  const [pageSize, setPageSize] = useState<number>(10);
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [category, setCategory] = useState<string>("All");
   const [gender, setGender] = useState<string>("All");
@@ -140,16 +141,29 @@ export const CataloguePage: React.FC = () => {
       <div className="bg-white p-4 rounded-2xl border border-slate-200/90 shadow-2xs space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
           {/* Search bar */}
-          <div className="md:col-span-4 relative">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+          <div className="md:col-span-4 relative flex items-center">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
             <input
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleSearchSubmit(e)}
-              placeholder="Search by product name, SKU, EAN, or style..."
-              className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all font-medium"
+              placeholder="Search by name, SKU, EAN, ASIN, or style..."
+              className="w-full pl-9 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all font-medium"
             />
+            {searchTerm && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchTerm("");
+                  setPage(1);
+                  fetchProducts("");
+                }}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 rounded cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
 
           {/* Category Dropdown */}
@@ -523,9 +537,9 @@ export const CataloguePage: React.FC = () => {
               }}
               className="py-1 px-2.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 cursor-pointer"
             >
+              <option value={10}>10</option>
               <option value={20}>20</option>
               <option value={50}>50</option>
-              <option value={100}>100</option>
             </select>
             <span>products per page</span>
           </div>
@@ -535,47 +549,70 @@ export const CataloguePage: React.FC = () => {
             <button
               onClick={() => setPage(Math.max(1, page - 1))}
               disabled={page <= 1}
-              className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-40 transition-colors"
+              className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-40 transition-colors cursor-pointer"
             >
               &lt;
             </button>
 
-            {[1, 2, 3, 4, 5].map((pNum) => {
-              if (pNum > totalPages) return null;
+            {(() => {
+              const maxButtons = 5;
+              let start = Math.max(1, page - 2);
+              let end = Math.min(totalPages, start + maxButtons - 1);
+              if (end - start < maxButtons - 1) {
+                start = Math.max(1, end - maxButtons + 1);
+              }
+              const pages: number[] = [];
+              for (let i = start; i <= end; i++) {
+                pages.push(i);
+              }
+
               return (
-                <button
-                  key={pNum}
-                  onClick={() => setPage(pNum)}
-                  className={`w-7 h-7 rounded-lg transition-colors font-bold ${
-                    page === pNum
-                      ? "bg-[#079FE0] text-white shadow-2xs"
-                      : "bg-white border border-slate-200 hover:bg-slate-100 text-slate-700"
-                  }`}
-                >
-                  {pNum}
-                </button>
+                <>
+                  {start > 1 && (
+                    <>
+                      <button
+                        onClick={() => setPage(1)}
+                        className="w-7 h-7 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 font-bold transition-colors cursor-pointer"
+                      >
+                        1
+                      </button>
+                      {start > 2 && <span className="px-1 text-slate-400">...</span>}
+                    </>
+                  )}
+
+                  {pages.map((pNum) => (
+                    <button
+                      key={pNum}
+                      onClick={() => setPage(pNum)}
+                      className={`w-7 h-7 rounded-lg transition-colors font-bold cursor-pointer ${
+                        page === pNum
+                          ? "bg-[#079FE0] text-white shadow-2xs"
+                          : "bg-white border border-slate-200 hover:bg-slate-100 text-slate-700"
+                      }`}
+                    >
+                      {pNum}
+                    </button>
+                  ))}
+
+                  {end < totalPages && (
+                    <>
+                      {end < totalPages - 1 && <span className="px-1 text-slate-400">...</span>}
+                      <button
+                        onClick={() => setPage(totalPages)}
+                        className="w-7 h-7 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 font-bold transition-colors cursor-pointer"
+                      >
+                        {totalPages}
+                      </button>
+                    </>
+                  )}
+                </>
               );
-            })}
-
-            {totalPages > 5 && <span className="px-1 text-slate-400">...</span>}
-
-            {totalPages > 5 && (
-              <button
-                onClick={() => setPage(totalPages)}
-                className={`px-2.5 py-1 rounded-lg border border-slate-200 font-bold ${
-                  page === totalPages
-                    ? "bg-[#079FE0] text-white"
-                    : "bg-white hover:bg-slate-100 text-slate-700"
-                }`}
-              >
-                {totalPages}
-              </button>
-            )}
+            })()}
 
             <button
               onClick={() => setPage(Math.min(totalPages, page + 1))}
               disabled={page >= totalPages}
-              className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-40 transition-colors"
+              className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-40 transition-colors cursor-pointer"
             >
               &gt;
             </button>

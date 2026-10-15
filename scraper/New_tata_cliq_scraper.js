@@ -485,12 +485,35 @@
                     };
                 });
 
-            const offers =
+            let offers =
                 await fetchProductOffers(
                     detail,
                     productId,
                     currentSellingPrice
                 );
+
+            if ((!offers || offers.length === 0) && detail?.potentialPromotions) {
+                const promos = Array.isArray(detail.potentialPromotions)
+                    ? detail.potentialPromotions
+                    : [detail.potentialPromotions];
+                offers = promos.map(p => ({
+                    kind: "promo_code",
+                    code: p.promoID || p.code || "",
+                    title: p.title || p.promoID || "Special Promotion",
+                    description: `Active promotion: ${p.title || p.promoID || ""}`,
+                    offer_price: null,
+                    issuer: "Tata CLiQ",
+                    card_type: "",
+                    payment_network: "",
+                    discount_percent: null,
+                    discount_amount: null,
+                    minimum_transaction_amount: null,
+                    maximum_discount: null,
+                    valid_from: p.startDate || null,
+                    validity: p.endDate || "Active Campaign",
+                    terms_url: ""
+                })).filter(o => o.code || o.title);
+            }
 
             const sellerStock =
                 numberOrNull(detail.winningSellerAvailableStock);
