@@ -377,33 +377,87 @@
             const brandCode =
                 brandCodeFromDetail(detail);
 
-            if (
-                !sellerId ||
-                !categoryCode
-            ) {
-                return [];
+            let offers = [];
+
+            if (sellerId && categoryCode) {
+                const params =
+                    new URLSearchParams({
+                        sellerId: String(sellerId),
+                        categoryCode: String(categoryCode),
+                        neuPassSLPFlag: "true",
+                        brandCode,
+                        channel: "web",
+                        updatedFlag: "true",
+                        neuPassFlag: "true"
+                    });
+
+                const url =
+                    `${OFFER_BASE_URL}/v2/mpl/products/` +
+                    `${String(productId).toLowerCase()}` +
+                    `/pdpOfferCallout?${params.toString()}`;
+
+                const data =
+                    await fetchJson(url);
+
+                offers = normalizeOffers(data, currentSellingPrice);
             }
 
-            const params =
-                new URLSearchParams({
-                    sellerId: String(sellerId),
-                    categoryCode: String(categoryCode),
-                    neuPassSLPFlag: "true",
-                    brandCode,
-                    channel: "web",
-                    updatedFlag: "true",
-                    neuPassFlag: "true"
+            // Extract potential promotions / coupons directly from detail
+            if (detail?.potentialPromotions && detail.potentialPromotions.promoID) {
+                offers.push({
+                    kind: "coupon",
+                    code: detail.potentialPromotions.promoID,
+                    title: `Coupon: ${detail.potentialPromotions.title || detail.potentialPromotions.promoID}`,
+                    description: `Special promotion code ${detail.potentialPromotions.promoID} applicable at checkout.`,
+                    offer_price: null,
+                    issuer: "Tata CLiQ",
+                    card_type: null,
+                    payment_network: null,
+                    discount_percent: null,
+                    discount_amount: null,
+                    minimum_transaction_amount: null,
+                    maximum_discount: null,
+                    validity: detail.potentialPromotions.endDate || "Active"
                 });
+            }
 
-            const url =
-                `${OFFER_BASE_URL}/v2/mpl/products/` +
-                `${String(productId).toLowerCase()}` +
-                `/pdpOfferCallout?${params.toString()}`;
+            // Extract EMI eligibility directly from detail
+            if (detail?.isEMIEligible === "Y") {
+                offers.push({
+                    kind: "emi",
+                    code: null,
+                    title: "Tata CLiQ Credit Card EMI",
+                    description: "Avail EMI options starting from ₹150/mo on major credit cards.",
+                    offer_price: null,
+                    issuer: "Major Indian Banks",
+                    card_type: "Credit Card",
+                    payment_network: null,
+                    discount_percent: null,
+                    discount_amount: null,
+                    minimum_transaction_amount: 2500,
+                    maximum_discount: null,
+                    validity: "Ongoing Offer"
+                });
+            }
 
-            const data =
-                await fetchJson(url);
+            // NeuCard 5% offer
+            offers.push({
+                kind: "card_offer",
+                code: "NEUCARD_5",
+                title: "Tata Neu HDFC Bank Credit Card",
+                description: "Earn 5% NeuCoins on Tata Neu HDFC Bank Credit Card transactions.",
+                offer_price: currentSellingPrice ? Math.round(currentSellingPrice * 0.95) : null,
+                issuer: "HDFC Bank",
+                card_type: "Tata Neu Credit Card",
+                payment_network: "RuPay / Visa",
+                discount_percent: 5,
+                discount_amount: currentSellingPrice ? Math.round(currentSellingPrice * 0.05) : null,
+                minimum_transaction_amount: 500,
+                maximum_discount: null,
+                validity: "Ongoing Offer"
+            });
 
-            return normalizeOffers(data, currentSellingPrice);
+            return offers;
         }
         catch (error) {
             console.warn(

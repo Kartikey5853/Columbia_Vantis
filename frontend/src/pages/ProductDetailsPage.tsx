@@ -687,57 +687,85 @@ export const ProductDetailsPage: React.FC = () => {
                 </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {activeListing.offers.map((off, oidx) => (
-                <div
-                  key={oidx}
-                  onClick={() => setSelectedOfferModal(off)}
-                  className="p-3.5 bg-slate-50/80 hover:bg-sky-50/40 rounded-2xl border border-slate-200/90 transition-all cursor-pointer space-y-1.5"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <span className="font-bold text-xs text-slate-900 line-clamp-1">
-                      {off.title || "Special Promotion"}
-                    </span>
-                    {off.code && (
-                      <span className="font-mono text-[10px] font-bold bg-white text-sky-700 border border-sky-200 px-2 py-0.5 rounded-md shrink-0">
-                        {off.code}
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-[11px] text-slate-500 line-clamp-2">
-                    {off.description || off.issuer || "Special discount at checkout."}
-                  </p>
-                  {off.kind === "emi" ? (
-                    <div className="text-[11px] font-bold text-sky-700 pt-0.5 flex flex-wrap items-center gap-1.5">
-                      <span className="bg-sky-50 px-2 py-0.5 rounded border border-sky-200">
-                        0% Interest EMI Available
-                      </span>
-                      {off.issuer && (
-                        <span className="text-slate-500 font-medium">via {off.issuer}</span>
-                      )}
-                    </div>
-                  ) : (
-                    Boolean(off.discount_amount || off.discount_percent || (off.offer_price && activeListing.price && off.offer_price < activeListing.price)) && (
-                      <div className="text-[11px] font-bold text-emerald-600 pt-0.5 flex flex-wrap items-center gap-1.5">
-                        {Boolean(off.discount_amount) && (
-                          <span className="bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                            Flat ₹{off.discount_amount} Off
-                          </span>
-                        )}
-                        {Boolean(off.discount_percent) && (
-                          <span className="bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                            {off.discount_percent}% Instant Discount
-                          </span>
-                        )}
-                        {Boolean(off.offer_price && activeListing.price && off.offer_price < activeListing.price) && (
-                          <span className="text-slate-700 font-semibold">
-                            Effective: ₹{off.offer_price?.toLocaleString("en-IN")}
+              {activeListing.offers.map((off, oidx) => {
+                const k = (off.kind || "").toLowerCase();
+                const t = (off.title || "").toLowerCase();
+                const isEmi = k.includes("emi") || t.includes("emi") || t.includes("snapmint");
+                const isBank = k.includes("bank") || t.includes("bank") || Boolean(off.issuer && off.issuer.toLowerCase().includes("bank"));
+                const isCard = k.includes("card") || t.includes("card") || t.includes("cashback") || t.includes("neucard");
+                const isCoupon = k.includes("coupon") || Boolean(off.code);
+                
+                const badgeLabel = isEmi ? "EMI / Pay Later" : isBank ? "Bank Offer" : isCard ? "Card Cashback" : isCoupon ? "Coupon" : "Special Deal";
+                const badgeStyle = isEmi 
+                  ? "bg-sky-50 text-sky-700 border-sky-200" 
+                  : isBank 
+                  ? "bg-purple-50 text-purple-700 border-purple-200" 
+                  : isCard 
+                  ? "bg-indigo-50 text-indigo-700 border-indigo-200" 
+                  : isCoupon 
+                  ? "bg-amber-50 text-amber-700 border-amber-200" 
+                  : "bg-emerald-50 text-emerald-700 border-emerald-200";
+
+                return (
+                  <div
+                    key={oidx}
+                    onClick={() => setSelectedOfferModal(off)}
+                    className="p-3.5 bg-slate-50/80 hover:bg-sky-50/40 rounded-2xl border border-slate-200/90 transition-all cursor-pointer space-y-1.5 flex flex-col justify-between"
+                  >
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between gap-1.5 flex-wrap">
+                        <span className={`text-[9px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full border ${badgeStyle}`}>
+                          {badgeLabel}
+                        </span>
+                        {off.code && (
+                          <span className="font-mono text-[10px] font-bold bg-white text-sky-700 border border-sky-200 px-2 py-0.5 rounded-md shrink-0">
+                            {off.code}
                           </span>
                         )}
                       </div>
-                    )
-                  )}
-                </div>
-              ))}
+                      <span className="font-bold text-xs text-slate-900 line-clamp-1 block">
+                        {off.title || "Special Promotion"}
+                      </span>
+                      <p className="text-[11px] text-slate-500 line-clamp-2">
+                        {off.description || off.issuer || "Special discount at checkout."}
+                      </p>
+                    </div>
+
+                    <div className="pt-1">
+                      {isEmi ? (
+                        <div className="text-[11px] font-bold text-sky-700 flex flex-wrap items-center gap-1.5">
+                          <span className="bg-sky-50 px-2 py-0.5 rounded border border-sky-200 text-[10px]">
+                            {t.includes("0%") || t.includes("snapmint") || t.includes("no cost") ? "0% Interest EMI" : "Standard EMI"}
+                          </span>
+                          {off.issuer && (
+                            <span className="text-slate-500 font-medium text-[10px]">via {off.issuer}</span>
+                          )}
+                        </div>
+                      ) : (
+                        Boolean(off.discount_amount || off.discount_percent || (off.offer_price && activeListing.price && off.offer_price < activeListing.price)) && (
+                          <div className="text-[11px] font-bold text-emerald-600 flex flex-wrap items-center gap-1.5">
+                            {Boolean(off.discount_amount) && (
+                              <span className="bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px]">
+                                Flat ₹{off.discount_amount} Off
+                              </span>
+                            )}
+                            {Boolean(off.discount_percent) && (
+                              <span className="bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px]">
+                                {off.discount_percent}% Instant Discount
+                              </span>
+                            )}
+                            {Boolean(off.offer_price && activeListing.price && off.offer_price < activeListing.price) && (
+                              <span className="text-slate-700 font-semibold text-[10px]">
+                                Effective: ₹{off.offer_price?.toLocaleString("en-IN")}
+                              </span>
+                            )}
+                          </div>
+                        )
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}

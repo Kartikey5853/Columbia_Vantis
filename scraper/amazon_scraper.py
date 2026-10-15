@@ -102,7 +102,22 @@ def parse(html_doc):
             brand = title.split()[0].lower()
 
         total_products += 1
-        is_columbia = (brand == "columbia") or ("columbia" in title.lower()) or ("columbia" in href.lower())
+
+        # Reject mobile skins, wraps, stickers, decals, and phone accessories
+        non_apparel_pattern = re.compile(
+            r'\b(skin sticker|printed vinyl|back wrap|decal|iphone|galaxy\s+[fm\d]|oneplus|realme|xiaomi|redmi|oppo|vivo|pixel\s+\d|smartphone|mobile skin|phone skin|tempered glass|screen protector)\b',
+            re.IGNORECASE
+        )
+        if non_apparel_pattern.search(title or ""):
+            rejected_products += 1
+            continue
+
+        # Valid Columbia product criteria
+        is_columbia = (
+            (brand == "columbia") or
+            (title and title.lower().startswith("columbia")) or
+            (href and "/columbia-" in href.lower() and "columbia" in title.lower())
+        )
         if is_columbia:
             accepted_products += 1
         else:

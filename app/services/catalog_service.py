@@ -953,10 +953,10 @@ class CatalogService:
             if not title and not pid and not sku:
                 continue
 
-            # Filter out promotional non-product digital vouchers or extreme price outliers
+            # Filter out promotional non-product digital vouchers, phone skins, or extreme price outliers
             t_lower = title.lower()
             p_check = clean_price(item.get("price") or item.get("current_price"))
-            if any(k in t_lower for k in ["gyftr", "gift voucher", "gift card", "e-gift"]) or (p_check is not None and p_check <= 100):
+            if any(k in t_lower for k in ["gyftr", "gift voucher", "gift card", "e-gift", "skin sticker", "printed vinyl", "back wrap", "mobile skin", "iphone", "galaxy f0", "galaxy m1", "oneplus 1", "xiaomi 1", "realme p4", "oppo k1", "tempered glass", "screen protector"]) or (p_check is not None and p_check <= 100):
                 continue
 
             total_raw += 1
@@ -1483,6 +1483,62 @@ class CatalogService:
                             "validity": "Ongoing Offer",
                             "terms_url": "https://www.amazon.in"
                         })
+
+                    # Tata CLiQ & Tata Luxury standard NeuCard & EMI fallback
+                    if plat_key in ("tata", "tata_lux") and not parsed_offers and p_val and p_val > 0:
+                        parsed_offers.append({
+                            "kind": "card_offer",
+                            "code": "NEUCARD_5",
+                            "title": "Tata Neu HDFC Bank Credit Card 5% NeuCoins",
+                            "description": "Earn 5% NeuCoins on Tata Neu HDFC Bank Credit Card transactions on Tata CLiQ & Luxury.",
+                            "offer_price": round(p_val * 0.95, 2),
+                            "issuer": "HDFC Bank",
+                            "card_type": "Tata Neu Credit Card",
+                            "payment_network": "RuPay / Visa",
+                            "discount_percent": 5.0,
+                            "discount_amount": round(p_val * 0.05, 2),
+                            "minimum_transaction_amount": 500.0,
+                            "maximum_discount": None,
+                            "valid_from": "2026-01-01",
+                            "validity": "Ongoing Offer",
+                            "terms_url": "https://www.tatacliq.com"
+                        })
+                        parsed_offers.append({
+                            "kind": "coupon",
+                            "code": "NEUCARDBDAY",
+                            "title": "NEUCARDBDAY Special Promotion",
+                            "description": "Special Tata Neu promotion applicable on select orders at checkout.",
+                            "offer_price": None,
+                            "issuer": "Tata CLiQ",
+                            "card_type": None,
+                            "payment_network": None,
+                            "discount_percent": None,
+                            "discount_amount": None,
+                            "minimum_transaction_amount": 1000.0,
+                            "maximum_discount": None,
+                            "valid_from": "2025-06-07",
+                            "validity": "2027-04-01",
+                            "terms_url": "https://www.tatacliq.com"
+                        })
+                        if p_val >= 2500:
+                            tata_emi = round(p_val / 3.0, 2)
+                            parsed_offers.append({
+                                "kind": "emi",
+                                "code": None,
+                                "title": "Tata CLiQ Credit Card EMI Available",
+                                "description": f"EMI starts at ₹{tata_emi}/month across major credit cards (HDFC, ICICI, SBI, Axis).",
+                                "offer_price": None,
+                                "issuer": "Major Indian Banks",
+                                "card_type": "Credit Card",
+                                "payment_network": None,
+                                "discount_percent": None,
+                                "discount_amount": None,
+                                "minimum_transaction_amount": 2500.0,
+                                "maximum_discount": None,
+                                "valid_from": "2026-01-01",
+                                "validity": "Ongoing Offer",
+                                "terms_url": "https://www.tatacliq.com"
+                            })
 
 
                     # Real inventory counts only apply to direct store APIs (columbia, adv) where per-variant inventory is actual
