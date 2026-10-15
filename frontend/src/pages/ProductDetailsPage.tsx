@@ -313,7 +313,7 @@ export const ProductDetailsPage: React.FC = () => {
     return matching.length > 0 ? matching : displayVariantCards;
   }, [displayVariantCards, selectedColor]);
 
-  // Group variant cards by colorway / variant so each variant and its sizes are clearly distinguished
+  // Group variant cards by colorway / variant so all sizes of the same color are merged together (matching Columbia / Adv behavior)
   const variantColorGroups = useMemo(() => {
     const map = new Map<string, {
       colorName: string;
@@ -323,16 +323,22 @@ export const ProductDetailsPage: React.FC = () => {
     }>();
 
     for (const card of visibleVariantCards) {
-      // Differentiate by Color and/or SKU family code
-      const skuBase = card.sku ? card.sku.split("-").slice(0, 2).join("-") : "";
-      const cName = card.color?.trim() 
-        ? (skuBase ? `${card.color.trim()} (${skuBase})` : card.color.trim())
-        : (skuBase ? `Variant SKU: ${skuBase}` : "Standard / Default Colorway");
+      let cName = card.color?.trim() || "";
+      // If color is a raw style code like "FL7278-278", strip prefix or normalize
+      if (!cName || cName.startsWith("STYLE_") || cName.startsWith("Variant SKU:")) {
+        cName = "Standard / Default Colorway";
+      }
+
+      // If on Amazon, or if no color is detectable, merge them all into one unified group
+      if (selectedPlatformKey === "amazon") {
+        cName = card.color?.trim() || "All Variants & Sizes";
+      }
 
       if (!map.has(cName)) {
+        const skuBase = card.sku ? card.sku.split("-").slice(0, 2).join("-") : null;
         map.set(cName, {
           colorName: cName,
-          skuCode: skuBase || null,
+          skuCode: skuBase,
           imageUrl: card.image_url || null,
           cards: [],
         });
@@ -341,7 +347,7 @@ export const ProductDetailsPage: React.FC = () => {
     }
 
     return Array.from(map.values());
-  }, [visibleVariantCards]);
+  }, [visibleVariantCards, selectedPlatformKey]);
 
   if (isLoading) {
     return (
@@ -774,26 +780,26 @@ export const ProductDetailsPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Platform-Specific Note to User Banner */}
-          <div className="p-3.5 bg-amber-50/80 border border-amber-200/90 rounded-2xl flex items-start gap-3 text-xs text-amber-950">
-            <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-            <div className="space-y-0.5">
-              <span className="font-extrabold text-amber-950">
-                Note to User ({selectedPlatformKey === "amazon" ? "Amazon" : selectedPlatformKey === "tata" ? "Tata CLiQ" : selectedPlatformKey === "tata_lux" ? "Tata CLiQ Luxury" : selectedPlatformKey === "columbia" ? "Columbia Official" : selectedPlatformKey === "adv" ? "Adventuras" : "Platform"}):
-              </span>
-              <p className="text-amber-800 leading-relaxed">
-                {selectedPlatformKey === "tata" || selectedPlatformKey === "tata_lux" ? (
-                  "Tata CLiQ indexes each variant under a separate marketplace seller SKU. Color and size variants that are completely out of stock at seller hubs are omitted from their catalog endpoints, and warehouse stock units are not publicly exposed (shown as In Stock or Out of Stock)."
-                ) : selectedPlatformKey === "amazon" ? (
-                  "Amazon listing pages do not provide detailed size swatches or exact warehouse inventory on search tiles. Sizes cannot be fully determined until the individual ASIN page is loaded, and stock is indicated as In Stock or Out of Stock."
-                ) : selectedPlatformKey === "columbia" || selectedPlatformKey === "adv" ? (
-                  "Columbia & Adventuras provide direct per-variant live warehouse inventory. Inactive or out-of-stock sizes have 0 units and are excluded from active purchases."
-                ) : (
-                  "Marketplaces only return active inventory for indexed seller SKUs. Variants completely out of stock at seller hubs are omitted."
-                )}
-              </p>
+          {/* Platform-Specific Note to User Banner (Only for marketplaces with indexing limitations: Tata & Amazon) */}
+          {selectedPlatformKey !== "columbia" && selectedPlatformKey !== "adv" && (
+            <div className="p-3.5 bg-amber-50/80 border border-amber-200/90 rounded-2xl flex items-start gap-3 text-xs text-amber-950">
+              <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <div className="space-y-0.5">
+                <span className="font-extrabold text-amber-950">
+                  Note to User ({selectedPlatformKey === "amazon" ? "Amazon" : selectedPlatformKey === "tata" ? "Tata CLiQ" : selectedPlatformKey === "tata_lux" ? "Tata CLiQ Luxury" : "Marketplace"}):
+                </span>
+                <p className="text-amber-800 leading-relaxed">
+                  {selectedPlatformKey === "tata" || selectedPlatformKey === "tata_lux" ? (
+                    "Tata CLiQ indexes each variant under a separate marketplace seller SKU. Color and size variants that are completely out of stock at seller hubs are omitted from their catalog endpoints, and warehouse stock units are not publicly exposed (shown as In Stock or Out of Stock)."
+                  ) : selectedPlatformKey === "amazon" ? (
+                    "Amazon listing pages do not provide detailed size swatches or exact warehouse inventory on search tiles. Sizes cannot be fully determined until the individual ASIN page is loaded, and stock is indicated as In Stock or Out of Stock."
+                  ) : (
+                    "Marketplaces only return active inventory for indexed seller SKUs. Variants completely out of stock at seller hubs are omitted."
+                  )}
+                </p>
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Platform Options for Variant Breakdown */}
           <div className="flex flex-wrap items-center gap-2 pb-1">
