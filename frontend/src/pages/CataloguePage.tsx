@@ -29,6 +29,7 @@ export const CataloguePage: React.FC = () => {
   // Filters & Pagination
   const [page, setPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(10);
+  const [jumpPage, setJumpPage] = useState<string>("");
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [category, setCategory] = useState<string>("All");
   const [gender, setGender] = useState<string>("All");
@@ -414,7 +415,7 @@ export const CataloguePage: React.FC = () => {
                                       {product.title}
                                     </h4>
                                     <div className="text-xs text-slate-500 font-mono">
-                                      Style: <span className="font-bold text-slate-800">{product.style || "1780161"}</span>
+                                      Style: <span className="font-bold text-slate-800">{product.style || product.sku || "—"}</span>
                                       {product.ean && ` • EAN: ${product.ean}`}
                                     </div>
                                     <div className="flex flex-wrap gap-1.5 pt-1">
@@ -616,6 +617,43 @@ export const CataloguePage: React.FC = () => {
             >
               &gt;
             </button>
+
+            {/* Custom Page Jump Input */}
+            <div className="flex items-center gap-1.5 pl-2 ml-1 border-l border-slate-200">
+              <span className="text-slate-500 font-medium">Page</span>
+              <input
+                type="number"
+                min={1}
+                max={totalPages}
+                value={jumpPage}
+                onChange={(e) => setJumpPage(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    const p = parseInt(jumpPage, 10);
+                    if (!isNaN(p) && p >= 1 && p <= totalPages) {
+                      setPage(p);
+                      setJumpPage("");
+                    }
+                  }
+                }}
+                className="w-14 px-2 py-1 bg-white border border-slate-200 rounded-lg text-center font-bold text-slate-800 text-xs focus:outline-none focus:ring-1 focus:ring-sky-500"
+                placeholder={String(page)}
+              />
+              <span className="text-slate-400 font-normal">/ {totalPages}</span>
+              <button
+                type="button"
+                onClick={() => {
+                  const p = parseInt(jumpPage, 10);
+                  if (!isNaN(p) && p >= 1 && p <= totalPages) {
+                    setPage(p);
+                    setJumpPage("");
+                  }
+                }}
+                className="px-2.5 py-1 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-lg text-xs cursor-pointer transition-colors shadow-2xs"
+              >
+                Go
+              </button>
+            </div>
           </div>
         </div>
       </div>

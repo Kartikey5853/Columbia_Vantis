@@ -102,10 +102,12 @@ def parse(html_doc):
             brand = title.split()[0].lower()
 
         total_products += 1
-        if brand == "columbia" or "columbia" in title.lower():
+        is_columbia = (brand == "columbia") or ("columbia" in title.lower()) or ("columbia" in href.lower())
+        if is_columbia:
             accepted_products += 1
         else:
             rejected_products += 1
+            continue
 
         # -------------------------
         # Extract Variants FIRST
@@ -224,7 +226,7 @@ async def worker(worker_id, context, queue, seller_id, seller_name):
                 f"https://www.amazon.in/s?"
                 f"i=merchant-items"
                 f"&me={seller_id}"
-                f"&k=Columbia"
+                f"&rh=p_89%3AColumbia"
                 f"&page={page_no}"
             )
 
