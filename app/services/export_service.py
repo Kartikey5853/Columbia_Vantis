@@ -43,13 +43,10 @@ def generate_catalog_excel(families: List[Dict[str, Any]]) -> bytes:
     ws_sum.views.sheetView[0].showGridLines = True
 
     sum_headers = [
+        "SKU",
+        "EAN",
         "Style",
         "Product Title",
-        "Category",
-        "Gender",
-        "Platforms Active",
-        "Lowest Price (₹)",
-        "Highest MRP (₹)",
         "Columbia Price (₹)",
         "Columbia MRP (₹)",
         "Amazon Price (₹)",
@@ -71,7 +68,7 @@ def generate_catalog_excel(families: List[Dict[str, Any]]) -> bytes:
         cell = ws_sum.cell(row=1, column=col_idx)
         cell.font = HEADER_FONT
         cell.fill = HEADER_FILL
-        cell.alignment = Alignment(horizontal="center" if col_idx not in (1, 2) else "left", vertical="center", wrap_text=True)
+        cell.alignment = Alignment(horizontal="center" if col_idx not in (1, 2, 4) else "left", vertical="center", wrap_text=True)
         cell.border = BORDER_THIN
     ws_sum.row_dimensions[1].height = 28
 
@@ -79,15 +76,12 @@ def generate_catalog_excel(families: List[Dict[str, Any]]) -> bytes:
     for fam in families:
         plats = {p.get("platform"): p for p in fam.get("platforms") or []}
 
-        style = fam.get("style") or fam.get("sku") or "—"
+        sku = fam.get("sku") or fam.get("style") or "—"
+        ean = fam.get("ean") or "—"
+        style = fam.get("style") or (fam.get("family_id", "").replace("STYLE_", "") if fam.get("family_id", "").startswith("STYLE_") else "—")
         title = fam.get("title") or "Columbia Product"
-        cat = fam.get("category") or "Apparel"
-        gender = fam.get("gender") or "Unisex"
-        plat_cnt = fam.get("platforms_count") or len([p for p in fam.get("platforms", []) if p.get("price") is not None])
-        low_p = fam.get("lowest_price") or "—"
-        high_mrp = fam.get("mrp") or "—"
 
-        row_vals = [style, title, cat, gender, plat_cnt, low_p, high_mrp]
+        row_vals = [sku, ean, style, title]
 
         for p_key, _ in PLATFORM_ORDER:
             p_data = plats.get(p_key) or {}
@@ -106,9 +100,9 @@ def generate_catalog_excel(families: List[Dict[str, Any]]) -> bytes:
             c.font = Font(name="Segoe UI", size=10)
             if is_even:
                 c.fill = ZEBRA_FILL
-            if col_idx in (1, 3, 4, 5):
+            if col_idx in (1, 2, 3):
                 c.alignment = Alignment(horizontal="center", vertical="center")
-            elif col_idx >= 6:
+            elif col_idx >= 5:
                 c.alignment = Alignment(horizontal="right", vertical="center")
             else:
                 c.alignment = Alignment(horizontal="left", vertical="center")
@@ -128,17 +122,21 @@ def generate_catalog_excel(families: List[Dict[str, Any]]) -> bytes:
         ws_plat.views.sheetView[0].showGridLines = True
 
         plat_headers = [
+            "EAN",
+            "SKU",
             "Style",
-            "Product Title",
-            "Product ID / ASIN / SKU",
-            "Listing URL",
-            "Image URL",
+            "Product ID / ASIN",
             "Selling Price (₹)",
             "MRP (₹)",
+            "Product Title",
+            "Listing URL",
+            "Image URL",
             "Stock Status",
+            "Total Stock Units",
             "Sizes Available",
             "Variants Count",
-            "Active Offers & Discounts"
+            "Stock Per Variant",
+            "Active Offers (Codes & Discounts)"
         ]
         ws_plat.append(plat_headers)
 
@@ -146,7 +144,7 @@ def generate_catalog_excel(families: List[Dict[str, Any]]) -> bytes:
             cell = ws_plat.cell(row=1, column=col_idx)
             cell.font = HEADER_FONT
             cell.fill = SUBHEADER_FILL
-            cell.alignment = Alignment(horizontal="center" if col_idx not in (1, 2) else "left", vertical="center")
+            cell.alignment = Alignment(horizontal="center" if col_idx not in (1, 2, 7) else "left", vertical="center")
             cell.border = BORDER_THIN
         ws_plat.row_dimensions[1].height = 26
 
@@ -157,26 +155,66 @@ def generate_catalog_excel(families: List[Dict[str, Any]]) -> bytes:
             if not p_data or p_data.get("price") is None:
                 continue
 
-            style = fam.get("style") or fam.get("sku") or "—"
-            title = p_data.get("listing_title") or fam.get("title") or "Columbia Product"
+            ean = p_data.get("ean") or fam.get("ean") or "—"
+            sku = p_data.get("sku") or fam.get("sku") or fam.get("style") or "—"
+            style = fam.get("style") or (fam.get("family_id", "").replace("STYLE_", "") if fam.get("family_id", "").startswith("STYLE_") else "—")
             pid = str(p_data.get("product_id") or "—")
-            url = p_data.get("url") or ""
-            img = p_data.get("image_url") or fam.get("image_url") or ""
             price = p_data.get("price")
             mrp = p_data.get("mrp") or price
+            title = p_data.get("listing_title") or fam.get("title") or "Columbia Product"
+            url = p_data.get("url") or ""
+            img = p_data.get("image_url") or fam.get("image_url") or ""
             status = p_data.get("availability_status") or "In stock"
             sizes_text = p_data.get("sizes_summary") or "Standard"
-            var_cnt = len(p_data.get("variants") or [])
+
+            variants_list = p_data.get("variants") or []
+            var_cnt = len(variants_list)
+
+            # Sum total stock across variants if numeric
+            total_stock_num = 0
+            has_numeric_stock = False
+            variant_stock_strs = []
+            for v in variants_list:
+                v_sz = v.get("size") or "One Size"
+                v_stk = v.get("stock") if v.get("stock") is not None else v.get("quantity")
+                if isinstance(v_stk, (int, float)):
+                    total_stock_num += int(v_stk)
+                    has_numeric_stock = True
+                    variant_stock_strs.append(f"{v_sz}: {int(v_stk)}")
+                elif v_stk:
+                    variant_stock_strs.append(f"{v_sz}: {v_stk}")
+                else:
+                    v_avail = "In stock" if v.get("available") is not False else "Out of stock"
+                    variant_stock_strs.append(f"{v_sz}: {v_avail}")
+
+            if has_numeric_stock:
+                total_stock_display = f"{total_stock_num} units"
+            else:
+                total_stock_display = p_data.get("stock_text") or status
+
+            stock_per_variant_str = "; ".join(variant_stock_strs) if variant_stock_strs else "—"
+
             offers_list = p_data.get("offers") or []
-            offers_str = "; ".join(
-                [str(o.get("title") or o.get("code") or "") for o in offers_list if isinstance(o, dict)]
-            ) if offers_list else "None"
+            offer_strs = []
+            for o in offers_list:
+                if isinstance(o, dict):
+                    c = o.get("code")
+                    t = o.get("title") or o.get("description")
+                    if c and t:
+                        offer_strs.append(f"[{c}] {t}")
+                    elif c:
+                        offer_strs.append(f"[{c}]")
+                    elif t:
+                        offer_strs.append(str(t))
+            offers_str = "; ".join(offer_strs) if offer_strs else "None"
 
             p_vals = [
-                style, title, pid, url, img,
+                ean, sku, style, pid,
                 price if price is not None else "—",
                 mrp if mrp is not None else "—",
-                status, sizes_text, var_cnt, offers_str
+                title, url, img, status,
+                total_stock_display, sizes_text, var_cnt,
+                stock_per_variant_str, offers_str
             ]
             ws_plat.append(p_vals)
 
@@ -187,9 +225,9 @@ def generate_catalog_excel(families: List[Dict[str, Any]]) -> bytes:
                 c.font = Font(name="Segoe UI", size=10)
                 if is_even:
                     c.fill = ZEBRA_FILL
-                if col_idx in (1, 3, 8, 9, 10):
+                if col_idx in (1, 2, 3, 4, 10, 11, 12, 13):
                     c.alignment = Alignment(horizontal="center", vertical="center")
-                elif col_idx in (6, 7):
+                elif col_idx in (5, 6):
                     c.alignment = Alignment(horizontal="right", vertical="center")
                 else:
                     c.alignment = Alignment(horizontal="left", vertical="center")

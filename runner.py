@@ -1496,6 +1496,7 @@ async def scrape_tata(
                 db_prods = await upsert_canonical_products_batch(norm_prods, client=cli, batch_size=200)
                 id_by_src = {p["source_product_id"]: p["id"] for p in db_prods if "source_product_id" in p and "id" in p}
 
+                price_entries = []
                 progress_items = []
                 for prod in norm_prods:
                     pid = id_by_src.get(prod.source_product_id)
@@ -1505,6 +1506,16 @@ async def scrape_tata(
                             "source_product_id": prod.source_product_id,
                             "variant_count": 0
                         })
+                        if prod.price is not None:
+                            price_entries.append({
+                                "product_id": pid,
+                                "price": prod.price,
+                                "mrp": prod.mrp
+                            })
+
+                if price_entries:
+                    await batch_record_prices_if_changed(price_entries, scrape_run_id=run_id, client=cli, batch_size=200)
+
                 if progress_items:
                     await batch_record_product_progress(run_id, progress_items, status="pending", client=cli, batch_size=200)
 
@@ -2128,6 +2139,7 @@ async def scrape_tata_lux(
                 db_prods = await upsert_canonical_products_batch(norm_prods, client=cli, batch_size=200)
                 id_by_src = {p["source_product_id"]: p["id"] for p in db_prods if "source_product_id" in p and "id" in p}
 
+                price_entries = []
                 progress_items = []
                 for prod in norm_prods:
                     pid = id_by_src.get(prod.source_product_id)
@@ -2137,6 +2149,16 @@ async def scrape_tata_lux(
                             "source_product_id": prod.source_product_id,
                             "variant_count": 0
                         })
+                        if prod.price is not None:
+                            price_entries.append({
+                                "product_id": pid,
+                                "price": prod.price,
+                                "mrp": prod.mrp
+                            })
+
+                if price_entries:
+                    await batch_record_prices_if_changed(price_entries, scrape_run_id=run_id, client=cli, batch_size=200)
+
                 if progress_items:
                     await batch_record_product_progress(run_id, progress_items, status="pending", client=cli, batch_size=200)
 

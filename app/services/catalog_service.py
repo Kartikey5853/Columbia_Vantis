@@ -1395,159 +1395,10 @@ class CatalogService:
         finally:
             conn.close()
 
-    def load_catalog(self, force: bool = False):
-        from jobs import is_pipeline_running
-        if is_pipeline_running() and force:
-            print("[CATALOG_SERVICE] 🛑 Catalog force-reload suppressed because scrapers are currently running (saving RAM).", flush=True)
-            return
-
-        if self.is_loaded and not force and self.total_count > 0:
-            return
-
-        start_time = time.time()
-        self.db_path = DATA_DIR / "catalog_cache.db"
-        cache_file = DATA_DIR / "supabase_catalog_cache.json"
-
-        # 0. Fast path: Extract pre-built catalog_cache.db from zip if db not found on disk
-        zip_path = DATA_DIR / "catalog_cache.zip"
-        if not force and not self.db_path.exists() and zip_path.exists():
-            try:
-                import zipfile
-                print(f"[CATALOG_SERVICE] Extracting bundled {zip_path.name} to {self.db_path.name}...", flush=True)
-                with zipfile.ZipFile(zip_path, "r") as zf:
-                    zf.extractall(DATA_DIR)
-                print(f"[CATALOG_SERVICE] Successfully extracted {self.db_path.name}.", flush=True)
-            except Exception as ze:
-                print(f"[CATALOG_SERVICE] ⚠️ Could not extract {zip_path.name}: {ze}", flush=True)
-
-        # 1. Fast path: SQLite database already exists and has records
-        if not force and self.db_path.exists():
-            try:
-                if self._load_from_sqlite():
-                    self.is_loaded = True
-                    self.load_time_seconds = round(time.time() - start_time, 2)
-                    print(f"[CATALOG_SERVICE] Initialized disk-backed catalog ({self.total_count} families) from SQLite in {self.load_time_seconds}s (RAM: minimal single-page).", flush=True)
-                    return
-            except Exception as e:
-                print(f"[CATALOG_SERVICE] SQLite cache read error: {e}, will rebuild", flush=True)
-
-        # 2. Fast path: Build SQLite from JSON cache if present
-        if not force and cache_file.exists():
-            try:
-                with open(cache_file, "r", encoding="utf-8") as f:
-                    cached = json.load(f)
-                if cached and "families" in cached and cached["families"]:
-                    fams = cached["families"]
-                    raw_cnt = cached.get("raw_records_count", len(fams))
-                    self._save_to_sqlite(fams, raw_cnt)
-                    del fams
-                    del cached
-                    gc.collect()
-                    self._load_from_sqlite()
-                    self.is_loaded = True
-                    self.load_time_seconds = round(time.time() - start_time, 2)
-                    print(f"[CATALOG_SERVICE] Built SQLite catalog ({self.total_count} families) from JSON cache in {self.load_time_seconds}s.", flush=True)
-                    return
-            except Exception as e:
-                print(f"[CATALOG_SERVICE] Cache read error: {e}, falling back to fresh build", flush=True)
-
-        raw_items_by_family: Dict[str, List[Tuple[str, Dict[str, Any]]]] = {}
-        total_raw = 0
-        self._load_master_mappings()
-        self._load_offers_lookup()
-
-        # 1. Primary data source: Supabase live database with fast balanced bootstrap
-        supabase_records = self._fetch_initial_top_products_from_supabase()
-        if not supabase_records:
-            supabase_records = self._fetch_from_supabase(max_records=1000)
-        for plat_key, item in supabase_records:
-            pid = str(item.get("product_id") or item.get("source_product_id") or "").strip()
-            title = str(item.get("title") or "").strip()
-            sku = str(item.get("sku") or "").strip()
-            ean = str(item.get("ean") or "").strip()
-            url = str(item.get("url") or "").strip()
-            if not title and not pid and not sku:
-                continue
-
-            # Filter out promotional non-product digital vouchers, phone skins, or extreme price outliers
-            t_lower = title.lower()
-            p_check = clean_price(item.get("price") or item.get("current_price"))
-            if any(k in t_lower for k in ["gyftr", "gift voucher", "gift card", "e-gift", "skin sticker", "printed vinyl", "back wrap", "mobile skin", "iphone", "galaxy f0", "galaxy m1", "oneplus 1", "xiaomi 1", "realme p4", "oppo k1", "tempered glass", "screen protector"]) or (p_check is not None and p_check <= 100):
-                continue
-
-            total_raw += 1
-            style = self._resolve_canonical_style(plat_key, item, title, sku, ean, url, pid)
-            fkey = get_canonical_family_key(title or pid or sku, style, ean)
-
-            if fkey not in raw_items_by_family:
-                raw_items_by_family[fkey] = []
-            raw_items_by_family[fkey].append((plat_key, item))
-
-        # 2. Fallback: Local files ONLY if live Supabase is unreachable
-        if not supabase_records:
-            source_configs = [
-                ("adv", NEW_DATA_DIR / "adventuras_products_with_offers.json"),
-                ("ajio", NEW_DATA_DIR / "ajio_columbia_products_2210.json"),
-                ("columbia", NEW_DATA_DIR / "columbia - with offers.json"),
-                ("tata_lux", NEW_DATA_DIR / "tatacliq_luxury_columbia_products_with_offers (1)_1.json"),
-                ("tata", NEW_DATA_DIR / "tatacliq_with_offers.json"),
-                ("myntra", DATA_DIR / "myntra" / "myntra_data.json"),
-                ("amazon", AMAZON_DATA_DIR / "amazon_data.json"),
-            ]
-
-            for plat_key, file_path in source_configs:
-                if not file_path.exists():
-                    continue
-
-                try:
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        content = json.load(f)
-                        items = content.get("products") or []
-                        for item in items:
-                            if not isinstance(item, dict):
-                                continue
-                            
-                            pid = str(item.get("product_id") or item.get("source_product_id") or item.get("asin") or "").strip()
-                            title = str(item.get("title") or item.get("name") or "").strip()
-                            sku = str(item.get("sku") or "").strip()
-                            if not sku and item.get("variants") and isinstance(item["variants"], list):
-                                v0 = item["variants"][0]
-                                if isinstance(v0, dict):
-                                    sku = str(v0.get("sku") or "").strip()
-
-                            ean = str(item.get("ean") or "").strip()
-                            if not ean and item.get("variants") and isinstance(item["variants"], list):
-                                v0 = item["variants"][0]
-                                if isinstance(v0, dict):
-                                    ean = str(v0.get("ean") or "").strip()
-
-                            url = str(item.get("url") or item.get("href") or "").strip()
-                            if not title and not pid and not sku:
-                                continue
-
-                            t_lower = title.lower()
-                            p_check = clean_price(item.get("price") or item.get("current_price"))
-                            if any(k in t_lower for k in ["gyftr", "gift voucher", "gift card", "e-gift"]) or (p_check is not None and p_check <= 100):
-                                continue
-
-                            style = self._resolve_canonical_style(plat_key, item, title, sku, ean, url, pid)
-                            fkey = get_canonical_family_key(title or pid or sku, style, ean)
-
-                            if fkey not in raw_items_by_family:
-                                raw_items_by_family[fkey] = []
-                            raw_items_by_family[fkey].append((plat_key, item))
-                            total_raw += 1
-
-                except Exception as e:
-                    print(f"[CATALOG_SERVICE] ⚠️ Error loading {plat_key} ({file_path}): {e}", flush=True)
-
-        self.raw_records_count = total_raw
-
-        # Build normalized Product Families
+    def _build_families_from_raw_items(self, raw_items_by_family: Dict[str, List[Tuple[str, Dict[str, Any]]]]) -> Dict[str, Dict[str, Any]]:
         processed_families: Dict[str, Dict[str, Any]] = {}
         categories_set = set()
         genders_set = set()
-
         for fkey, plat_tuples in raw_items_by_family.items():
             # Pick primary representative title, image, style, ean
             primary_title = ""
@@ -1924,139 +1775,6 @@ class CatalogService:
                                         "terms_url": off.get("terms_url")
                                     })
 
-                    # Columbia & Adventuras standard EMI & card offers
-                    if plat_key in ("columbia", "adv") and not parsed_offers and p_val and p_val > 0:
-                        snap_installment = round(p_val / 3.0, 2)
-                        parsed_offers.append({
-                            "kind": "emi_offer",
-                            "code": None,
-                            "title": "Pay in 3 with Snapmint (0% Interest)",
-                            "description": f"Pay 3 monthly installments of ₹{snap_installment} with 0% interest and instant approval.",
-                            "offer_price": None,
-                            "issuer": "Snapmint",
-                            "card_type": "Cardless EMI / UPI",
-                            "payment_network": None,
-                            "discount_percent": None,
-                            "discount_amount": None,
-                            "minimum_transaction_amount": 500.0,
-                            "maximum_discount": None,
-                            "valid_from": "2026-01-01",
-                            "validity": "Ongoing Offer",
-                            "terms_url": "https://snapmint.com"
-                        })
-                        emi_installment = round(p_val / 6.0, 2)
-                        parsed_offers.append({
-                            "kind": "bank_offer",
-                            "code": None,
-                            "title": "Credit Card EMI Available (3, 6, 9, 12 Months)",
-                            "description": f"EMI starts at ₹{emi_installment}/month across major banks (HDFC, ICICI, SBI, Axis, Kotak, IndusInd).",
-                            "offer_price": None,
-                            "issuer": "Major Indian Banks",
-                            "card_type": "Credit Card",
-                            "payment_network": "Visa / Mastercard",
-                            "discount_percent": None,
-                            "discount_amount": None,
-                            "minimum_transaction_amount": 2000.0,
-                            "maximum_discount": None,
-                            "valid_from": "2026-01-01",
-                            "validity": "Ongoing Offer",
-                            "terms_url": None
-                        })
-
-                    # Amazon standard card offer & EMI fallback
-                    if plat_key == "amazon" and not parsed_offers and p_val and p_val > 0:
-                        parsed_offers.append({
-                            "kind": "bank_offer",
-                            "code": "AMZ_ICICI_5",
-                            "title": "Amazon Pay ICICI Card 5% Cashback",
-                            "description": "5% unlimited cashback for Prime customers, 3% for non-Prime customers on Amazon Pay ICICI Card.",
-                            "offer_price": round(p_val * 0.95, 2),
-                            "issuer": "ICICI Bank",
-                            "card_type": "Amazon Pay ICICI Credit Card",
-                            "payment_network": "Visa",
-                            "discount_percent": 5.0,
-                            "discount_amount": round(p_val * 0.05, 2),
-                            "minimum_transaction_amount": 500.0,
-                            "maximum_discount": None,
-                            "valid_from": "2026-01-01",
-                            "validity": "Ongoing Offer",
-                            "terms_url": "https://www.amazon.in/cbcc/marketpage"
-                        })
-                        parsed_offers.append({
-                            "kind": "emi",
-                            "code": None,
-                            "title": "No Cost EMI Available",
-                            "description": "Avail 0% interest No Cost EMI on select bank cards on checkout.",
-                            "offer_price": None,
-                            "issuer": "HDFC, ICICI, Axis, SBI",
-                            "card_type": "Credit Card",
-                            "payment_network": None,
-                            "discount_percent": None,
-                            "discount_amount": None,
-                            "minimum_transaction_amount": 3000.0,
-                            "maximum_discount": None,
-                            "valid_from": "2026-01-01",
-                            "validity": "Ongoing Offer",
-                            "terms_url": "https://www.amazon.in"
-                        })
-
-                    # Tata CLiQ & Tata Luxury standard NeuCard & EMI fallback
-                    if plat_key in ("tata", "tata_lux") and not parsed_offers and p_val and p_val > 0:
-                        parsed_offers.append({
-                            "kind": "card_offer",
-                            "code": "NEUCARD_5",
-                            "title": "Tata Neu HDFC Bank Credit Card 5% NeuCoins",
-                            "description": "Earn 5% NeuCoins on Tata Neu HDFC Bank Credit Card transactions on Tata CLiQ & Luxury.",
-                            "offer_price": round(p_val * 0.95, 2),
-                            "issuer": "HDFC Bank",
-                            "card_type": "Tata Neu Credit Card",
-                            "payment_network": "RuPay / Visa",
-                            "discount_percent": 5.0,
-                            "discount_amount": round(p_val * 0.05, 2),
-                            "minimum_transaction_amount": 500.0,
-                            "maximum_discount": None,
-                            "valid_from": "2026-01-01",
-                            "validity": "Ongoing Offer",
-                            "terms_url": "https://www.tatacliq.com"
-                        })
-                        parsed_offers.append({
-                            "kind": "coupon",
-                            "code": "NEUCARDBDAY",
-                            "title": "NEUCARDBDAY Special Promotion",
-                            "description": "Special Tata Neu promotion applicable on select orders at checkout.",
-                            "offer_price": None,
-                            "issuer": "Tata CLiQ",
-                            "card_type": None,
-                            "payment_network": None,
-                            "discount_percent": None,
-                            "discount_amount": None,
-                            "minimum_transaction_amount": 1000.0,
-                            "maximum_discount": None,
-                            "valid_from": "2025-06-07",
-                            "validity": "2027-04-01",
-                            "terms_url": "https://www.tatacliq.com"
-                        })
-                        if p_val >= 2500:
-                            tata_emi = round(p_val / 3.0, 2)
-                            parsed_offers.append({
-                                "kind": "emi",
-                                "code": None,
-                                "title": "Tata CLiQ Credit Card EMI Available",
-                                "description": f"EMI starts at ₹{tata_emi}/month across major credit cards (HDFC, ICICI, SBI, Axis).",
-                                "offer_price": None,
-                                "issuer": "Major Indian Banks",
-                                "card_type": "Credit Card",
-                                "payment_network": None,
-                                "discount_percent": None,
-                                "discount_amount": None,
-                                "minimum_transaction_amount": 2500.0,
-                                "maximum_discount": None,
-                                "valid_from": "2026-01-01",
-                                "validity": "Ongoing Offer",
-                                "terms_url": "https://www.tatacliq.com"
-                            })
-
-
                     # Real inventory counts only apply to direct store APIs (columbia, adv) where per-variant inventory is actual
                     is_direct_inventory_platform = plat_key in ("columbia", "adv")
 
@@ -2156,7 +1874,373 @@ class CatalogService:
                 "platforms": platform_listings,
                 "data_freshness": "12 Oct 2026, IST"
             }
+        return processed_families
 
+    def _upsert_families_to_sqlite(self, families: Dict[str, Dict[str, Any]]):
+        if not families:
+            return
+        conn = self._get_connection()
+        try:
+            cur = conn.cursor()
+            family_rows = []
+            lookup_rows = []
+            seen_lookup = set()
+            now_ts = time.time()
+            for fid, fam in families.items():
+                title = fam.get("title") or ""
+                brand = fam.get("brand") or "Columbia"
+                style = fam.get("style") or ""
+                ean = fam.get("ean") or ""
+                sku = fam.get("sku") or ""
+                cat = fam.get("category") or ""
+                gen = fam.get("gender") or ""
+                lowest_p = float(fam.get("lowest_price") or 0.0)
+                mrp_val = float(fam.get("mrp") or 0.0)
+                disc_pct = float(fam.get("discount_percent") or 0.0)
+                var_cnt = int(fam.get("variants_count") or 1)
+                sz_cnt = int(fam.get("sizes_count") or 0)
+                plat_cnt = int(fam.get("platforms_count") or 0)
+                col_cnt = int(fam.get("colours_count") or 1)
+                img_url = fam.get("image_url") or ""
+
+                has_plat = {p: 0 for p in ["amazon", "tata", "tata_lux", "columbia", "adv", "myntra", "ajio"]}
+                for p_obj in fam.get("platforms", []):
+                    pk = p_obj.get("platform")
+                    if pk in has_plat and p_obj.get("price") is not None:
+                        has_plat[pk] = 1
+
+                family_rows.append((
+                    fid, title, brand, style, ean, sku, cat, gen,
+                    lowest_p, mrp_val, disc_pct, var_cnt, sz_cnt, plat_cnt, col_cnt,
+                    has_plat["amazon"], has_plat["tata"], has_plat["tata_lux"],
+                    has_plat["columbia"], has_plat["adv"], has_plat["myntra"], has_plat["ajio"],
+                    img_url, json.dumps(fam), now_ts
+                ))
+
+                for term, kind in [(fid, "fid"), (style, "style"), (ean, "ean"), (sku, "sku")]:
+                    if term and (str(term).lower(), fid) not in seen_lookup:
+                        seen_lookup.add((str(term).lower(), fid))
+                        lookup_rows.append((str(term).lower(), kind, fid))
+
+            cur.executemany("""INSERT OR REPLACE INTO product_families (
+                family_id, title, brand, style, ean, sku, category, gender,
+                lowest_price, mrp, discount_percent, variants_count, sizes_count, platforms_count, colours_count,
+                has_amazon, has_tata, has_tata_lux, has_columbia, has_adv, has_myntra, has_ajio,
+                image_url, data_json, created_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", family_rows)
+
+            cur.executemany("INSERT OR IGNORE INTO lookup_index (term, kind, family_id) VALUES (?,?,?)", lookup_rows)
+
+            cur.execute("SELECT COUNT(*) FROM product_families")
+            self.total_count = cur.fetchone()[0]
+            cur.execute("INSERT OR REPLACE INTO catalog_metadata (key, value) VALUES ('total_families', ?)", (str(self.total_count),))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _search_supabase_live(self, query: str, limit: int = 50):
+        if not query or not query.strip():
+            return
+        q = query.strip()
+        import httpx
+        from collections import defaultdict
+        url = (os.getenv("SUPABASE_URL", "") or "https://viflznbwqrunivhfoavq.supabase.co").rstrip("/")
+        sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "sb_secret_wgDvOA3l28p2d2jzH5euRg_mgqeBpLF"
+        if not url or not sec_key:
+            return
+        headers = {"apikey": sec_key, "Authorization": f"Bearer {sec_key}"}
+
+        scraper_map = {
+            "a932ee85-9042-4fd1-b968-390f1a06a5c8": "columbia",
+            "39aad488-ced1-4c66-846a-3a10187ef5cf": "amazon",
+            "af31b92e-29b3-4532-a303-5dc3c3e4a6b9": "tata",
+            "7bb65f75-0fde-4432-94d0-f396e961713a": "tata_lux",
+            "5803d66c-f054-40a4-9556-cb1393b8c6e3": "adv",
+            "da9da872-910d-4b62-8966-253c4cae9bc3": "myntra",
+            "597a2ed9-be23-442a-9360-9fb84a39b4ef": "ajio"
+        }
+
+        found_items = []
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                params = {
+                    "select": "id,scraper_id,source_product_id,sku,ean,title,url,image_url,available,current_price,current_mrp,variants,style,stock,offers",
+                    "or": f"(title.ilike.*{q}*,style.ilike.*{q}*,sku.ilike.*{q}*,source_product_id.ilike.*{q}*)",
+                    "limit": limit
+                }
+                r = client.get(f"{url}/rest/v1/products", params=params, headers=headers)
+                if r.status_code == 200:
+                    for row in r.json():
+                        sid = row.get("scraper_id")
+                        plat_k = scraper_map.get(sid, "columbia")
+                        found_items.append((plat_k, row))
+
+                # Collect distinct styles found and fetch peer platform products for each style
+                found_styles = set()
+                for pk, it in found_items:
+                    st = it.get("style") or self._resolve_canonical_style(
+                        pk, it, it.get("title", ""), str(it.get("sku", "")), str(it.get("ean", "")),
+                        str(it.get("url", "")), str(it.get("source_product_id", ""))
+                    )
+                    if st:
+                        found_styles.add(st)
+
+                for st in list(found_styles)[:10]:
+                    r_peer = client.get(f"{url}/rest/v1/products?style=eq.{st}&select=id,scraper_id,source_product_id,sku,ean,title,url,image_url,available,current_price,current_mrp,variants,style,stock,offers&limit=25", headers=headers)
+                    if r_peer.status_code == 200:
+                        for row in r_peer.json():
+                            sid = row.get("scraper_id")
+                            plat_k = scraper_map.get(sid, "columbia")
+                            found_items.append((plat_k, row))
+        except Exception as e:
+            print(f"[CATALOG_SERVICE] Live search error: {e}", flush=True)
+            return
+
+        if not found_items:
+            return
+
+        raw_by_fam = defaultdict(list)
+        for plat_key, item in found_items:
+            pid = str(item.get("product_id") or item.get("source_product_id") or "").strip()
+            title = str(item.get("title") or "").strip()
+            sku = str(item.get("sku") or "").strip()
+            ean = str(item.get("ean") or "").strip()
+            url = str(item.get("url") or "").strip()
+            if not title and not pid and not sku:
+                continue
+            style = self._resolve_canonical_style(plat_key, item, title, sku, ean, url, pid)
+            fkey = get_canonical_family_key(title or pid or sku, style, ean)
+            raw_by_fam[fkey].append((plat_key, item))
+
+        families = self._build_families_from_raw_items(raw_by_fam)
+        if families:
+            self._upsert_families_to_sqlite(families)
+
+    def _fetch_more_from_supabase_live(self, batch_size: int = 150):
+        from jobs import is_pipeline_running
+        if is_pipeline_running():
+            return
+
+        conn = self._get_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT value FROM catalog_metadata WHERE key = 'last_supabase_offset'")
+            row = cur.fetchone()
+            last_offset = int(row[0]) if row else 3000
+        finally:
+            conn.close()
+
+        import httpx
+        from collections import defaultdict
+        url = (os.getenv("SUPABASE_URL", "") or "https://viflznbwqrunivhfoavq.supabase.co").rstrip("/")
+        sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "sb_secret_wgDvOA3l28p2d2jzH5euRg_mgqeBpLF"
+        if not url or not sec_key:
+            return
+        headers = {"apikey": sec_key, "Authorization": f"Bearer {sec_key}"}
+
+        scraper_map = {
+            "a932ee85-9042-4fd1-b968-390f1a06a5c8": "columbia",
+            "39aad488-ced1-4c66-846a-3a10187ef5cf": "amazon",
+            "af31b92e-29b3-4532-a303-5dc3c3e4a6b9": "tata",
+            "7bb65f75-0fde-4432-94d0-f396e961713a": "tata_lux",
+            "5803d66c-f054-40a4-9556-cb1393b8c6e3": "adv",
+            "da9da872-910d-4b62-8966-253c4cae9bc3": "myntra",
+            "597a2ed9-be23-442a-9360-9fb84a39b4ef": "ajio"
+        }
+
+        try:
+            with httpx.Client(timeout=15.0) as client:
+                params = {
+                    "select": "id,scraper_id,source_product_id,sku,ean,title,url,image_url,available,current_price,current_mrp,variants,style,stock,offers",
+                    "title": "not.is.null",
+                    "current_price": "not.is.null",
+                    "offset": last_offset,
+                    "limit": batch_size
+                }
+                r = client.get(f"{url}/rest/v1/products", params=params, headers=headers)
+                if r.status_code == 200:
+                    rows = r.json()
+                    if not rows:
+                        return
+                    raw_by_fam = defaultdict(list)
+                    for item in rows:
+                        sid = item.get("scraper_id")
+                        plat_k = scraper_map.get(sid, "columbia")
+                        pid = str(item.get("product_id") or item.get("source_product_id") or "").strip()
+                        title = str(item.get("title") or "").strip()
+                        sku = str(item.get("sku") or "").strip()
+                        ean = str(item.get("ean") or "").strip()
+                        url = str(item.get("url") or "").strip()
+                        if not title and not pid and not sku:
+                            continue
+                        style = self._resolve_canonical_style(plat_k, item, title, sku, ean, url, pid)
+                        fkey = get_canonical_family_key(title or pid or sku, style, ean)
+                        raw_by_fam[fkey].append((plat_k, item))
+
+                    families = self._build_families_from_raw_items(raw_by_fam)
+                    if families:
+                        self._upsert_families_to_sqlite(families)
+
+                    conn = self._get_connection()
+                    try:
+                        cur = conn.cursor()
+                        cur.execute("INSERT OR REPLACE INTO catalog_metadata (key, value) VALUES ('last_supabase_offset', ?)", (str(last_offset + len(rows)),))
+                        conn.commit()
+                    finally:
+                        conn.close()
+        except Exception as e:
+            print(f"[CATALOG_SERVICE] Fetch more error: {e}", flush=True)
+
+    def load_catalog(self, force: bool = False):
+        from jobs import is_pipeline_running
+        if is_pipeline_running() and force:
+            print("[CATALOG_SERVICE] 🛑 Catalog force-reload suppressed because scrapers are currently running (saving RAM).", flush=True)
+            return
+
+        if self.is_loaded and not force and self.total_count > 0:
+            return
+
+        start_time = time.time()
+        self.db_path = DATA_DIR / "catalog_cache.db"
+        cache_file = DATA_DIR / "supabase_catalog_cache.json"
+
+        # 0. Fast path: Extract pre-built catalog_cache.db from zip if db not found on disk
+        zip_path = DATA_DIR / "catalog_cache.zip"
+        if not force and not self.db_path.exists() and zip_path.exists():
+            try:
+                import zipfile
+                print(f"[CATALOG_SERVICE] Extracting bundled {zip_path.name} to {self.db_path.name}...", flush=True)
+                with zipfile.ZipFile(zip_path, "r") as zf:
+                    zf.extractall(DATA_DIR)
+                print(f"[CATALOG_SERVICE] Successfully extracted {self.db_path.name}.", flush=True)
+            except Exception as ze:
+                print(f"[CATALOG_SERVICE] ⚠️ Could not extract {zip_path.name}: {ze}", flush=True)
+
+        # 1. Fast path: SQLite database already exists and has records
+        if not force and self.db_path.exists():
+            try:
+                if self._load_from_sqlite():
+                    self.is_loaded = True
+                    self.load_time_seconds = round(time.time() - start_time, 2)
+                    print(f"[CATALOG_SERVICE] Initialized disk-backed catalog ({self.total_count} families) from SQLite in {self.load_time_seconds}s (RAM: minimal single-page).", flush=True)
+                    return
+            except Exception as e:
+                print(f"[CATALOG_SERVICE] SQLite cache read error: {e}, will rebuild", flush=True)
+
+        # 2. Fast path: Build SQLite from JSON cache if present
+        if not force and cache_file.exists():
+            try:
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    cached = json.load(f)
+                if cached and "families" in cached and cached["families"]:
+                    fams = cached["families"]
+                    raw_cnt = cached.get("raw_records_count", len(fams))
+                    self._save_to_sqlite(fams, raw_cnt)
+                    del fams
+                    del cached
+                    gc.collect()
+                    self._load_from_sqlite()
+                    self.is_loaded = True
+                    self.load_time_seconds = round(time.time() - start_time, 2)
+                    print(f"[CATALOG_SERVICE] Built SQLite catalog ({self.total_count} families) from JSON cache in {self.load_time_seconds}s.", flush=True)
+                    return
+            except Exception as e:
+                print(f"[CATALOG_SERVICE] Cache read error: {e}, falling back to fresh build", flush=True)
+
+        raw_items_by_family: Dict[str, List[Tuple[str, Dict[str, Any]]]] = {}
+        total_raw = 0
+        self._load_master_mappings()
+        self._load_offers_lookup()
+
+        # 1. Primary data source: Supabase live database with fast balanced bootstrap
+        supabase_records = self._fetch_initial_top_products_from_supabase()
+        if not supabase_records:
+            supabase_records = self._fetch_from_supabase(max_records=1000)
+        for plat_key, item in supabase_records:
+            pid = str(item.get("product_id") or item.get("source_product_id") or "").strip()
+            title = str(item.get("title") or "").strip()
+            sku = str(item.get("sku") or "").strip()
+            ean = str(item.get("ean") or "").strip()
+            url = str(item.get("url") or "").strip()
+            if not title and not pid and not sku:
+                continue
+
+            # Filter out promotional non-product digital vouchers, phone skins, or extreme price outliers
+            t_lower = title.lower()
+            p_check = clean_price(item.get("price") or item.get("current_price"))
+            if any(k in t_lower for k in ["gyftr", "gift voucher", "gift card", "e-gift", "skin sticker", "printed vinyl", "back wrap", "mobile skin", "iphone", "galaxy f0", "galaxy m1", "oneplus 1", "xiaomi 1", "realme p4", "oppo k1", "tempered glass", "screen protector"]) or (p_check is not None and p_check <= 100):
+                continue
+
+            total_raw += 1
+            style = self._resolve_canonical_style(plat_key, item, title, sku, ean, url, pid)
+            fkey = get_canonical_family_key(title or pid or sku, style, ean)
+
+            if fkey not in raw_items_by_family:
+                raw_items_by_family[fkey] = []
+            raw_items_by_family[fkey].append((plat_key, item))
+
+        # 2. Fallback: Local files ONLY if live Supabase is unreachable
+        if not supabase_records:
+            source_configs = [
+                ("adv", NEW_DATA_DIR / "adventuras_products_with_offers.json"),
+                ("ajio", NEW_DATA_DIR / "ajio_columbia_products_2210.json"),
+                ("columbia", NEW_DATA_DIR / "columbia - with offers.json"),
+                ("tata_lux", NEW_DATA_DIR / "tatacliq_luxury_columbia_products_with_offers (1)_1.json"),
+                ("tata", NEW_DATA_DIR / "tatacliq_with_offers.json"),
+                ("myntra", DATA_DIR / "myntra" / "myntra_data.json"),
+                ("amazon", AMAZON_DATA_DIR / "amazon_data.json"),
+            ]
+
+            for plat_key, file_path in source_configs:
+                if not file_path.exists():
+                    continue
+
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        content = json.load(f)
+                        items = content.get("products") or []
+                        for item in items:
+                            if not isinstance(item, dict):
+                                continue
+                            
+                            pid = str(item.get("product_id") or item.get("source_product_id") or item.get("asin") or "").strip()
+                            title = str(item.get("title") or item.get("name") or "").strip()
+                            sku = str(item.get("sku") or "").strip()
+                            if not sku and item.get("variants") and isinstance(item["variants"], list):
+                                v0 = item["variants"][0]
+                                if isinstance(v0, dict):
+                                    sku = str(v0.get("sku") or "").strip()
+
+                            ean = str(item.get("ean") or "").strip()
+                            if not ean and item.get("variants") and isinstance(item["variants"], list):
+                                v0 = item["variants"][0]
+                                if isinstance(v0, dict):
+                                    ean = str(v0.get("ean") or "").strip()
+
+                            url = str(item.get("url") or item.get("href") or "").strip()
+                            if not title and not pid and not sku:
+                                continue
+
+                            t_lower = title.lower()
+                            p_check = clean_price(item.get("price") or item.get("current_price"))
+                            if any(k in t_lower for k in ["gyftr", "gift voucher", "gift card", "e-gift"]) or (p_check is not None and p_check <= 100):
+                                continue
+
+                            style = self._resolve_canonical_style(plat_key, item, title, sku, ean, url, pid)
+                            fkey = get_canonical_family_key(title or pid or sku, style, ean)
+
+                            if fkey not in raw_items_by_family:
+                                raw_items_by_family[fkey] = []
+                            raw_items_by_family[fkey].append((plat_key, item))
+                            total_raw += 1
+
+                except Exception as e:
+                    print(f"[CATALOG_SERVICE] ⚠️ Error loading {plat_key} ({file_path}): {e}", flush=True)
+
+        self.raw_records_count = total_raw
+
+        # Build normalized Product Families
+        processed_families = self._build_families_from_raw_items(raw_items_by_family)
         self._save_to_sqlite(processed_families, self.raw_records_count)
         self.load_time_seconds = time.time() - start_time
         self.is_loaded = self.total_count > 0
@@ -2286,6 +2370,21 @@ class CatalogService:
                     cur.execute("SELECT DISTINCT family_id FROM lookup_index WHERE term = ?", (base_q,))
                     matched_fids = [r[0] for r in cur.fetchall()]
 
+                # If no match in SQLite, search Supabase live and re-index
+                if not matched_fids:
+                    cur.execute("SELECT COUNT(*) FROM product_families WHERE LOWER(title) LIKE ? OR LOWER(style) LIKE ? OR LOWER(sku) LIKE ? OR LOWER(ean) LIKE ?", (f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%"))
+                    if cur.fetchone()[0] == 0:
+                        conn.close()
+                        self._search_supabase_live(search.strip(), limit=50)
+                        conn = self._get_connection()
+                        cur = conn.cursor()
+                        cur.execute("SELECT DISTINCT family_id FROM lookup_index WHERE term = ?", (q,))
+                        matched_fids = [r[0] for r in cur.fetchall()]
+                        if not matched_fids and "-" in q:
+                            base_q = q.split("-")[0]
+                            cur.execute("SELECT DISTINCT family_id FROM lookup_index WHERE term = ?", (base_q,))
+                            matched_fids = [r[0] for r in cur.fetchall()]
+
                 if matched_fids:
                     placeholders = ",".join("?" * len(matched_fids))
                     where_clauses.append(f"family_id IN ({placeholders})")
@@ -2309,6 +2408,16 @@ class CatalogService:
             # Count total matching records
             cur.execute(f"SELECT COUNT(*) FROM product_families WHERE {where_sql}", params)
             total_records = cur.fetchone()[0]
+
+            # Progressive fetch from Supabase if browsing deep into pages beyond current local records
+            needed_offset = (page - 1) * page_size
+            if not search and needed_offset >= total_records:
+                conn.close()
+                self._fetch_more_from_supabase_live(batch_size=150)
+                conn = self._get_connection()
+                cur = conn.cursor()
+                cur.execute(f"SELECT COUNT(*) FROM product_families WHERE {where_sql}", params)
+                total_records = cur.fetchone()[0]
 
             # Sorting
             if sort_by in ("name", "title"):
@@ -2442,8 +2551,12 @@ class CatalogService:
                     sparkline_points = plat_prices
                     break
 
-            if not has_hist_change:
-                continue
+            if prev_price is None:
+                prev_price = c_data.get("previous_price") or c_data.get("lowest_price") or 0.0
+            if curr_price is None:
+                curr_price = c_data.get("lowest_price") or 0.0
+            if pct == 0.0 and c_data.get("price_change_percent"):
+                pct = c_data["price_change_percent"]
 
             title = c_data.get("title") or "Columbia Product"
             cat = c_data.get("category") or detect_category(title)
@@ -2481,7 +2594,7 @@ class CatalogService:
             })
 
         if sort_by == "price_change":
-            enriched.sort(key=lambda x: abs(x["price_change_percent"]), reverse=True)
+            enriched.sort(key=lambda x: (abs(x["price_change_percent"]) > 0, abs(x["price_change_percent"])), reverse=True)
         elif sort_by == "price_drop":
             enriched.sort(key=lambda x: x["price_change_percent"])
         elif sort_by == "price_asc":
@@ -2592,20 +2705,25 @@ class CatalogService:
                             if row.get("price") is not None:
                                 prev_by_pid[row["product_id"]].append(row)
 
-                # 3. Identify products where price changed between Oct 15 and Oct 16
+                # 3. Identify products with multi-day telemetry (prioritize price changes, include stable)
                 changed_pids = []
+                stable_pids = []
                 for pid, cur_row in recent_by_pid.items():
                     prev_rows = prev_by_pid.get(pid, [])
-                    if prev_rows and cur_row["price"] != prev_rows[0]["price"]:
-                        changed_pids.append(pid)
+                    if prev_rows:
+                        if cur_row["price"] != prev_rows[0]["price"]:
+                            changed_pids.append(pid)
+                        else:
+                            stable_pids.append(pid)
 
-                print(f"[CATALOG_SERVICE] [LIVE_ANALYTICS] Found {len(changed_pids)} products with verified price changes in Supabase.", flush=True)
+                active_pids = changed_pids + stable_pids[:max(0, 150 - len(changed_pids))]
+                print(f"[CATALOG_SERVICE] [LIVE_ANALYTICS] Telemetry tracking: {len(changed_pids)} changed, {len(active_pids)} total in cache.", flush=True)
 
-                if changed_pids:
-                    # 4. Fetch product details for these changed products
+                if active_pids:
+                    # 4. Fetch product details for tracked products
                     prod_map = {}
-                    for i in range(0, len(changed_pids), 50):
-                        chunk = changed_pids[i:i+50]
+                    for i in range(0, len(active_pids), 50):
+                        chunk = active_pids[i:i+50]
                         id_filter = ",".join(chunk)
                         r_prods = client.get(
                             f"{url}/rest/v1/products?id=in.({id_filter})&select=id,title,style,source_product_id,scraper_id,current_price,current_mrp,image_url",
@@ -2616,7 +2734,7 @@ class CatalogService:
                                 prod_map[p["id"]] = p
 
                     built_cache = {}
-                    for pid in changed_pids:
+                    for pid in active_pids:
                         pinfo = prod_map.get(pid, {})
                         cur_pt = recent_by_pid[pid]
                         prev_pts = sorted(prev_by_pid.get(pid, []), key=lambda x: x["recorded_at"])

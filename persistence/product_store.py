@@ -150,10 +150,8 @@ async def record_price_if_changed(
         if scrape_run_id and last.get("scrape_run_id") == scrape_run_id:
             return False
 
-        last_price = round(float(last.get("price") or 0.0), 2)
-        last_mrp = round(float(last.get("mrp") or 0.0), 2) if last.get("mrp") is not None else None
-
-        if last_price == price_val and last_mrp == mrp_val:
+        last_rec = str(last.get("recorded_at") or "")
+        if last_rec.startswith(now_utc_iso()[:10]):
             return False
 
     payload = {
@@ -220,9 +218,8 @@ async def batch_record_prices_if_changed(
             if last:
                 if scrape_run_id and last.get("scrape_run_id") == scrape_run_id:
                     continue
-                last_price = round(float(last.get("price") or 0.0), 2)
-                last_mrp = round(float(last.get("mrp") or 0.0), 2) if last.get("mrp") is not None else None
-                if last_price == price_val and last_mrp == mrp_val:
+                last_rec = str(last.get("recorded_at") or "")
+                if last_rec.startswith(now_iso[:10]):
                     continue
 
             new_history_rows.append({
