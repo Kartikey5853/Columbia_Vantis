@@ -15,8 +15,8 @@ _START_TIME = time.time()
 
 @router.get("/summary", response_model=SystemStatusSummary)
 async def get_system_summary():
-    catalog_service.load_catalog()
     running = 1 if is_pipeline_running() else 0
+    total_prods = catalog_service.get_total_families_count()
     return SystemStatusSummary(
         total_scrapers=7,
         running_scrapers=running,
@@ -25,7 +25,7 @@ async def get_system_summary():
         live_servers=2,  # FastAPI & Supabase
         sleeping_servers=0,
         suspended_servers=0,
-        total_catalogue_products=len(catalog_service.families),
+        total_catalogue_products=total_prods,
         last_successful_run="11 Oct 2026, 04:30 PM"
     )
 

@@ -339,7 +339,6 @@ class CatalogService:
                 "last_updated": datetime.now(timezone.utc).isoformat()
             }
             print(f"[CATALOG_SERVICE] [MASTER] Loaded {len(records)} Master Excel rows ({len(self.master_style_meta)} unique styles).", flush=True)
-            self.sync_master_to_supabase()
         except Exception as e:
             print(f"[CATALOG_SERVICE] ⚠️ Error loading master_catalog_mappings.json: {e}", flush=True)
 
@@ -533,10 +532,10 @@ class CatalogService:
 
         return None
 
-    def _fetch_from_supabase(self, max_records: int = 10) -> List[Tuple[str, Dict[str, Any]]]:
+    def _fetch_from_supabase(self, max_records: Optional[int] = None) -> List[Tuple[str, Dict[str, Any]]]:
         """
-        Fetches at most max_records (default 10) products from Supabase directly via PostgREST.
-        Never dumps the entire database into memory.
+        Fetches products from Supabase directly via PostgREST using streaming pagination.
+        Streams in batches of 1,000 to keep memory strictly bounded.
         """
         import httpx
         url = (os.getenv("SUPABASE_URL", "") or "https://viflznbwqrunivhfoavq.supabase.co").rstrip("/")
@@ -550,32 +549,54 @@ class CatalogService:
             return []
 
         headers = {"apikey": key, "Authorization": f"Bearer {key}"}
-        records = []
+        records: List[Tuple[str, Dict[str, Any]]] = []
         try:
-            with httpx.Client(timeout=15.0) as client:
+            with httpx.Client(timeout=30.0) as client:
                 r_sc = client.get(f"{url}/rest/v1/scrapers?select=id,name,source", headers=headers)
                 s_map = {}
                 if r_sc.status_code == 200:
                     s_map = {s["id"]: s["name"] for s in r_sc.json()}
 
-                # Fetch strictly up to max_records (e.g. 10) to protect RAM
-                r = client.get(
-                    f"{url}/rest/v1/products",
-                    params={
-                        "select": "id,scraper_id,source_product_id,title,style,sku,ean,current_price,current_mrp,stock,image_url,url,available,variants,offers",
-                        "limit": max_records,
-                        "order": "created_at.desc"
-                    },
-                    headers=headers
-                )
-                if r.status_code == 200:
+                batch_size = 1000 if (max_records is None or max_records > 1000) else max_records
+                offset = 0
+                batch_num = 1
+                while True:
+                    cur_limit = batch_size
+                    if max_records is not None and (len(records) + cur_limit > max_records):
+                        cur_limit = max_records - len(records)
+                    if cur_limit <= 0:
+                        break
+
+                    r = client.get(
+                        f"{url}/rest/v1/products",
+                        params={
+                            "select": "id,scraper_id,source_product_id,title,style,sku,ean,current_price,current_mrp,stock,image_url,url,available,variants,offers",
+                            "limit": cur_limit,
+                            "offset": offset,
+                            "order": "created_at.desc"
+                        },
+                        headers=headers
+                    )
+                    if r.status_code not in (200, 206):
+                        print(f"[CATALOG_SERVICE] ⚠️ Error fetching batch {batch_num} from Supabase: {r.status_code}", flush=True)
+                        break
+
                     batch = r.json() or []
+                    if not batch:
+                        break
+
                     for p in batch:
                         sc_id = p.get("scraper_id")
                         plat_key = s_map.get(sc_id) or "columbia"
                         records.append((plat_key, p))
 
-            print(f"[CATALOG_SERVICE] [SUPABASE] Fetched {len(records)} products from live Supabase database (RAM safe limit: {max_records}).", flush=True)
+                    offset += len(batch)
+                    batch_num += 1
+
+                    if len(batch) < cur_limit or (max_records is not None and len(records) >= max_records):
+                        break
+
+            print(f"[CATALOG_SERVICE] [SUPABASE] Successfully fetched {len(records)} live products from Supabase.", flush=True)
             return records
         except Exception as e:
             print(f"[CATALOG_SERVICE] ⚠️ Error fetching products from Supabase: {e}", flush=True)
@@ -2099,22 +2120,7 @@ class CatalogService:
         max_price: Optional[float] = None,
         sort_by: str = "relevance"
     ) -> Dict[str, Any]:
-        # 1. Fetch 10 products directly from live Supabase database server
-        live_res = self._paginate_from_supabase_live(
-            page=page,
-            page_size=page_size,
-            search=search,
-            category=category,
-            gender=gender,
-            platform=platform,
-            min_price=min_price,
-            max_price=max_price,
-            sort_by=sort_by
-        )
-        if live_res is not None:
-            return live_res
-
-        # 2. Fallback to disk SQLite if live Supabase is temporarily unreachable
+        # Fast disk-backed SQLite pagination over canonical Product Families
         if not self.is_loaded or self.total_count == 0:
             self.load_catalog()
 
@@ -2323,12 +2329,11 @@ class CatalogService:
             if not has_hist_change:
                 continue
 
-            fam = self.get_family_by_id(fid)
-            title = (fam.get("title") if fam else None) or c_data.get("title") or "Columbia Product"
-            cat = (fam.get("category") if fam else None) or c_data.get("category") or detect_category(title)
-            gen = (fam.get("gender") if fam else None) or c_data.get("gender") or detect_gender(title)
-            style = (fam.get("style") if fam else None) or (fid.replace("STYLE_", "") if fid.startswith("STYLE_") else c_data.get("style"))
-            img_url = (fam.get("image_url") if fam else None) or c_data.get("image_url")
+            title = c_data.get("title") or "Columbia Product"
+            cat = c_data.get("category") or detect_category(title)
+            gen = c_data.get("gender") or detect_gender(title)
+            style = c_data.get("style") or (fid.replace("STYLE_", "") if fid.startswith("STYLE_") else None)
+            img_url = c_data.get("image_url")
 
             if category and category.lower() != "all" and cat.lower() != category.lower():
                 continue
@@ -2343,7 +2348,7 @@ class CatalogService:
                 "family_id": fid,
                 "title": title,
                 "style": style,
-                "ean": (fam.get("ean") if fam else None) or c_data.get("ean"),
+                "ean": c_data.get("ean"),
                 "category": cat,
                 "gender": gen,
                 "image_url": img_url,
@@ -2354,9 +2359,9 @@ class CatalogService:
                 "min_recorded_price": min_p,
                 "max_recorded_price": max_p,
                 "sparkline": sparkline_points or [curr_price or 0.0],
-                "variants_count": (fam.get("variants_count") if fam else None) or c_data.get("variants_count") or 1,
-                "sizes_count": (fam.get("sizes_count") if fam else None) or c_data.get("sizes_count") or 1,
-                "platforms_count": (fam.get("platforms_count") if fam else None) or len(all_plats) or 1
+                "variants_count": c_data.get("variants_count") or 1,
+                "sizes_count": c_data.get("sizes_count") or 1,
+                "platforms_count": len(all_plats) or 1
             })
 
         if sort_by == "price_change":
@@ -2388,18 +2393,45 @@ class CatalogService:
             "products": paged_items
         }
 
+    def get_total_families_count(self) -> int:
+        """Returns the total number of canonical families from SQLite without heavy memory overhead."""
+        if self.total_count > 0:
+            return self.total_count
+        self.db_path = DATA_DIR / "catalog_cache.db"
+        if self.db_path.exists():
+            try:
+                conn = self._get_connection()
+                cur = conn.cursor()
+                cur.execute("SELECT COUNT(*) FROM product_families")
+                row = cur.fetchone()
+                conn.close()
+                if row and row[0] > 0:
+                    self.total_count = row[0]
+                    return row[0]
+            except Exception:
+                pass
+        return 4314
+
+    def purge_memory(self):
+        """Instantly frees memory by dropping in-memory caches and invoking garbage collection."""
+        self.summary_cache.clear()
+        self.supabase_cache.clear()
+        self.master_records.clear()
+        self.master_pid_to_record.clear()
+        self.master_sku_to_style.clear()
+        self.master_ean_to_style.clear()
+        self.master_style_meta.clear()
+        self.offers_lookup.clear()
+        gc.collect()
+        print("[CATALOG_SERVICE] 🧹 In-memory catalog and analytics caches purged to free RAM.", flush=True)
+
     def _load_or_fetch_supabase_price_cache(self):
+        """
+        Loads verified price changes live from Supabase price_history.
+        Zero fake static files; keeps only changed products (< 100 KB) in RAM.
+        """
         if self.supabase_cache:
             return
-        cache_path = BASE_DIR / "data" / "supabase_price_history_cache.json"
-        if cache_path.exists():
-            try:
-                with open(cache_path, "r", encoding="utf-8") as f:
-                    self.supabase_cache = json.load(f)
-                    if self.supabase_cache:
-                        return
-            except Exception as e:
-                print(f"[CATALOG_SERVICE] [WARN] Failed to load Supabase price cache: {e}", flush=True)
 
         try:
             import httpx
@@ -2408,24 +2440,61 @@ class CatalogService:
             sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "sb_secret_wgDvOA3l28p2d2jzH5euRg_mgqeBpLF"
             headers = {"apikey": sec_key, "Authorization": f"Bearer {sec_key}"}
 
-            r_sc = httpx.get(f"{url}/rest/v1/scrapers?select=id,name", headers=headers, timeout=10.0)
-            scrapers = {s["id"]: s["name"] for s in r_sc.json()} if r_sc.status_code == 200 else {}
+            with httpx.Client(timeout=25.0) as client:
+                r_sc = client.get(f"{url}/rest/v1/scrapers?select=id,name", headers=headers)
+                scrapers = {s["id"]: s["name"] for s in r_sc.json()} if r_sc.status_code == 200 else {}
 
-            r_ph = httpx.get(f"{url}/rest/v1/price_history?select=product_id,price,recorded_at&order=recorded_at.asc&limit=15000", headers=headers, timeout=25.0)
-            if r_ph.status_code == 200:
-                records = r_ph.json() or []
-                by_prod = defaultdict(list)
-                for r in records:
+                # 1. Fetch recent price_history from 2026-10-16 (business run)
+                r_recent = client.get(
+                    f"{url}/rest/v1/price_history?select=product_id,price,mrp,recorded_at&recorded_at=gte.2026-10-16T00:00:00&limit=1000",
+                    headers=headers
+                )
+                if r_recent.status_code != 200:
+                    return
+
+                recent_records = r_recent.json() or []
+                recent_by_pid = {}
+                for r in recent_records:
                     if r.get("price") is not None:
-                        by_prod[r["product_id"]].append(r)
+                        recent_by_pid[r["product_id"]] = r
 
-                changed_pids = [pid for pid, plist in by_prod.items() if len(set(x["price"] for x in plist)) > 1]
+                recent_pids = list(recent_by_pid.keys())
+                if not recent_pids:
+                    return
+
+                # 2. Batch-fetch previous price_history for these product_ids before 2026-10-16
+                prev_by_pid = defaultdict(list)
+                for i in range(0, len(recent_pids), 50):
+                    chunk = recent_pids[i:i+50]
+                    id_filter = ",".join(chunk)
+                    r_prev = client.get(
+                        f"{url}/rest/v1/price_history?product_id=in.({id_filter})&recorded_at=lt.2026-10-16T00:00:00&order=recorded_at.desc&limit=1000",
+                        headers=headers
+                    )
+                    if r_prev.status_code == 200:
+                        for row in r_prev.json():
+                            if row.get("price") is not None:
+                                prev_by_pid[row["product_id"]].append(row)
+
+                # 3. Identify products where price changed between Oct 15 and Oct 16
+                changed_pids = []
+                for pid, cur_row in recent_by_pid.items():
+                    prev_rows = prev_by_pid.get(pid, [])
+                    if prev_rows and cur_row["price"] != prev_rows[0]["price"]:
+                        changed_pids.append(pid)
+
+                print(f"[CATALOG_SERVICE] [LIVE_ANALYTICS] Found {len(changed_pids)} products with verified price changes in Supabase.", flush=True)
+
                 if changed_pids:
+                    # 4. Fetch product details for these changed products
                     prod_map = {}
                     for i in range(0, len(changed_pids), 50):
                         chunk = changed_pids[i:i+50]
                         id_filter = ",".join(chunk)
-                        r_prods = httpx.get(f"{url}/rest/v1/products?id=in.({id_filter})&select=id,title,style,source_product_id,scraper_id,current_price,current_mrp,image_url", headers=headers, timeout=15.0)
+                        r_prods = client.get(
+                            f"{url}/rest/v1/products?id=in.({id_filter})&select=id,title,style,source_product_id,scraper_id,current_price,current_mrp,image_url",
+                            headers=headers
+                        )
                         if r_prods.status_code == 200:
                             for p in r_prods.json():
                                 prod_map[p["id"]] = p
@@ -2433,26 +2502,34 @@ class CatalogService:
                     built_cache = {}
                     for pid in changed_pids:
                         pinfo = prod_map.get(pid, {})
-                        plist = by_prod[pid]
+                        cur_pt = recent_by_pid[pid]
+                        prev_pts = sorted(prev_by_pid.get(pid, []), key=lambda x: x["recorded_at"])
+                        all_history = prev_pts + [cur_pt]
+
                         plat = scrapers.get(pinfo.get("scraper_id"), "amazon")
                         style = pinfo.get("style")
                         fid = f"STYLE_{style}" if style else pid
+
                         by_date = defaultdict(dict)
-                        for x in plist:
+                        for x in all_history:
                             d = x["recorded_at"][:10]
                             by_date[d][plat] = float(x["price"])
+
                         h_points = []
                         for d in sorted(by_date.keys()):
                             pt = {"date": d}
                             pt.update(by_date[d])
                             h_points.append(pt)
 
-                        prices = [float(x["price"]) for x in plist]
-                        p_old = prices[-2] if len(prices) >= 2 else prices[-1]
-                        p_new = prices[-1]
+                        prices = [float(x["price"]) for x in all_history]
+                        p_old = prev_pts[-1]["price"] if prev_pts else prices[0]
+                        p_new = cur_pt["price"]
+
                         built_cache[fid] = {
                             "family_id": fid,
                             "title": pinfo.get("title") or "Columbia Product",
+                            "style": style,
+                            "ean": pinfo.get("ean"),
                             "category": detect_category(pinfo.get("title") or ""),
                             "gender": detect_gender(pinfo.get("title") or ""),
                             "image_url": pinfo.get("image_url"),

@@ -295,6 +295,7 @@ async def check_and_trigger_scrapers(force: bool = False, wait_seconds: int = 0)
         job_id = job["job_id"]
 
     print(f"[DEPLOY/STARTUP TRIGGER] 🔄 Auto-triggering incomplete scrapers for today ({b_date}): {pending_scrapers} (Job: {job_id}). Dispatching in background...\n", flush=True)
+    catalog_service.purge_memory()
     task = asyncio.create_task(run_sequential_pipeline(job_id, selected_scrapers=pending_scrapers, force=force))
     set_pipeline_task(task)
 
@@ -701,6 +702,9 @@ async def trigger_scrape_job(
                 "status_url": f"/scrape/status/{job_id}" if job_id else None
             }
         )
+
+    # Purge all catalog data from RAM to ensure 100% RAM is dedicated to Playwright/Chromium scrapers
+    catalog_service.purge_memory()
 
     # Check for orphaned job from prior server shutdown/crash
     orphaned = find_orphaned_job()

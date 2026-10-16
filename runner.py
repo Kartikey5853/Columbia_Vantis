@@ -2790,6 +2790,13 @@ async def run_sequential_pipeline(
 
     print(f"\n[pipeline](init) Starting sequential pipeline (Job: {job_id}) with scrapers: {active_scrapers}")
 
+    # Immediately terminate and purge all in-memory catalog data to free maximum RAM for scrapers
+    try:
+        from app.services.catalog_service import catalog_service
+        catalog_service.purge_memory()
+    except Exception as e:
+        print(f"[pipeline] Note: Could not purge catalog memory: {e}", flush=True)
+
     # Mark initial status
     first_scraper = active_scrapers[0]
     first_key = SCRAPER_KEY_MAP[first_scraper]
