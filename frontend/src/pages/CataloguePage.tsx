@@ -10,8 +10,10 @@ import {
   ArrowRight,
   SlidersHorizontal,
   X,
+  FileSpreadsheet,
 } from "lucide-react";
 import productService from "../services/productService";
+import bundleService from "../services/bundleService";
 import { ProductFamilySummary, PaginatedProductsResponse, PlatformListing } from "../types";
 import PlatformLogo from "../components/brand/PlatformLogo";
 
@@ -25,6 +27,7 @@ export const CataloguePage: React.FC = () => {
   const [categories, setCategories] = useState<string[]>(["All"]);
   const [genders, setGenders] = useState<string[]>(["All"]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isExporting, setIsExporting] = useState<boolean>(false);
 
   // Filters & Pagination
   const [page, setPage] = useState<number>(1);
@@ -33,14 +36,13 @@ export const CataloguePage: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [category, setCategory] = useState<string>("All");
   const [gender, setGender] = useState<string>("All");
-  const [platform, setPlatform] = useState<string>("All");
   const [priceRange, setPriceRange] = useState<string>("All");
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchProducts();
-  }, [page, pageSize, category, gender, platform, priceRange]);
+  }, [page, pageSize, category, gender, priceRange]);
 
   const fetchProducts = async (currentSearchTerm?: string) => {
     setIsLoading(true);
@@ -60,14 +62,48 @@ export const CataloguePage: React.FC = () => {
       minPrice = 15000;
     }
 
+    const isDefaultFilter =
+      page === 1 &&
+      pageSize === 10 &&
+      !searchToUse &&
+      category === "All" &&
+      gender === "All" &&
+      priceRange === "All";
+
+    // Instant bootstrap via pre-warmed bundle
+    if (isDefaultFilter) {
+      const cached = bundleService.getCachedBundle();
+      if (cached && cached.catalog && cached.catalog.products?.length > 0) {
+        setProducts(cached.catalog.products);
+        setTotalRecords(cached.catalog.total_records);
+        setTotalPages(cached.catalog.total_pages);
+        if (cached.catalog.categories?.length) setCategories(cached.catalog.categories);
+        if (cached.catalog.genders?.length) setGenders(cached.catalog.genders);
+        setIsLoading(false);
+        return;
+      }
+    }
+
     try {
+      if (isDefaultFilter) {
+        const bundle = await bundleService.getBundle();
+        if (bundle && bundle.catalog && bundle.catalog.products?.length > 0) {
+          setProducts(bundle.catalog.products);
+          setTotalRecords(bundle.catalog.total_records);
+          setTotalPages(bundle.catalog.total_pages);
+          if (bundle.catalog.categories?.length) setCategories(bundle.catalog.categories);
+          if (bundle.catalog.genders?.length) setGenders(bundle.catalog.genders);
+          setIsLoading(false);
+          return;
+        }
+      }
+
       const res: PaginatedProductsResponse = await productService.getProducts({
         page,
         page_size: pageSize,
         search: searchToUse || undefined,
         category: category !== "All" ? category : undefined,
         gender: gender !== "All" ? gender : undefined,
-        platform: platform !== "All" ? platform : undefined,
         min_price: minPrice,
         max_price: maxPrice,
       });
@@ -90,11 +126,38 @@ export const CataloguePage: React.FC = () => {
     fetchProducts();
   };
 
+  const handleExportExcel = async () => {
+    setIsExporting(true);
+    try {
+      if (selectedRowIds.size > 0) {
+        await productService.exportSelectedExcel(Array.from(selectedRowIds));
+      } else {
+        let minPrice: number | undefined;
+        let maxPrice: number | undefined;
+        if (priceRange === "under_5k") maxPrice = 5000;
+        else if (priceRange === "5k_10k") { minPrice = 5000; maxPrice = 10000; }
+        else if (priceRange === "10k_15k") { minPrice = 10000; maxPrice = 15000; }
+        else if (priceRange === "above_15k") minPrice = 15000;
+
+        await productService.exportCatalogExcel({
+          search: searchTerm.trim() || undefined,
+          category: category !== "All" ? category : undefined,
+          gender: gender !== "All" ? gender : undefined,
+          min_price: minPrice,
+          max_price: maxPrice,
+        });
+      }
+    } catch (err) {
+      console.error("Excel export failed:", err);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   const clearFilters = () => {
     setSearchTerm("");
     setCategory("All");
     setGender("All");
-    setPlatform("All");
     setPriceRange("All");
     setPage(1);
     fetchProducts("");
@@ -201,25 +264,22 @@ export const CataloguePage: React.FC = () => {
             </select>
           </div>
 
-          {/* Platform Availability */}
+          {/* Export to Excel Button (Replaces platform filter as requested) */}
           <div className="md:col-span-2">
-            <select
-              value={platform}
-              onChange={(e) => {
-                setPlatform(e.target.value);
-                setPage(1);
-              }}
-              className="w-full py-2 px-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-500/20 cursor-pointer"
+            <button
+              type="button"
+              onClick={handleExportExcel}
+              disabled={isExporting}
+              className="w-full py-2 px-3 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
+              title={selectedRowIds.size > 0 ? `Export ${selectedRowIds.size} selected products to Excel` : "Export catalogue to multi-sheet Excel"}
             >
-              <option value="All">Platform: All</option>
-              <option value="amazon">Amazon</option>
-              <option value="tata">Tata CLiQ</option>
-              <option value="tata_lux">Tata CLiQ Luxury</option>
-              <option value="columbia">Columbia India</option>
-              <option value="adv">Adventuras</option>
-              <option value="myntra">Myntra</option>
-              <option value="ajio">AJIO</option>
-            </select>
+              {isExporting ? (
+                <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              ) : (
+                <FileSpreadsheet className="w-4 h-4 shrink-0" />
+              )}
+              <span>{isExporting ? "Exporting..." : selectedRowIds.size > 0 ? `Export (${selectedRowIds.size})` : "Export to Excel"}</span>
+            </button>
           </div>
 
           {/* Price Range Dropdown */}

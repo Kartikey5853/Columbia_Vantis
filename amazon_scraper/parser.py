@@ -185,6 +185,22 @@ EXTRACT_CARDS_JS = """
                 } catch (e) {}
             }
         }
+
+        // Genuine Coupons & Promotional Deals
+        let offers = [];
+        const couponEl = card.querySelector('span[class*="coupon"], span.s-coupon-unclipped, span[data-action="coupon"]');
+        if (couponEl) {
+            const cText = couponEl.textContent.trim();
+            if (cText && cText.length > 2) {
+                offers.push({
+                    kind: 'coupon',
+                    code: 'AMZ_COUPON',
+                    title: cText,
+                    description: cText,
+                    issuer: 'Amazon'
+                });
+            }
+        }
         
         items.push({
             asin,
@@ -195,6 +211,7 @@ EXTRACT_CARDS_JS = """
             image,
             href,
             variations,
+            offers,
             is_columbia: brand === 'columbia' || title.toLowerCase().includes('columbia')
         });
     }

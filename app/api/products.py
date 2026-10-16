@@ -77,6 +77,84 @@ async def bulk_search_products(req: BulkSearchRequest):
     results = catalog_service.bulk_search(req.identifiers)
     return results
 
+from fastapi.responses import Response
+from pydantic import BaseModel
+from app.services.export_service import generate_catalog_excel
+
+class ExportExcelRequest(BaseModel):
+    family_ids: Optional[List[str]] = None
+    search: Optional[str] = None
+    limit: Optional[int] = 500
+
+@router.get("/export-excel")
+async def export_catalog_excel(
+    search: Optional[str] = Query(None, description="Search term"),
+    category: Optional[str] = Query(None, description="Category filter"),
+    gender: Optional[str] = Query(None, description="Gender filter"),
+    platform: Optional[str] = Query(None, description="Platform filter"),
+    min_price: Optional[float] = Query(None, description="Min price"),
+    max_price: Optional[float] = Query(None, description="Max price"),
+    limit: int = Query(500, ge=1, le=2000, description="Max products to export")
+):
+    """
+    Exports product data to a multi-sheet Excel workbook:
+    - Sheet 1: Omnichannel Price & MRP Summary across all 7 platforms
+    - Sheets 2..8: Per-platform sheets with Title, Style, URL, Image, Price, MRP, Stock, Sizes, Variants, Offers
+    """
+    res = catalog_service.paginate_catalog(
+        page=1,
+        page_size=limit,
+        search=search,
+        category=category,
+        gender=gender,
+        platform=platform,
+        min_price=min_price,
+        max_price=max_price
+    )
+    products = res.get("products", [])
+    excel_bytes = generate_catalog_excel(products)
+
+    filename = "Columbia_Omnichannel_Catalogue.xlsx"
+    if search:
+        safe_q = "".join(c for c in search if c.isalnum() or c in ("-", "_"))[:20]
+        filename = f"Columbia_Search_{safe_q}.xlsx"
+
+    return Response(
+        content=excel_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        }
+    )
+
+@router.post("/export-excel")
+async def export_catalog_excel_post(req: ExportExcelRequest):
+    """
+    Bulk Excel export supporting specific selected family IDs or search results.
+    """
+    products = []
+    if req.family_ids:
+        for fid in req.family_ids:
+            fam = catalog_service.get_family_by_id(fid)
+            if fam:
+                products.append(fam)
+    elif req.search:
+        res = catalog_service.paginate_catalog(page=1, page_size=req.limit or 500, search=req.search)
+        products = res.get("products", [])
+    else:
+        res = catalog_service.paginate_catalog(page=1, page_size=req.limit or 500)
+        products = res.get("products", [])
+
+    excel_bytes = generate_catalog_excel(products)
+    filename = "Columbia_Product_Export.xlsx"
+    return Response(
+        content=excel_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        }
+    )
+
 @router.get("/{family_id}", response_model=ProductFamily)
 async def get_product_details(family_id: str):
     """

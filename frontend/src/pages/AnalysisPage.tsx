@@ -27,6 +27,7 @@ import {
   Minimize2,
 } from "lucide-react";
 import analyticsService from "../services/analyticsService";
+import bundleService from "../services/bundleService";
 import {
   AnalyticsProductRow,
   ProductPriceHistoryResponse,
@@ -41,7 +42,7 @@ export const AnalysisPage: React.FC = () => {
   const [totalRecords, setTotalRecords] = useState<number>(0);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [totalPages, setTotalPages] = useState<number>(1);
-  const [pageSize] = useState<number>(20);
+  const [pageSize, setPageSize] = useState<number>(10);
   const [isLoadingList, setIsLoadingList] = useState<boolean>(true);
 
   const [searchTerm, setSearchTerm] = useState<string>("");
@@ -124,7 +125,44 @@ export const AnalysisPage: React.FC = () => {
 
   const loadProductList = async (pageToLoad: number = 1) => {
     setIsLoadingList(true);
+
+    const isDefault =
+      pageToLoad === 1 &&
+      !searchTerm.trim() &&
+      category === "All" &&
+      platform === "All" &&
+      sortBy === "price_change";
+
+    // Instant bootstrap via pre-warmed bundle
+    if (isDefault) {
+      const cached = bundleService.getCachedBundle();
+      if (cached && cached.analytics && cached.analytics.products?.length > 0) {
+        const items = cached.analytics.products;
+        setProducts(items);
+        setTotalRecords(cached.analytics.total_records);
+        setTotalPages(cached.analytics.total_pages);
+        setCurrentPage(cached.analytics.page || 1);
+        setIsLoadingList(false);
+        selectInlineProduct(items[0], selectedRange);
+        return;
+      }
+    }
+
     try {
+      if (isDefault) {
+        const bundle = await bundleService.getBundle();
+        if (bundle && bundle.analytics && bundle.analytics.products?.length > 0) {
+          const items = bundle.analytics.products;
+          setProducts(items);
+          setTotalRecords(bundle.analytics.total_records);
+          setTotalPages(bundle.analytics.total_pages);
+          setCurrentPage(bundle.analytics.page || 1);
+          setIsLoadingList(false);
+          selectInlineProduct(items[0], selectedRange);
+          return;
+        }
+      }
+
       const data = await analyticsService.getProducts({
         search: searchTerm.trim() || undefined,
         category: category !== "All" ? category : undefined,

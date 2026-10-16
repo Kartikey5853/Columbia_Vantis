@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import productService from "../services/productService";
 import uploadService from "../services/uploadService";
+import bundleService from "../services/bundleService";
 import { ProductFamilySummary, PlatformListing } from "../types";
 import PlatformLogo from "../components/brand/PlatformLogo";
 import BulkSearchModal from "../components/layout/BulkSearchModal";
@@ -45,6 +46,7 @@ export const HomePage: React.FC = () => {
   const [hasSearched, setHasSearched] = useState(false);
   const [results, setResults] = useState<ProductFamilySummary[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [expandedCardId, setExpandedCardId] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<string>("relevance");
 
@@ -70,7 +72,22 @@ export const HomePage: React.FC = () => {
         // Fallback default to showing search if configured in codebase
         setHasMasterExcel(true);
       });
+
+    // Background pre-warm system bundle for instant tabs navigation
+    bundleService.getBundle().catch(() => {});
   }, []);
+
+  const handleExportExcel = async () => {
+    if (results.length === 0) return;
+    setIsExporting(true);
+    try {
+      await productService.exportSelectedExcel(results.map((r) => r.family_id));
+    } catch (err) {
+      console.error("Failed to export search results to Excel:", err);
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   const handleSearch = async (queryToSearch?: string) => {
     const q = queryToSearch !== undefined ? queryToSearch : searchTerm;
@@ -327,21 +344,39 @@ export const HomePage: React.FC = () => {
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-2 self-end sm:self-auto">
-                    <span className="text-xs text-slate-500 font-medium">Sort by</span>
-                    <div className="relative">
-                      <select
-                        value={sortBy}
-                        onChange={(e) => setSortBy(e.target.value)}
-                        className="appearance-none bg-white border border-slate-200 rounded-xl px-3 py-1.5 pr-8 text-xs font-semibold text-slate-700 hover:border-slate-300 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all cursor-pointer"
-                      >
-                        <option value="relevance">Relevance</option>
-                        <option value="name">Product Name</option>
-                        <option value="price_asc">Lowest Listed Price</option>
-                        <option value="price_desc">Highest Listed Price</option>
-                        <option value="variants">Variant Count</option>
-                      </select>
-                      <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <div className="flex items-center gap-3 self-end sm:self-auto">
+                    {/* Export to Excel (Visible only AFTER searching with results) */}
+                    <button
+                      type="button"
+                      onClick={handleExportExcel}
+                      disabled={isExporting || sortedResults.length === 0}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-2xs cursor-pointer"
+                      title="Export search results to multi-sheet Excel"
+                    >
+                      {isExporting ? (
+                        <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      ) : (
+                        <FileSpreadsheet className="w-4 h-4 shrink-0" />
+                      )}
+                      <span>{isExporting ? "Exporting..." : `Export (${sortedResults.length}) to Excel`}</span>
+                    </button>
+
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-slate-500 font-medium">Sort by</span>
+                      <div className="relative">
+                        <select
+                          value={sortBy}
+                          onChange={(e) => setSortBy(e.target.value)}
+                          className="appearance-none bg-white border border-slate-200 rounded-xl px-3 py-1.5 pr-8 text-xs font-semibold text-slate-700 hover:border-slate-300 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all cursor-pointer"
+                        >
+                          <option value="relevance">Relevance</option>
+                          <option value="name">Product Name</option>
+                          <option value="price_asc">Lowest Listed Price</option>
+                          <option value="price_desc">Highest Listed Price</option>
+                          <option value="variants">Variant Count</option>
+                        </select>
+                        <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -428,12 +463,17 @@ export const HomePage: React.FC = () => {
                             <div className="flex items-center justify-between md:justify-end gap-6 pt-3 md:pt-0 border-t md:border-t-0 border-slate-100 shrink-0">
                               <div className="text-left md:text-right">
                                 <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
-                                  MRP
+                                  Lowest Price
                                 </span>
                                 <div className="flex items-baseline gap-2">
                                   <span className="text-2xl font-black text-slate-900">
-                                    ₹{(product.mrp || product.lowest_price).toLocaleString("en-IN")}
+                                    {product.lowest_price ? `₹${product.lowest_price.toLocaleString("en-IN")}` : (product.mrp ? `₹${product.mrp.toLocaleString("en-IN")}` : "—")}
                                   </span>
+                                  {product.mrp && product.lowest_price && product.mrp > product.lowest_price && (
+                                    <span className="text-xs font-mono text-slate-400 line-through">
+                                      ₹{product.mrp.toLocaleString("en-IN")}
+                                    </span>
+                                  )}
                                 </div>
                               </div>
 

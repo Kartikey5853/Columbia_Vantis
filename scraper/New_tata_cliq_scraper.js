@@ -421,42 +421,6 @@
                 });
             }
 
-            // Extract EMI eligibility directly from detail
-            if (detail?.isEMIEligible === "Y") {
-                offers.push({
-                    kind: "emi",
-                    code: null,
-                    title: "Tata CLiQ Credit Card EMI",
-                    description: "Avail EMI options starting from ₹150/mo on major credit cards.",
-                    offer_price: null,
-                    issuer: "Major Indian Banks",
-                    card_type: "Credit Card",
-                    payment_network: null,
-                    discount_percent: null,
-                    discount_amount: null,
-                    minimum_transaction_amount: 2500,
-                    maximum_discount: null,
-                    validity: "Ongoing Offer"
-                });
-            }
-
-            // NeuCard 5% offer
-            offers.push({
-                kind: "card_offer",
-                code: "NEUCARD_5",
-                title: "Tata Neu HDFC Bank Credit Card",
-                description: "Earn 5% NeuCoins on Tata Neu HDFC Bank Credit Card transactions.",
-                offer_price: currentSellingPrice ? Math.round(currentSellingPrice * 0.95) : null,
-                issuer: "HDFC Bank",
-                card_type: "Tata Neu Credit Card",
-                payment_network: "RuPay / Visa",
-                discount_percent: 5,
-                discount_amount: currentSellingPrice ? Math.round(currentSellingPrice * 0.05) : null,
-                minimum_transaction_amount: 500,
-                maximum_discount: null,
-                validity: "Ongoing Offer"
-            });
-
             return offers;
         }
         catch (error) {

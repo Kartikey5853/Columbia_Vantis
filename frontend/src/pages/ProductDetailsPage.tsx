@@ -583,11 +583,15 @@ export const ProductDetailsPage: React.FC = () => {
                 <span className="text-2xl sm:text-3xl font-black text-slate-900">
                   {activePrice != null ? `₹${activePrice.toLocaleString("en-IN")}` : "—"}
                 </span>
-                {activeMrp && (
+                {activeMrp && activePrice && activeMrp > activePrice ? (
+                  <span className="text-sm font-mono text-slate-400 line-through">
+                    MRP: ₹{activeMrp.toLocaleString("en-IN")}
+                  </span>
+                ) : activeMrp ? (
                   <span className="text-xs font-bold text-slate-400">
                     MRP: ₹{activeMrp.toLocaleString("en-IN")}
                   </span>
-                )}
+                ) : null}
                 {activeDiscountPct > 0 && (
                   <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-extrabold rounded-md">
                     {activeDiscountPct}% OFF
@@ -1090,7 +1094,13 @@ export const ProductDetailsPage: React.FC = () => {
                             {card.price ? `₹${card.price.toLocaleString("en-IN")}` : "—"}
                           </td>
                           <td className="py-3.5 px-4 font-mono text-slate-500">
-                            {card.mrp ? `₹${card.mrp.toLocaleString("en-IN")}` : "—"}
+                            {card.mrp ? (
+                              card.price && card.mrp > card.price ? (
+                                <span className="text-slate-400 line-through">₹{card.mrp.toLocaleString("en-IN")}</span>
+                              ) : (
+                                <span>₹{card.mrp.toLocaleString("en-IN")}</span>
+                              )
+                            ) : "—"}
                           </td>
                           <td className="py-3.5 px-4 text-right">
                             {card.url ? (

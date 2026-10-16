@@ -13,6 +13,33 @@ router = APIRouter(prefix="/api/system", tags=["System Status & Monitoring"])
 
 _START_TIME = time.time()
 
+@router.get("/bundle")
+async def get_system_bundle():
+    """
+    Returns single initial bundle containing:
+    1. 10 base catalog products (canonical families with highest platform counts)
+    2. 10 data analysis products (with verified live Supabase price changes)
+    3. System status summary, scrapers list, servers list
+    4. Categories and genders filters
+    Provides instantaneous initial render with zero lag and zero spinners.
+    """
+    catalog_res = catalog_service.paginate_catalog(page=1, page_size=10)
+    analytics_res = catalog_service.get_analytics_products(page=1, page_size=10)
+    summary_data = await get_system_summary()
+    scrapers_data = await get_scrapers_status()
+    servers_data = await get_servers_status()
+
+    return {
+        "status": "ready",
+        "catalog": catalog_res,
+        "analytics": analytics_res,
+        "system": {
+            "summary": summary_data,
+            "scrapers": scrapers_data.get("scrapers", []),
+            "servers": servers_data.get("servers", [])
+        }
+    }
+
 @router.get("/summary", response_model=SystemStatusSummary)
 async def get_system_summary():
     running = 1 if is_pipeline_running() else 0

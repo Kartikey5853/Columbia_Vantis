@@ -4,6 +4,7 @@ import { Eye, EyeOff, Lock, User as UserIcon } from "lucide-react";
 import VantisLogo from "../components/brand/VantisLogo";
 import SplashScreen from "../components/layout/SplashScreen";
 import authService from "../services/authService";
+import bundleService from "../services/bundleService";
 
 export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
@@ -26,6 +27,8 @@ export const LoginPage: React.FC = () => {
 
     try {
       await authService.login(username, password, rememberMe);
+      // Pre-warm bundle in background for instant UI rendering
+      bundleService.getBundle().catch(() => {});
       // Pass state to show splash loading screen
       navigate("/home", { state: { justLoggedIn: true } });
     } catch (err: any) {

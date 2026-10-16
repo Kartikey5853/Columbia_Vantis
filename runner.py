@@ -715,26 +715,21 @@ async def scrape_columbia(
                             )
                         )
 
-                    # Compute Columbia Snapmint & Card EMI offers
+                    # Real Columbia offers: check for promo tags, compare_at discounts or scraped offers
                     columbia_offers = []
-                    curr_p = min_price or 0.0
-                    if curr_p >= 1000:
+                    raw_offers = p.get("offers") or []
+                    if raw_offers:
+                        columbia_offers = [normalize_offer(o, "columbia") for o in raw_offers]
+                    elif min_price and max_mrp and max_mrp > min_price:
+                        disc_amt = round(max_mrp - min_price, 2)
+                        disc_pct = round(((max_mrp - min_price) / max_mrp) * 100)
                         columbia_offers.append(normalize_offer({
-                            "code": "SNAPMINT_3EMI",
-                            "title": "3 Interest-Free EMIs via Snapmint (No Cost)",
-                            "kind": "emi",
-                            "discount_percent": None,
-                            "minimum_transaction_amount": 1000.0,
-                            "issuer": "Snapmint"
-                        }, "columbia"))
-                    if curr_p >= 3000:
-                        columbia_offers.append(normalize_offer({
-                            "code": "BANK_EMI",
-                            "title": "Credit Card EMI Available (3, 6, 9, 12 Months)",
-                            "kind": "emi",
-                            "discount_percent": None,
-                            "minimum_transaction_amount": 3000.0,
-                            "issuer": "Major Banks"
+                            "code": f"COLUMBIA_SAVE_{disc_pct}",
+                            "title": f"Online Discount ({disc_pct}% Off - Save ₹{disc_amt:,.0f})",
+                            "kind": "discount",
+                            "discount_percent": disc_pct,
+                            "discount_amount": disc_amt,
+                            "issuer": "Columbia India"
                         }, "columbia"))
 
                     norm_chunk.append(
@@ -961,26 +956,21 @@ def normalize_shopify_product(prod_data: Dict[str, Any]) -> NormalizedProduct:
             )
         )
 
-    # Compute Adventuras Snapmint & Card EMI offers
+    # Genuine Adventuras offers (e.g. store discounts where compare_at_price > price)
     adv_offers = []
-    curr_p = min_price or 0.0
-    if curr_p >= 1000:
+    raw_offers = item.get("offers") or []
+    if raw_offers:
+        adv_offers = [normalize_offer(o, "adv") for o in raw_offers]
+    elif min_price and max_mrp and max_mrp > min_price:
+        disc_amt = round(max_mrp - min_price, 2)
+        disc_pct = round(((max_mrp - min_price) / max_mrp) * 100)
         adv_offers.append(normalize_offer({
-            "code": "SNAPMINT_3EMI",
-            "title": "3 Interest-Free EMIs via Snapmint (No Cost)",
-            "kind": "emi",
-            "discount_percent": 0.0,
-            "minimum_transaction_amount": 1000.0,
-            "issuer": "Snapmint"
-        }, "adv"))
-    if curr_p >= 3000:
-        adv_offers.append(normalize_offer({
-            "code": "RAZORPAY_EMI",
-            "title": "Credit Card Low-Cost EMI starting from 3 Months",
-            "kind": "card_offer",
-            "discount_percent": 0.0,
-            "minimum_transaction_amount": 3000.0,
-            "issuer": "Razorpay"
+            "code": f"ADV_SAVE_{disc_pct}",
+            "title": f"Adventuras Store Discount ({disc_pct}% Off - Save ₹{disc_amt:,.0f})",
+            "kind": "discount",
+            "discount_percent": disc_pct,
+            "discount_amount": disc_amt,
+            "issuer": "Adventuras"
         }, "adv"))
 
     return NormalizedProduct(
@@ -1235,24 +1225,19 @@ async def scrape_adv(
                             )
 
                         adv_offers = []
-                        curr_p = min_price or 0.0
-                        if curr_p >= 1000:
+                        raw_offers = p.get("offers") or []
+                        if raw_offers:
+                            adv_offers = [normalize_offer(o, "adv") for o in raw_offers]
+                        elif min_price and max_mrp and max_mrp > min_price:
+                            disc_amt = round(max_mrp - min_price, 2)
+                            disc_pct = round(((max_mrp - min_price) / max_mrp) * 100)
                             adv_offers.append(normalize_offer({
-                                "code": "SNAPMINT_3EMI",
-                                "title": "Pay in 3 with Snapmint (0% Interest)",
-                                "kind": "emi",
-                                "discount_percent": None,
-                                "minimum_transaction_amount": 1000.0,
-                                "issuer": "Snapmint"
-                            }, "adv"))
-                        if curr_p >= 3000:
-                            adv_offers.append(normalize_offer({
-                                "code": "BANK_EMI",
-                                "title": "Credit Card EMI Available (3, 6, 9, 12 Months)",
-                                "kind": "emi",
-                                "discount_percent": None,
-                                "minimum_transaction_amount": 3000.0,
-                                "issuer": "Major Banks"
+                                "code": f"ADV_SAVE_{disc_pct}",
+                                "title": f"Adventuras Store Discount ({disc_pct}% Off - Save ₹{disc_amt:,.0f})",
+                                "kind": "discount",
+                                "discount_percent": disc_pct,
+                                "discount_amount": disc_amt,
+                                "issuer": "Adventuras"
                             }, "adv"))
 
                         norm_products.append(
@@ -2512,25 +2497,7 @@ def normalize_amazon_product(raw_p: Dict[str, Any]) -> NormalizedProduct:
 
     raw_offers = raw_p.get("offers") or []
     norm_offers = [normalize_offer(o, platform="amazon") for o in raw_offers] if raw_offers else []
-    if not norm_offers and (p_num or 0) > 0:
-        curr_ap = p_num or 0.0
-        norm_offers.append(normalize_offer({
-            "code": "AMZ_ICICI_5",
-            "title": "5% Unlimited Cashback with Amazon Pay ICICI Bank Credit Card",
-            "kind": "card_offer",
-            "discount_percent": 5.0,
-            "minimum_transaction_amount": 500.0,
-            "issuer": "ICICI Bank"
-        }, platform="amazon"))
-        if curr_ap >= 3000:
-            norm_offers.append(normalize_offer({
-                "code": "AMZ_NO_COST_EMI",
-                "title": "No Cost EMI available on select cards",
-                "kind": "emi",
-                "discount_percent": 0.0,
-                "minimum_transaction_amount": 3000.0,
-                "issuer": "Major Banks"
-            }, platform="amazon"))
+    # If no genuine coupon/offer is present on Amazon card/listing, norm_offers remains empty []
 
     return NormalizedProduct(
         source="amazon",

@@ -26,3 +26,12 @@ frontend/image/download-*
 reports/
 *REPORT*.md
 *report*.md
+*.xlsx
+*.xls
+*.csv
+*catalog_cache*
+*price_history*
+*.sqlite
+*.sqlite3
+frontend/dist/
+*.log
