@@ -900,6 +900,11 @@ class CatalogService:
             conn.close()
 
     def load_catalog(self, force: bool = False):
+        from jobs import is_pipeline_running
+        if is_pipeline_running() and force:
+            print("[CATALOG_SERVICE] 🛑 Catalog force-reload suppressed because scrapers are currently running (saving RAM).", flush=True)
+            return
+
         if self.is_loaded and not force and self.total_count > 0:
             return
 

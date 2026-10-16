@@ -41,6 +41,12 @@ async def list_products(
 @router.post("/reload")
 async def reload_catalog():
     """Forces fresh re-index of catalog directly from Supabase."""
+    from jobs import is_pipeline_running
+    if is_pipeline_running():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The scrapers are currently running. To save RAM and ensure optimal performance, reloading or fetching new products is paused. Please wait around 1 hour for the scrapers to complete."
+        )
     catalog_service.load_catalog(force=True)
     return {
         "status": "success",

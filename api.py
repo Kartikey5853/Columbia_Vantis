@@ -63,6 +63,51 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+SCRAPING_RUNNING_MESSAGE = (
+    "The scrapers are currently running. To save RAM, fetching new products or heavy catalog operations "
+    "are paused. Please wait for around 1 hour until the scrapers complete."
+)
+
+@app.middleware("http")
+async def ram_protection_middleware(request: Request, call_next):
+    # Only intercept if scrapers are actively running
+    if is_pipeline_running():
+        path = request.url.path
+
+        # Whitelist critical operations:
+        # 1. Login, user authentication, and profile endpoints
+        # 2. Health and keepalive probes
+        # 3. Scraper monitoring and control endpoints (status, stop, reset)
+        # 4. OpenAPI / Docs
+        is_auth_route = path.startswith("/api/auth") or path.startswith("/api/profile") or path.startswith("/api/avatars")
+        is_health_route = path in ("/health", "/healthz", "/api/health")
+        is_scraper_control = path.startswith("/scrape") or path in ("/trigger", "/deploy-trigger", "/uptime-trigger", "/cron/trigger", "/cron/uptime-trigger")
+        is_docs_route = path in ("/docs", "/openapi.json", "/redoc")
+        is_system_monitoring = path in ("/api/system/scrapers", "/api/system/servers", "/api/system/recent-runs")
+
+        # Block heavy product/catalog fetch endpoints that strain RAM during scraping
+        is_blocked_product_fetch = (
+            path.startswith("/api/products") or
+            path.startswith("/api/analytics") or
+            path.startswith("/api/master-data/upload")
+        )
+
+        if is_blocked_product_fetch and not (is_auth_route or is_health_route or is_scraper_control or is_docs_route or is_system_monitoring):
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "scrapers_running",
+                    "error": "Service Temporarily Unavailable",
+                    "detail": SCRAPING_RUNNING_MESSAGE,
+                    "message": SCRAPING_RUNNING_MESSAGE,
+                    "pipeline_running": True,
+                    "retry_after_seconds": 3600
+                }
+            )
+
+    response = await call_next(request)
+    return response
+
 from app.api.auth import router as auth_router
 from app.api.products import router as products_router
 from app.api.analytics import router as analytics_router
