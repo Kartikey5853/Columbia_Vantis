@@ -263,7 +263,6 @@ class CatalogService:
             "record_count": 0,
             "last_updated": None
         }
-        self.supabase_cache: Dict[str, Any] = {}
         self.master_records: List[Dict[str, Any]] = []
         self.master_pid_to_style: Dict[str, str] = {}
         self.master_pid_to_record: Dict[str, Dict[str, Any]] = {}
@@ -271,7 +270,7 @@ class CatalogService:
         self.master_ean_to_style: Dict[str, str] = {}
         self.master_style_meta: Dict[str, Dict[str, Any]] = {}
         self.offers_lookup: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
-        self._load_master_mappings()
+        # Master mappings and catalog loading are lazy — never loaded on import or boot to save RAM
 
     def _load_master_mappings(self):
         """Loads canonical cross-platform SKU/Style/EAN/PID mappings from Master Excel JSON."""
@@ -533,8 +532,11 @@ class CatalogService:
 
         return None
 
-    def _fetch_from_supabase(self) -> List[Tuple[str, Dict[str, Any]]]:
-        """Fetches all scraped products from Supabase directly via PostgREST."""
+    def _fetch_from_supabase(self, max_records: int = 10) -> List[Tuple[str, Dict[str, Any]]]:
+        """
+        Fetches at most max_records (default 10) products from Supabase directly via PostgREST.
+        Never dumps the entire database into memory.
+        """
         import httpx
         url = (os.getenv("SUPABASE_URL", "") or "https://viflznbwqrunivhfoavq.supabase.co").rstrip("/")
         sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
@@ -549,37 +551,30 @@ class CatalogService:
         headers = {"apikey": key, "Authorization": f"Bearer {key}"}
         records = []
         try:
-            with httpx.Client(timeout=30.0) as client:
+            with httpx.Client(timeout=15.0) as client:
                 r_sc = client.get(f"{url}/rest/v1/scrapers?select=id,name,source", headers=headers)
                 s_map = {}
                 if r_sc.status_code == 200:
                     s_map = {s["id"]: s["name"] for s in r_sc.json()}
 
-                offset = 0
-                limit = 1000
-                while True:
-                    r = client.get(
-                        f"{url}/rest/v1/products",
-                        params={
-                            "select": "id,scraper_id,source_product_id,title,style,sku,ean,current_price,current_mrp,stock,image_url,url,available,variants,offers",
-                            "limit": limit,
-                            "offset": offset
-                        },
-                        headers=headers
-                    )
-                    if r.status_code != 200:
-                        break
-                    batch = r.json()
-                    if not batch:
-                        break
+                # Fetch strictly up to max_records (e.g. 10) to protect RAM
+                r = client.get(
+                    f"{url}/rest/v1/products",
+                    params={
+                        "select": "id,scraper_id,source_product_id,title,style,sku,ean,current_price,current_mrp,stock,image_url,url,available,variants,offers",
+                        "limit": max_records,
+                        "order": "created_at.desc"
+                    },
+                    headers=headers
+                )
+                if r.status_code == 200:
+                    batch = r.json() or []
                     for p in batch:
                         sc_id = p.get("scraper_id")
                         plat_key = s_map.get(sc_id) or "columbia"
                         records.append((plat_key, p))
-                    offset += len(batch)
-                    if len(batch) < limit:
-                        break
-            print(f"[CATALOG_SERVICE] [SUPABASE] Successfully fetched {len(records)} products from live Supabase database.", flush=True)
+
+            print(f"[CATALOG_SERVICE] [SUPABASE] Fetched {len(records)} products from live Supabase database (RAM safe limit: {max_records}).", flush=True)
             return records
         except Exception as e:
             print(f"[CATALOG_SERVICE] ⚠️ Error fetching products from Supabase: {e}", flush=True)
