@@ -269,6 +269,7 @@ class CatalogService:
         self.master_sku_to_style: Dict[str, str] = {}
         self.master_ean_to_style: Dict[str, str] = {}
         self.master_style_meta: Dict[str, Dict[str, Any]] = {}
+        self.supabase_cache: Dict[str, Any] = {}
         self.offers_lookup: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
         # Master mappings and catalog loading are lazy — never loaded on import or boot to save RAM
 
@@ -906,6 +907,18 @@ class CatalogService:
         start_time = time.time()
         self.db_path = DATA_DIR / "catalog_cache.db"
         cache_file = DATA_DIR / "supabase_catalog_cache.json"
+
+        # 0. Fast path: Extract pre-built catalog_cache.db from zip if db not found on disk
+        zip_path = DATA_DIR / "catalog_cache.zip"
+        if not force and not self.db_path.exists() and zip_path.exists():
+            try:
+                import zipfile
+                print(f"[CATALOG_SERVICE] Extracting bundled {zip_path.name} to {self.db_path.name}...", flush=True)
+                with zipfile.ZipFile(zip_path, "r") as zf:
+                    zf.extractall(DATA_DIR)
+                print(f"[CATALOG_SERVICE] Successfully extracted {self.db_path.name}.", flush=True)
+            except Exception as ze:
+                print(f"[CATALOG_SERVICE] ⚠️ Could not extract {zip_path.name}: {ze}", flush=True)
 
         # 1. Fast path: SQLite database already exists and has records
         if not force and self.db_path.exists():
@@ -1869,6 +1882,16 @@ class CatalogService:
         if not self.is_loaded or self.total_count == 0:
             self.load_catalog()
 
+        # Lazily load verified historical price cache if not in memory
+        if not self.supabase_cache:
+            cache_path = BASE_DIR / "data" / "supabase_price_history_cache.json"
+            if cache_path.exists():
+                try:
+                    with open(cache_path, "r", encoding="utf-8") as f:
+                        self.supabase_cache = json.load(f)
+                except Exception as e:
+                    print(f"[CATALOG_SERVICE] [WARN] Failed to load Supabase price cache: {e}", flush=True)
+
         # If no verified historical cache exists, return empty analytics list
         if not self.supabase_cache:
             return {
@@ -2007,6 +2030,15 @@ class CatalogService:
             return None
 
         lowest = fam["lowest_price"]
+        if not self.supabase_cache:
+            cache_path = BASE_DIR / "data" / "supabase_price_history_cache.json"
+            if cache_path.exists():
+                try:
+                    with open(cache_path, "r", encoding="utf-8") as f:
+                        self.supabase_cache = json.load(f)
+                except Exception as e:
+                    print(f"[CATALOG_SERVICE] [WARN] Failed to load Supabase price cache: {e}", flush=True)
+
         c_data = self.supabase_cache.get(family_id)
 
         # Real historical checkpoints from actual database runs

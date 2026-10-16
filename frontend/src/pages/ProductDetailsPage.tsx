@@ -505,9 +505,16 @@ export const ProductDetailsPage: React.FC = () => {
                               : "bg-slate-300"
                           }`}
                         />
-                        <span className={`font-semibold ${isAvailable ? "text-slate-700" : "text-slate-400"}`}>
-                          {isAvailable ? `₹${plat.price?.toLocaleString("en-IN")}` : "No data"}
-                        </span>
+                        <div className="flex items-baseline gap-1.5 flex-wrap">
+                          <span className={`font-black text-xs ${isAvailable ? "text-slate-900" : "text-slate-400"}`}>
+                            {isAvailable && plat.price ? `₹${plat.price.toLocaleString("en-IN")}` : "No data"}
+                          </span>
+                          {isAvailable && plat.mrp && plat.mrp > (plat.price || 0) && (
+                            <span className="text-[10px] font-mono text-slate-400 line-through">
+                              ₹{plat.mrp.toLocaleString("en-IN")}
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </button>
