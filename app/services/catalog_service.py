@@ -581,6 +581,353 @@ class CatalogService:
             print(f"[CATALOG_SERVICE] ⚠️ Error fetching products from Supabase: {e}", flush=True)
             return []
 
+    def _format_supabase_product_summary(self, p: Dict[str, Any], id_to_scraper: Dict[str, str]) -> Dict[str, Any]:
+        pid = str(p.get("id"))
+        title = str(p.get("title") or "Columbia Product")
+        style = p.get("style") or extract_style_code(title, p.get("sku") or "", p.get("url") or "", p.get("source_product_id"))
+        sku = p.get("sku") or style or ""
+        ean = p.get("ean") or ""
+        cat = detect_category(title)
+        gen = detect_gender(title)
+        tags = detect_tags(title, cat, gen)
+
+        price = clean_price(p.get("current_price")) or 0.0
+        mrp = clean_price(p.get("current_mrp"))
+        if mrp is None or mrp < price:
+            mrp = price
+        disc = round(((mrp - price) / mrp) * 100, 1) if (mrp and price and mrp > price) else 0.0
+
+        sc_id = p.get("scraper_id")
+        plat_key = id_to_scraper.get(sc_id) or "columbia"
+
+        variants = p.get("variants") or []
+        sizes = sorted(list(set(str(v.get("size")) for v in variants if v.get("size"))))
+
+        all_plats = ["columbia", "amazon", "tata", "tata_lux", "adv", "myntra", "ajio"]
+        plat_listings = []
+        for pk in all_plats:
+            pm = PLATFORM_METADATA.get(pk, {})
+            if pk == plat_key:
+                plat_listings.append({
+                    "platform": pk,
+                    "platform_name": pm.get("name", pk.title()),
+                    "platform_key": pk,
+                    "logo_key": pk,
+                    "product_id": str(p.get("source_product_id") or pid),
+                    "listing_title": title,
+                    "url": p.get("url") or "",
+                    "image_url": p.get("image_url"),
+                    "price": price if price > 0 else None,
+                    "mrp": mrp if mrp > 0 else None,
+                    "price_difference": (mrp - price) if (mrp and price and mrp > price) else 0.0,
+                    "availability_status": "In stock" if p.get("available") else "Out of stock",
+                    "stock_text": str(p.get("stock")) if p.get("stock") is not None else None,
+                    "sizes_available_count": len(sizes),
+                    "sizes_summary": ", ".join(sizes[:4]) if sizes else "Standard",
+                    "offers": p.get("offers") or [],
+                    "variants": variants,
+                    "last_updated": p.get("updated_at") or p.get("created_at")
+                })
+            else:
+                plat_listings.append({
+                    "platform": pk,
+                    "platform_name": pm.get("name", pk.title()),
+                    "platform_key": pk,
+                    "logo_key": pk,
+                    "product_id": "",
+                    "listing_title": "",
+                    "url": "",
+                    "image_url": None,
+                    "price": None,
+                    "mrp": None,
+                    "price_difference": None,
+                    "availability_status": "Out of stock",
+                    "stock_text": None,
+                    "sizes_available_count": 0,
+                    "sizes_summary": "—",
+                    "offers": [],
+                    "variants": [],
+                    "last_updated": None
+                })
+
+        return {
+            "family_id": pid,
+            "title": title,
+            "brand": "Columbia",
+            "style": style,
+            "ean": ean,
+            "sku": sku,
+            "category": cat,
+            "gender": gen,
+            "tags": tags,
+            "image_url": p.get("image_url"),
+            "lowest_price": price,
+            "mrp": mrp,
+            "discount_percent": disc,
+            "variants_count": len(variants),
+            "sizes_count": len(sizes),
+            "platforms_count": 1,
+            "colours_count": 1,
+            "platforms": plat_listings
+        }
+
+    def _get_family_from_supabase_live(self, family_id: str) -> Optional[Dict[str, Any]]:
+        import httpx
+        url = (os.getenv("SUPABASE_URL", "") or "https://viflznbwqrunivhfoavq.supabase.co").rstrip("/")
+        sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "sb_secret_wgDvOA3l28p2d2jzH5euRg_mgqeBpLF"
+        if not url or not sec_key:
+            return None
+
+        headers = {"apikey": sec_key, "Authorization": f"Bearer {sec_key}"}
+        scraper_map = {
+            "a932ee85-9042-4fd1-b968-390f1a06a5c8": "columbia",
+            "39aad488-ced1-4c66-846a-3a10187ef5cf": "amazon",
+            "af31b92e-29b3-4532-a303-5dc3c3e4a6b9": "tata",
+            "7bb65f75-0fde-4432-94d0-f396e961713a": "tata_lux",
+            "5803d66c-f054-40a4-9556-cb1393b8c6e3": "adv",
+            "da9da872-910d-4b62-8966-253c4cae9bc3": "myntra",
+            "597a2ed9-be23-442a-9360-9fb84a39b4ef": "ajio"
+        }
+
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                rows = []
+                r = client.get(f"{url}/rest/v1/products?id=eq.{family_id}", headers=headers)
+                if r.status_code == 200 and r.json():
+                    rows = r.json()
+                elif family_id.startswith("STYLE_"):
+                    st = family_id.replace("STYLE_", "").strip()
+                    r2 = client.get(f"{url}/rest/v1/products?style=eq.{st}", headers=headers)
+                    if r2.status_code == 200 and r2.json():
+                        rows = r2.json()
+                else:
+                    r3 = client.get(f"{url}/rest/v1/products?source_product_id=eq.{family_id}", headers=headers)
+                    if r3.status_code == 200 and r3.json():
+                        rows = r3.json()
+
+                if not rows:
+                    return None
+
+                main_p = rows[0]
+                pid = str(main_p.get("id"))
+                title = str(main_p.get("title") or "Columbia Product")
+                style = main_p.get("style") or extract_style_code(title, main_p.get("sku") or "", main_p.get("url") or "", main_p.get("source_product_id"))
+                sku = main_p.get("sku") or style or ""
+                ean = main_p.get("ean") or ""
+                cat = detect_category(title)
+                gen = detect_gender(title)
+                tags = detect_tags(title, cat, gen)
+
+                all_plats = ["columbia", "amazon", "tata", "tata_lux", "adv", "myntra", "ajio"]
+                plat_listings = []
+                all_prices = []
+                all_mrps = []
+                all_variants = []
+                all_sizes = set()
+                all_colors = set()
+
+                rows_by_plat = {}
+                for row in rows:
+                    pk = scraper_map.get(row.get("scraper_id")) or "columbia"
+                    rows_by_plat[pk] = row
+
+                for pk in all_plats:
+                    pm = PLATFORM_METADATA.get(pk, {})
+                    row = rows_by_plat.get(pk)
+                    if row:
+                        p_val = clean_price(row.get("current_price"))
+                        m_val = clean_price(row.get("current_mrp"))
+                        if p_val:
+                            all_prices.append(p_val)
+                        if m_val:
+                            all_mrps.append(m_val)
+                        v_list = row.get("variants") or []
+                        all_variants.extend(v_list)
+                        for v in v_list:
+                            if v.get("size"):
+                                all_sizes.add(str(v["size"]))
+                            if v.get("color"):
+                                all_colors.add(str(v["color"]))
+
+                        plat_listings.append({
+                            "platform": pk,
+                            "platform_name": pm.get("name", pk.title()),
+                            "platform_key": pk,
+                            "logo_key": pk,
+                            "product_id": str(row.get("source_product_id") or row.get("id")),
+                            "listing_title": row.get("title") or title,
+                            "url": row.get("url") or "",
+                            "image_url": row.get("image_url"),
+                            "price": p_val,
+                            "mrp": m_val,
+                            "price_difference": (m_val - p_val) if (m_val and p_val and m_val > p_val) else 0.0,
+                            "availability_status": "In stock" if row.get("available") else "Out of stock",
+                            "stock_text": str(row.get("stock")) if row.get("stock") is not None else None,
+                            "sizes_available_count": len([v for v in v_list if v.get("available")]),
+                            "sizes_summary": ", ".join([str(v["size"]) for v in v_list if v.get("size")][:4]) if v_list else "Standard",
+                            "offers": row.get("offers") or [],
+                            "variants": v_list,
+                            "last_updated": row.get("updated_at") or row.get("created_at")
+                        })
+                    else:
+                        plat_listings.append({
+                            "platform": pk,
+                            "platform_name": pm.get("name", pk.title()),
+                            "platform_key": pk,
+                            "logo_key": pk,
+                            "product_id": "",
+                            "listing_title": "",
+                            "url": "",
+                            "image_url": None,
+                            "price": None,
+                            "mrp": None,
+                            "price_difference": None,
+                            "availability_status": "Out of stock",
+                            "stock_text": None,
+                            "sizes_available_count": 0,
+                            "sizes_summary": "—",
+                            "offers": [],
+                            "variants": [],
+                            "last_updated": None
+                        })
+
+                lowest_price = min(all_prices) if all_prices else (clean_price(main_p.get("current_price")) or 0.0)
+                highest_mrp = max(all_mrps) if all_mrps else lowest_price
+                disc = round(((highest_mrp - lowest_price) / highest_mrp) * 100, 1) if highest_mrp > lowest_price else 0.0
+                active_plats = len([p for p in plat_listings if p["price"] is not None])
+
+                return {
+                    "family_id": family_id,
+                    "title": title,
+                    "brand": "Columbia",
+                    "style": style,
+                    "ean": ean,
+                    "sku": sku,
+                    "category": cat,
+                    "gender": gen,
+                    "tags": tags,
+                    "image_url": main_p.get("image_url"),
+                    "gallery_images": [main_p.get("image_url")] if main_p.get("image_url") else [],
+                    "lowest_price": lowest_price,
+                    "mrp": highest_mrp,
+                    "discount_percent": disc,
+                    "variants_count": len(all_variants),
+                    "sizes_count": len(all_sizes),
+                    "platforms_count": active_plats,
+                    "colours_count": len(all_colors) or 1,
+                    "variants": all_variants,
+                    "colors": sorted(list(all_colors)),
+                    "sizes": sorted(list(all_sizes)),
+                    "platforms": plat_listings,
+                    "data_freshness": main_p.get("updated_at") or main_p.get("created_at")
+                }
+        except Exception as e:
+            print(f"[CATALOG_SERVICE] Live Supabase get_family error: {e}", flush=True)
+            return None
+
+    def _paginate_from_supabase_live(
+        self,
+        page: int = 1,
+        page_size: int = 10,
+        search: Optional[str] = None,
+        category: Optional[str] = None,
+        gender: Optional[str] = None,
+        platform: Optional[str] = None,
+        min_price: Optional[float] = None,
+        max_price: Optional[float] = None,
+        sort_by: str = "relevance"
+    ) -> Optional[Dict[str, Any]]:
+        import httpx
+        url = (os.getenv("SUPABASE_URL", "") or "https://viflznbwqrunivhfoavq.supabase.co").rstrip("/")
+        sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "sb_secret_wgDvOA3l28p2d2jzH5euRg_mgqeBpLF"
+        if not url or not sec_key:
+            return None
+
+        headers = {
+            "apikey": sec_key,
+            "Authorization": f"Bearer {sec_key}",
+            "Prefer": "count=exact"
+        }
+        params: Dict[str, Any] = {
+            "select": "id,scraper_id,source_product_id,sku,ean,title,url,image_url,available,current_price,current_mrp,variants,style,stock,offers",
+            "title": "not.is.null",
+            "current_price": "not.is.null",
+            "limit": page_size,
+            "offset": max(0, (page - 1) * page_size)
+        }
+
+        scraper_map = {
+            "columbia": "a932ee85-9042-4fd1-b968-390f1a06a5c8",
+            "amazon": "39aad488-ced1-4c66-846a-3a10187ef5cf",
+            "tata": "af31b92e-29b3-4532-a303-5dc3c3e4a6b9",
+            "tata_lux": "7bb65f75-0fde-4432-94d0-f396e961713a",
+            "adv": "5803d66c-f054-40a4-9556-cb1393b8c6e3",
+            "myntra": "da9da872-910d-4b62-8966-253c4cae9bc3",
+            "ajio": "597a2ed9-be23-442a-9360-9fb84a39b4ef"
+        }
+
+        if platform and platform.lower() != "all":
+            p_key = platform.lower()
+            if p_key in scraper_map:
+                params["scraper_id"] = f"eq.{scraper_map[p_key]}"
+
+        if min_price is not None and max_price is not None:
+            params["and"] = f"(current_price.gte.{min_price},current_price.lte.{max_price})"
+        elif min_price is not None:
+            params["current_price"] = f"gte.{min_price}"
+        elif max_price is not None:
+            params["current_price"] = f"lte.{max_price}"
+
+        if search and search.strip():
+            q = search.strip()
+            params["or"] = f"(title.ilike.*{q}*,style.ilike.*{q}*,sku.ilike.*{q}*)"
+
+        if sort_by in ("price_asc", "price_low"):
+            params["order"] = "current_price.asc"
+        elif sort_by in ("price_desc", "price_high"):
+            params["order"] = "current_price.desc"
+        elif sort_by in ("name", "title"):
+            params["order"] = "title.asc"
+        else:
+            params["order"] = "created_at.desc"
+
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                r = client.get(f"{url}/rest/v1/products", params=params, headers=headers)
+                if r.status_code not in (200, 206):
+                    return None
+
+                cr = r.headers.get("content-range")
+                total_records = 0
+                if cr and "/" in cr:
+                    try:
+                        total_records = int(cr.split("/")[-1])
+                    except Exception:
+                        total_records = len(r.json())
+                else:
+                    total_records = len(r.json())
+
+                total_pages = max(1, math.ceil(total_records / page_size))
+                current_page = max(1, min(page, total_pages))
+
+                items = []
+                id_to_scraper = {v: k for k, v in scraper_map.items()}
+                for p in r.json():
+                    items.append(self._format_supabase_product_summary(p, id_to_scraper))
+
+                return {
+                    "total_records": total_records,
+                    "page": current_page,
+                    "page_size": page_size,
+                    "total_pages": total_pages,
+                    "categories": ["All", "Jackets", "Shoes & Boots", "Fleece", "Pants & Shorts", "Shirts", "Backpacks & Bags", "Accessories"],
+                    "genders": ["All", "Men", "Women", "Unisex", "Kids"],
+                    "products": items
+                }
+        except Exception as e:
+            print(f"[CATALOG_SERVICE] Live Supabase pagination error: {e}", flush=True)
+            return None
+
     def _get_connection(self):
         self.db_path = DATA_DIR / "catalog_cache.db"
         conn = sqlite3.connect(str(self.db_path), timeout=30.0, check_same_thread=False)
@@ -844,8 +1191,27 @@ class CatalogService:
             conn.close()
 
     def get_family_by_id(self, family_id: str) -> Optional[Dict[str, Any]]:
-        if not self.is_loaded or self.total_count == 0:
-            self.load_catalog()
+        # 1. Check local SQLite cache first if loaded
+        if self.is_loaded and self.total_count > 0:
+            conn = self._get_connection()
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT data_json FROM product_families WHERE family_id = ?", (family_id,))
+                row = cur.fetchone()
+                if row and row["data_json"]:
+                    return json.loads(row["data_json"])
+            except Exception:
+                pass
+            finally:
+                conn.close()
+
+        # 2. Live Supabase fetch by id or style
+        live_fam = self._get_family_from_supabase_live(family_id)
+        if live_fam:
+            return live_fam
+
+        # 3. Fallback: try loading SQLite catalog
+        self.load_catalog()
         conn = self._get_connection()
         try:
             cur = conn.cursor()
@@ -1733,6 +2099,22 @@ class CatalogService:
         max_price: Optional[float] = None,
         sort_by: str = "relevance"
     ) -> Dict[str, Any]:
+        # 1. Fetch 10 products directly from live Supabase database server
+        live_res = self._paginate_from_supabase_live(
+            page=page,
+            page_size=page_size,
+            search=search,
+            category=category,
+            gender=gender,
+            platform=platform,
+            min_price=min_price,
+            max_price=max_price,
+            sort_by=sort_by
+        )
+        if live_res is not None:
+            return live_res
+
+        # 2. Fallback to disk SQLite if live Supabase is temporarily unreachable
         if not self.is_loaded or self.total_count == 0:
             self.load_catalog()
 
@@ -1882,17 +2264,8 @@ class CatalogService:
         if not self.is_loaded or self.total_count == 0:
             self.load_catalog()
 
-        # Lazily load verified historical price cache if not in memory
-        if not self.supabase_cache:
-            cache_path = BASE_DIR / "data" / "supabase_price_history_cache.json"
-            if cache_path.exists():
-                try:
-                    with open(cache_path, "r", encoding="utf-8") as f:
-                        self.supabase_cache = json.load(f)
-                except Exception as e:
-                    print(f"[CATALOG_SERVICE] [WARN] Failed to load Supabase price cache: {e}", flush=True)
+        self._load_or_fetch_supabase_price_cache()
 
-        # If no verified historical cache exists, return empty analytics list
         if not self.supabase_cache:
             return {
                 "total_records": 0,
@@ -1903,97 +2276,89 @@ class CatalogService:
             }
 
         candidate_fids = list(self.supabase_cache.keys())
-        filtered = []
-        for fid in candidate_fids:
-            fam = self.get_family_by_id(fid)
-            if not fam:
-                continue
-            if category and category.lower() != "all" and fam.get("category", "").lower() != category.lower():
-                continue
-            if gender and gender.lower() != "all" and fam.get("gender", "").lower() != gender.lower():
-                continue
-            if platform and platform.lower() != "all":
-                has_plat = any(p["platform"] == platform.lower() and p["price"] is not None for p in fam.get("platforms", []))
-                if not has_plat:
-                    continue
-            if search and search.strip():
-                q = search.strip().lower()
-                if q not in fam.get("title", "").lower() and q not in str(fam.get("style", "")).lower() and q not in str(fam.get("sku", "")).lower():
-                    continue
-            filtered.append(fam)
-
-        # Enrich ONLY with verified historical selling price changes on a platform over time.
-        # Strict requirement: "nothing should be shown until we have data to prove that in one platform something changed"
-        # Cross-platform price differences (e.g. Amazon vs Columbia) DO NOT count.
-        # MRP differences DO NOT count. Only selling price / current_price changing on a platform counts.
         enriched = []
-        for p in filtered:
-            fid = p["family_id"]
-            lowest = p.get("lowest_price") or 0.0
+        for fid in candidate_fids:
+            c_data = self.supabase_cache.get(fid)
+            if not c_data:
+                continue
+            h_points = c_data.get("history_points") or []
+            if len(h_points) < 2:
+                continue
+
+            all_plats = set()
+            for pt in h_points:
+                for k in pt.keys():
+                    if k != "date":
+                        all_plats.add(k)
 
             has_hist_change = False
             pct = 0.0
             prev_price = None
             curr_price = None
             change_platform = None
-            min_p = lowest
-            max_p = lowest
+            min_p = c_data.get("lowest_price") or 0.0
+            max_p = c_data.get("lowest_price") or 0.0
             sparkline_points = []
 
-            c_data = self.supabase_cache.get(fid)
-            if c_data and c_data.get("history_points") and len(c_data["history_points"]) > 1:
-                # Check each platform individually for selling price movement over time
-                for plat_entry in p.get("platforms", []):
-                    plat_k = plat_entry["platform"]
-                    if platform and platform.lower() != "all" and plat_k != platform.lower():
-                        continue
+            for plat_k in all_plats:
+                if platform and platform.lower() != "all" and plat_k != platform.lower():
+                    continue
+                plat_prices = []
+                for pt in h_points:
+                    if plat_k in pt and pt[plat_k] is not None and pt[plat_k] > 0:
+                        plat_prices.append(float(pt[plat_k]))
+                if len(plat_prices) >= 2 and plat_prices[-1] != plat_prices[-2]:
+                    p_old = plat_prices[-2]
+                    p_new = plat_prices[-1]
+                    has_hist_change = True
+                    change_platform = plat_k
+                    prev_price = p_old
+                    curr_price = p_new
+                    pct = round(((p_new - p_old) / p_old) * 100, 1)
+                    min_p = min(plat_prices)
+                    max_p = max(plat_prices)
+                    sparkline_points = plat_prices
+                    break
 
-                    # Extract chronological recorded selling prices for this platform
-                    plat_hist_prices = []
-                    for pt in c_data["history_points"]:
-                        if plat_k in pt and pt[plat_k] is not None and isinstance(pt[plat_k], (int, float)) and pt[plat_k] > 0:
-                            plat_hist_prices.append(float(pt[plat_k]))
-
-                    if len(plat_hist_prices) >= 2 and len(set(plat_hist_prices)) > 1:
-                        # Verified selling price movement on this platform
-                        p_old = plat_hist_prices[-2]
-                        p_new = plat_hist_prices[-1]
-                        if p_old != p_new and p_old > 0:
-                            has_hist_change = True
-                            change_platform = plat_k
-                            prev_price = p_old
-                            curr_price = p_new
-                            pct = round(((p_new - p_old) / p_old) * 100, 1)
-                            min_p = min(plat_hist_prices)
-                            max_p = max(plat_hist_prices)
-                            sparkline_points = plat_hist_prices
-                            break
-
-            # STRICT RULE: Nothing should be shown until we have verified data proving a price change on a platform
             if not has_hist_change:
                 continue
 
+            fam = self.get_family_by_id(fid)
+            title = (fam.get("title") if fam else None) or c_data.get("title") or "Columbia Product"
+            cat = (fam.get("category") if fam else None) or c_data.get("category") or detect_category(title)
+            gen = (fam.get("gender") if fam else None) or c_data.get("gender") or detect_gender(title)
+            style = (fam.get("style") if fam else None) or (fid.replace("STYLE_", "") if fid.startswith("STYLE_") else c_data.get("style"))
+            img_url = (fam.get("image_url") if fam else None) or c_data.get("image_url")
+
+            if category and category.lower() != "all" and cat.lower() != category.lower():
+                continue
+            if gender and gender.lower() != "all" and gen.lower() != gender.lower():
+                continue
+            if search and search.strip():
+                q = search.strip().lower()
+                if q not in title.lower() and q not in str(style or "").lower():
+                    continue
+
             enriched.append({
-                "family_id": p["family_id"],
-                "title": p["title"],
-                "style": p["style"],
-                "ean": p["ean"],
-                "category": p["category"],
-                "gender": p["gender"],
-                "image_url": p["image_url"],
-                "lowest_price": curr_price or lowest,
+                "family_id": fid,
+                "title": title,
+                "style": style,
+                "ean": (fam.get("ean") if fam else None) or c_data.get("ean"),
+                "category": cat,
+                "gender": gen,
+                "image_url": img_url,
+                "lowest_price": curr_price or c_data.get("lowest_price") or 0.0,
                 "previous_price": prev_price,
                 "price_change_percent": pct,
                 "change_platform": change_platform,
                 "min_recorded_price": min_p,
                 "max_recorded_price": max_p,
-                "sparkline": sparkline_points or [curr_price or lowest],
-                "variants_count": p["variants_count"],
-                "sizes_count": p["sizes_count"],
-                "platforms_count": p["platforms_count"]
+                "sparkline": sparkline_points or [curr_price or 0.0],
+                "variants_count": (fam.get("variants_count") if fam else None) or c_data.get("variants_count") or 1,
+                "sizes_count": (fam.get("sizes_count") if fam else None) or c_data.get("sizes_count") or 1,
+                "platforms_count": (fam.get("platforms_count") if fam else None) or len(all_plats) or 1
             })
 
-        # Sorting logic: Real price movements and discrepancies first
         if sort_by == "price_change":
             enriched.sort(key=lambda x: abs(x["price_change_percent"]), reverse=True)
         elif sort_by == "price_drop":
@@ -2023,103 +2388,162 @@ class CatalogService:
             "products": paged_items
         }
 
+    def _load_or_fetch_supabase_price_cache(self):
+        if self.supabase_cache:
+            return
+        cache_path = BASE_DIR / "data" / "supabase_price_history_cache.json"
+        if cache_path.exists():
+            try:
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    self.supabase_cache = json.load(f)
+                    if self.supabase_cache:
+                        return
+            except Exception as e:
+                print(f"[CATALOG_SERVICE] [WARN] Failed to load Supabase price cache: {e}", flush=True)
+
+        try:
+            import httpx
+            from collections import defaultdict
+            url = (os.getenv("SUPABASE_URL", "") or "https://viflznbwqrunivhfoavq.supabase.co").rstrip("/")
+            sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "sb_secret_wgDvOA3l28p2d2jzH5euRg_mgqeBpLF"
+            headers = {"apikey": sec_key, "Authorization": f"Bearer {sec_key}"}
+
+            r_sc = httpx.get(f"{url}/rest/v1/scrapers?select=id,name", headers=headers, timeout=10.0)
+            scrapers = {s["id"]: s["name"] for s in r_sc.json()} if r_sc.status_code == 200 else {}
+
+            r_ph = httpx.get(f"{url}/rest/v1/price_history?select=product_id,price,recorded_at&order=recorded_at.asc&limit=15000", headers=headers, timeout=25.0)
+            if r_ph.status_code == 200:
+                records = r_ph.json() or []
+                by_prod = defaultdict(list)
+                for r in records:
+                    if r.get("price") is not None:
+                        by_prod[r["product_id"]].append(r)
+
+                changed_pids = [pid for pid, plist in by_prod.items() if len(set(x["price"] for x in plist)) > 1]
+                if changed_pids:
+                    prod_map = {}
+                    for i in range(0, len(changed_pids), 50):
+                        chunk = changed_pids[i:i+50]
+                        id_filter = ",".join(chunk)
+                        r_prods = httpx.get(f"{url}/rest/v1/products?id=in.({id_filter})&select=id,title,style,source_product_id,scraper_id,current_price,current_mrp,image_url", headers=headers, timeout=15.0)
+                        if r_prods.status_code == 200:
+                            for p in r_prods.json():
+                                prod_map[p["id"]] = p
+
+                    built_cache = {}
+                    for pid in changed_pids:
+                        pinfo = prod_map.get(pid, {})
+                        plist = by_prod[pid]
+                        plat = scrapers.get(pinfo.get("scraper_id"), "amazon")
+                        style = pinfo.get("style")
+                        fid = f"STYLE_{style}" if style else pid
+                        by_date = defaultdict(dict)
+                        for x in plist:
+                            d = x["recorded_at"][:10]
+                            by_date[d][plat] = float(x["price"])
+                        h_points = []
+                        for d in sorted(by_date.keys()):
+                            pt = {"date": d}
+                            pt.update(by_date[d])
+                            h_points.append(pt)
+
+                        prices = [float(x["price"]) for x in plist]
+                        p_old = prices[-2] if len(prices) >= 2 else prices[-1]
+                        p_new = prices[-1]
+                        built_cache[fid] = {
+                            "family_id": fid,
+                            "title": pinfo.get("title") or "Columbia Product",
+                            "category": detect_category(pinfo.get("title") or ""),
+                            "gender": detect_gender(pinfo.get("title") or ""),
+                            "image_url": pinfo.get("image_url"),
+                            "lowest_price": p_new,
+                            "earliest_price": prices[0],
+                            "previous_price": p_old,
+                            "price_change_percent": round(((p_new - p_old) / p_old) * 100, 1) if p_old > 0 else 0.0,
+                            "min_recorded_price": min(prices),
+                            "max_recorded_price": max(prices),
+                            "sparkline": prices,
+                            "history_points": h_points,
+                            "total_recorded_points": len(prices),
+                            "dates": sorted(list(by_date.keys()))
+                        }
+                    self.supabase_cache = built_cache
+        except Exception as e:
+            print(f"[CATALOG_SERVICE] [WARN] Live Supabase price cache error: {e}", flush=True)
+
     def get_price_history(self, family_id: str, range_filter: str = "6M") -> Optional[Dict[str, Any]]:
-        self.load_catalog()
+        self._load_or_fetch_supabase_price_cache()
+        c_data = self.supabase_cache.get(family_id)
         fam = self.get_family_by_id(family_id)
-        if not fam:
+        if not c_data and not fam:
             return None
 
-        lowest = fam["lowest_price"]
-        if not self.supabase_cache:
-            cache_path = BASE_DIR / "data" / "supabase_price_history_cache.json"
-            if cache_path.exists():
-                try:
-                    with open(cache_path, "r", encoding="utf-8") as f:
-                        self.supabase_cache = json.load(f)
-                except Exception as e:
-                    print(f"[CATALOG_SERVICE] [WARN] Failed to load Supabase price cache: {e}", flush=True)
+        title = (fam.get("title") if fam else None) or (c_data.get("title") if c_data else None) or "Columbia Product"
+        style = (fam.get("style") if fam else None) or (c_data.get("style") if c_data else None) or (family_id.replace("STYLE_", "") if family_id.startswith("STYLE_") else None)
+        category = (fam.get("category") if fam else None) or (c_data.get("category") if c_data else None) or detect_category(title)
+        gender = (fam.get("gender") if fam else None) or (c_data.get("gender") if c_data else None) or detect_gender(title)
+        image_url = (fam.get("image_url") if fam else None) or (c_data.get("image_url") if c_data else None)
+        tags = (fam.get("tags") if fam else None) or detect_tags(title, category, gender)
 
-        c_data = self.supabase_cache.get(family_id)
-
-        # Real historical checkpoints from actual database runs
+        raw_h_points = (c_data.get("history_points") if c_data else []) or []
         history_points = []
-        if c_data and c_data.get("history_points"):
-            for pt in c_data["history_points"]:
-                raw_d = str(pt.get("date", ""))
-                clean_pt = dict(pt)
-                if len(raw_d) >= 10 and "-" in raw_d:
-                    try:
-                        dt = datetime.strptime(raw_d[:10], "%Y-%m-%d")
-                        clean_pt["date"] = dt.strftime("%d %b")
-                    except Exception:
-                        pass
-                history_points.append(clean_pt)
+        for pt in raw_h_points:
+            raw_d = str(pt.get("date", ""))
+            clean_pt = dict(pt)
+            if len(raw_d) >= 10 and "-" in raw_d:
+                try:
+                    dt = datetime.strptime(raw_d[:10], "%Y-%m-%d")
+                    clean_pt["date"] = dt.strftime("%d %b")
+                except Exception:
+                    pass
+            history_points.append(clean_pt)
 
-        # Add the current real prices across platforms
-        current_pt = {"date": "13 Oct 2026"}
-        for plat in fam["platforms"]:
-            if plat["price"] is not None:
-                current_pt[plat["platform"]] = plat["price"]
-
-        if not history_points:
-            history_points = [current_pt]
-        elif history_points[-1].get("date") != current_pt["date"]:
-            history_points.append(current_pt)
-
-        # Build platform stats strictly from real scraped prices (no fabricated mid-points)
-        platform_stats = []
         all_prices = []
-        for plat in fam["platforms"]:
-            if plat["price"] is not None:
-                p_curr = plat["price"]
-                plat_key = plat["platform"]
-                plat_meta = PLATFORM_METADATA.get(plat_key, {})
-                p_name = plat_meta.get("name") or plat.get("platform_name") or plat_key.title()
-
-                plat_prices = [
-                    pt[plat_key]
-                    for pt in history_points
-                    if plat_key in pt and pt[plat_key] is not None
-                ]
-                if not plat_prices:
-                    plat_prices = [p_curr]
+        platform_stats = []
+        all_plats = ["amazon", "columbia", "tata", "tata_lux", "adv", "myntra", "ajio"]
+        for pk in all_plats:
+            plat_meta = PLATFORM_METADATA.get(pk, {})
+            plat_prices = [
+                pt[pk]
+                for pt in history_points
+                if pk in pt and pt[pk] is not None and pt[pk] > 0
+            ]
+            if plat_prices:
                 all_prices.extend(plat_prices)
-
-                p_low = min(plat_prices)
-                p_high = max(plat_prices)
-
                 platform_stats.append({
-                    "platform": plat_key,
-                    "platform_name": p_name,
-                    "current_price": p_curr,
-                    "lowest_price": p_low,
-                    "highest_price": p_high,
+                    "platform": pk,
+                    "platform_name": plat_meta.get("name") or pk.title(),
+                    "current_price": plat_prices[-1],
+                    "lowest_price": min(plat_prices),
+                    "highest_price": max(plat_prices),
                     "trend": plat_prices
                 })
 
-        min_p = min(all_prices) if all_prices else lowest
-        max_p = max(all_prices) if all_prices else lowest
-        p_range = round(max_p - min_p, 2)
-        p_range_pct = round((p_range / min_p) * 100, 1) if min_p > 0 else 0.0
-        pct_change = round(((lowest - max_p) / max_p) * 100, 1) if (max_p > lowest and max_p > 0) else 0.0
+        curr_p = all_prices[-1] if all_prices else ((fam.get("lowest_price") if fam else None) or (c_data.get("lowest_price") if c_data else None) or 0.0)
+        min_rec = min(all_prices) if all_prices else curr_p
+        max_rec = max(all_prices) if all_prices else curr_p
+        min_date = history_points[0]["date"] if history_points else "Today"
+        max_date = history_points[-1]["date"] if history_points else "Today"
+        pct = c_data.get("price_change_percent") if c_data else (round(((max_rec - min_rec) / min_rec) * 100, 1) if min_rec > 0 else 0.0)
 
         return {
-            "family_id": fam["family_id"],
-            "title": fam["title"],
-            "style": fam["style"],
-            "ean": fam["ean"],
-            "image_url": fam["image_url"],
-            "category": fam["category"],
-            "gender": fam["gender"],
-            "tags": fam["tags"],
-            "current_price": lowest,
-            "price_change_percent": pct_change,
-            "lowest_recorded_price": min_p,
-            "lowest_recorded_date": "13 Oct 2026",
-            "highest_recorded_price": max_p,
-            "highest_recorded_date": "13 Oct 2026",
-            "price_range": p_range,
-            "price_range_percent": p_range_pct,
+            "family_id": family_id,
+            "title": title,
+            "style": style,
+            "ean": (fam.get("ean") if fam else None) or (c_data.get("ean") if c_data else None),
+            "image_url": image_url,
+            "category": category,
+            "gender": gender,
+            "tags": tags,
+            "current_price": curr_p,
+            "price_change_percent": pct or 0.0,
+            "lowest_recorded_price": min_rec,
+            "lowest_recorded_date": min_date,
+            "highest_recorded_price": max_rec,
+            "highest_recorded_date": max_date,
+            "price_range": max_rec - min_rec,
+            "price_range_percent": round(((max_rec - min_rec) / min_rec) * 100, 1) if min_rec > 0 else 0.0,
+            "sparkline": all_prices or [curr_p],
             "history_points": history_points,
             "platform_stats": platform_stats
         }

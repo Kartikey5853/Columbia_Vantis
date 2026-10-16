@@ -276,7 +276,7 @@ export const CataloguePage: React.FC = () => {
                 <th className="py-3 px-3">Gender</th>
                 <th className="py-3 px-3 text-center">Sizes</th>
                 <th className="py-3 px-3 text-center">Platforms</th>
-                <th className="py-3 px-4">MRP</th>
+                <th className="py-3 px-4">Price / MRP</th>
                 <th className="py-3 px-3 text-right">Actions</th>
               </tr>
             </thead>
@@ -370,14 +370,20 @@ export const CataloguePage: React.FC = () => {
                           {product.platforms_count}
                         </td>
 
-                        {/* MRP */}
+                        {/* Price & MRP */}
                         <td className="py-3.5 px-4 whitespace-nowrap">
-                          <div className="font-extrabold text-slate-900">
-                            ₹{(product.mrp || product.lowest_price).toLocaleString("en-IN")}
+                          <div className="font-extrabold text-sm text-slate-900">
+                            {product.lowest_price ? `₹${product.lowest_price.toLocaleString("en-IN")}` : (product.mrp ? `₹${product.mrp.toLocaleString("en-IN")}` : "—")}
                           </div>
-                          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                            MRP
-                          </div>
+                          {product.mrp && product.lowest_price && product.mrp > product.lowest_price ? (
+                            <div className="text-[11px] font-mono text-slate-400 line-through">
+                              ₹{product.mrp.toLocaleString("en-IN")}
+                            </div>
+                          ) : (
+                            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                              Price
+                            </div>
+                          )}
                         </td>
 
                         {/* Action Expand */}
@@ -454,11 +460,17 @@ export const CataloguePage: React.FC = () => {
 
                                   <div className="text-right pl-4 border-l border-slate-100">
                                     <div className="text-xl font-black text-slate-900">
-                                      ₹{(product.mrp || product.lowest_price).toLocaleString("en-IN")}
+                                      {product.lowest_price ? `₹${product.lowest_price.toLocaleString("en-IN")}` : (product.mrp ? `₹${product.mrp.toLocaleString("en-IN")}` : "—")}
                                     </div>
-                                    <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                                      MRP
-                                    </div>
+                                    {product.mrp && product.lowest_price && product.mrp > product.lowest_price ? (
+                                      <div className="text-xs font-mono text-slate-400 line-through">
+                                        MRP ₹{product.mrp.toLocaleString("en-IN")}
+                                      </div>
+                                    ) : (
+                                      <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                                        Selling Price
+                                      </div>
+                                    )}
                                     <button
                                       onClick={() => navigate(`/products/${encodeURIComponent(product.family_id)}`)}
                                       className="mt-2 inline-flex items-center gap-1.5 px-4 py-2 bg-[#079FE0] hover:bg-[#068ec8] text-white text-xs font-bold rounded-xl transition-all shadow-xs cursor-pointer"
@@ -486,8 +498,15 @@ export const CataloguePage: React.FC = () => {
                                         <div className="font-bold text-xs text-slate-800 truncate">
                                           {plat.platform_name}
                                         </div>
-                                        <div className="font-extrabold text-sm text-slate-900">
-                                          {hasPlat ? `₹${plat.price?.toLocaleString("en-IN")}` : "—"}
+                                        <div className="flex items-baseline gap-1.5 flex-wrap">
+                                          <span className="font-extrabold text-sm text-slate-900">
+                                            {hasPlat && plat.price ? `₹${plat.price.toLocaleString("en-IN")}` : "—"}
+                                          </span>
+                                          {hasPlat && plat.mrp && plat.mrp > (plat.price || 0) && (
+                                            <span className="text-[10px] font-mono text-slate-400 line-through">
+                                              ₹{plat.mrp.toLocaleString("en-IN")}
+                                            </span>
+                                          )}
                                         </div>
                                         <div className="flex items-center gap-1 text-[10px] font-semibold">
                                           <span
