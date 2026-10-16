@@ -2152,10 +2152,8 @@ class CatalogService:
         self._load_master_mappings()
         self._load_offers_lookup()
 
-        # 1. Primary data source: Supabase live database with fast balanced bootstrap
-        supabase_records = self._fetch_initial_top_products_from_supabase()
-        if not supabase_records:
-            supabase_records = self._fetch_from_supabase(max_records=1000)
+        # 1. Primary data source: Fetch full live catalog from Supabase
+        supabase_records = self._fetch_from_supabase(max_records=None)
         for plat_key, item in supabase_records:
             pid = str(item.get("product_id") or item.get("source_product_id") or "").strip()
             title = str(item.get("title") or "").strip()
@@ -2321,6 +2319,18 @@ class CatalogService:
         sort_by: str = "relevance"
     ) -> Dict[str, Any]:
         # Fast disk-backed SQLite pagination over canonical Product Families
+        from jobs import is_pipeline_running
+        if is_pipeline_running():
+            return {
+                "total_records": 0,
+                "page": 1,
+                "page_size": page_size,
+                "total_pages": 1,
+                "products": [],
+                "scrapers_running": True,
+                "message": "Scrapers are currently running to save RAM. Please wait until they finish."
+            }
+
         if not self.is_loaded or self.total_count == 0:
             self.load_catalog()
 
@@ -2370,21 +2380,6 @@ class CatalogService:
                     cur.execute("SELECT DISTINCT family_id FROM lookup_index WHERE term = ?", (base_q,))
                     matched_fids = [r[0] for r in cur.fetchall()]
 
-                # If no match in SQLite, search Supabase live and re-index
-                if not matched_fids:
-                    cur.execute("SELECT COUNT(*) FROM product_families WHERE LOWER(title) LIKE ? OR LOWER(style) LIKE ? OR LOWER(sku) LIKE ? OR LOWER(ean) LIKE ?", (f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%"))
-                    if cur.fetchone()[0] == 0:
-                        conn.close()
-                        self._search_supabase_live(search.strip(), limit=50)
-                        conn = self._get_connection()
-                        cur = conn.cursor()
-                        cur.execute("SELECT DISTINCT family_id FROM lookup_index WHERE term = ?", (q,))
-                        matched_fids = [r[0] for r in cur.fetchall()]
-                        if not matched_fids and "-" in q:
-                            base_q = q.split("-")[0]
-                            cur.execute("SELECT DISTINCT family_id FROM lookup_index WHERE term = ?", (base_q,))
-                            matched_fids = [r[0] for r in cur.fetchall()]
-
                 if matched_fids:
                     placeholders = ",".join("?" * len(matched_fids))
                     where_clauses.append(f"family_id IN ({placeholders})")
@@ -2408,16 +2403,6 @@ class CatalogService:
             # Count total matching records
             cur.execute(f"SELECT COUNT(*) FROM product_families WHERE {where_sql}", params)
             total_records = cur.fetchone()[0]
-
-            # Progressive fetch from Supabase if browsing deep into pages beyond current local records
-            needed_offset = (page - 1) * page_size
-            if not search and needed_offset >= total_records:
-                conn.close()
-                self._fetch_more_from_supabase_live(batch_size=150)
-                conn = self._get_connection()
-                cur = conn.cursor()
-                cur.execute(f"SELECT COUNT(*) FROM product_families WHERE {where_sql}", params)
-                total_records = cur.fetchone()[0]
 
             # Sorting
             if sort_by in ("name", "title"):
@@ -2492,6 +2477,18 @@ class CatalogService:
         page: int = 1,
         page_size: int = 20
     ) -> Dict[str, Any]:
+        from jobs import is_pipeline_running
+        if is_pipeline_running():
+            return {
+                "total_records": 0,
+                "page": 1,
+                "page_size": page_size,
+                "total_pages": 1,
+                "products": [],
+                "scrapers_running": True,
+                "message": "Scrapers are currently running to save RAM. Please wait until they finish."
+            }
+
         if not self.is_loaded or self.total_count == 0:
             self.load_catalog()
 
@@ -2651,6 +2648,8 @@ class CatalogService:
         self.master_ean_to_style.clear()
         self.master_style_meta.clear()
         self.offers_lookup.clear()
+        self.is_loaded = False
+        self.total_count = 0
         gc.collect()
         print("[CATALOG_SERVICE] 🧹 In-memory catalog and analytics caches purged to free RAM.", flush=True)
 
