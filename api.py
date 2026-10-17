@@ -64,8 +64,8 @@ app.add_middleware(
 )
 
 SCRAPING_RUNNING_MESSAGE = (
-    "The scrapers are currently running. To save RAM, fetching new products or heavy catalog operations "
-    "are paused. Please wait for around 1 hour until the scrapers complete."
+    "Hey, we are currently scraping! To save RAM, we can't let you access anything right now. "
+    "This might take up to one hour. In-memory catalog resources are terminated."
 )
 
 @app.middleware("http")
@@ -83,21 +83,25 @@ async def ram_protection_middleware(request: Request, call_next):
         is_health_route = path in ("/health", "/healthz", "/api/health")
         is_scraper_control = path.startswith("/scrape") or path in ("/trigger", "/deploy-trigger", "/uptime-trigger", "/cron/trigger", "/cron/uptime-trigger")
         is_docs_route = path in ("/docs", "/openapi.json", "/redoc")
-        is_system_monitoring = path in ("/api/system/scrapers", "/api/system/servers", "/api/system/recent-runs")
+        is_system_monitoring = path in ("/api/system/scrapers", "/api/system/servers", "/api/system/recent-runs", "/api/system/summary")
 
         # Block heavy product/catalog fetch endpoints that strain RAM during scraping
         is_blocked_product_fetch = (
             path.startswith("/api/products") or
             path.startswith("/api/analytics") or
-            path.startswith("/api/master-data/upload")
+            path.startswith("/api/master-data")
         )
 
         if is_blocked_product_fetch and not (is_auth_route or is_health_route or is_scraper_control or is_docs_route or is_system_monitoring):
+            # Ensure catalog memory is 100% purged
+            if catalog_service.is_loaded or catalog_service.total_count > 0:
+                catalog_service.purge_memory()
+
             return JSONResponse(
                 status_code=503,
                 content={
                     "status": "scrapers_running",
-                    "error": "Service Temporarily Unavailable",
+                    "error": "Scraping In Progress",
                     "detail": SCRAPING_RUNNING_MESSAGE,
                     "message": SCRAPING_RUNNING_MESSAGE,
                     "pipeline_running": True,

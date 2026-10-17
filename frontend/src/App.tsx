@@ -8,11 +8,13 @@ import AnalysisPage from "./pages/AnalysisPage";
 import SystemStatusPage from "./pages/SystemStatusPage";
 import ProfilePage from "./pages/ProfilePage";
 import ProtectedRoute from "./components/layout/ProtectedRoute";
+import ScrapingLockModal from "./components/layout/ScrapingLockModal";
 import authService from "./services/authService";
 
 export const App: React.FC = () => {
   return (
     <BrowserRouter>
+      <ScrapingLockModal />
       <Routes>
         {/* Public Login Route */}
         <Route

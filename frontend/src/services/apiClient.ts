@@ -37,9 +37,28 @@ apiClient.interceptors.response.use(
         window.location.href = "/login";
       }
     }
+    if (
+      error.response?.status === 503 ||
+      (error.response?.data as any)?.status === "scrapers_running" ||
+      (error.response?.data as any)?.pipeline_running === true
+    ) {
+      window.dispatchEvent(
+        new CustomEvent("vantis-scraping-active", {
+          detail: {
+            pipeline_running: true,
+            message:
+              (error.response?.data as any)?.message ||
+              (error.response?.data as any)?.detail ||
+              "Hey, we are currently scraping! To save RAM, we can't let you access anything right now. This might take up to one hour.",
+          },
+        })
+      );
+    }
+
     const message =
-      error.response?.data?.detail ||
-      error.response?.data?.error ||
+      (error.response?.data as any)?.detail ||
+      (error.response?.data as any)?.message ||
+      (error.response?.data as any)?.error ||
       error.message ||
       "An unexpected network error occurred";
     return Promise.reject(new Error(message));

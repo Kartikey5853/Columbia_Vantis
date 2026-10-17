@@ -240,19 +240,21 @@ export const ProductDetailsPage: React.FC = () => {
             });
           }
         } else {
-          cards.push({
-            size: displaySz,
-            color: v.color || null,
-            title: v.title || null,
-            sku: v.sku || activeListing.product_id || null,
-            ean: v.ean || null,
-            price: v.price ?? activeListing.price,
-            mrp: v.mrp ?? activeListing.mrp,
-            available: v.available !== false,
-            stock: v.stock ?? v.quantity ?? activeListing.stock_text,
-            url: v.url || activeListing.url,
-            image_url: v.image_url || activeListing.image_url || null,
-          });
+            const isAmazon = activeListing.platform === "amazon" || activeListing.platform_key === "amazon";
+            const cardStock = isAmazon ? null : (v.stock ?? v.quantity ?? (typeof activeListing.stock_text === "number" || activeListing.stock_text?.includes("left") || activeListing.stock_text?.includes("units") ? activeListing.stock_text : null));
+            cards.push({
+              size: displaySz,
+              color: v.color || null,
+              title: v.title || null,
+              sku: v.sku || activeListing.product_id || null,
+              ean: v.ean || null,
+              price: v.price ?? activeListing.price,
+              mrp: v.mrp ?? activeListing.mrp,
+              available: v.available !== false,
+              stock: cardStock,
+              url: v.url || activeListing.url,
+              image_url: v.image_url || activeListing.image_url || null,
+            });
         }
       }
     }

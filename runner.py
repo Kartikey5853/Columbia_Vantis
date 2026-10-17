@@ -717,7 +717,7 @@ async def scrape_columbia(
 
                     # Real Columbia offers: check for promo tags, compare_at discounts or scraped offers
                     columbia_offers = []
-                    raw_offers = p.get("offers") or []
+                    raw_offers = node.get("offers") or []
                     if raw_offers:
                         columbia_offers = [normalize_offer(o, "columbia") for o in raw_offers]
                     elif min_price and max_mrp and max_mrp > min_price:
@@ -1225,7 +1225,7 @@ async def scrape_adv(
                             )
 
                         adv_offers = []
-                        raw_offers = p.get("offers") or []
+                        raw_offers = prod.get("offers") or []
                         if raw_offers:
                             adv_offers = [normalize_offer(o, "adv") for o in raw_offers]
                         elif min_price and max_mrp and max_mrp > min_price:
@@ -2494,7 +2494,7 @@ def normalize_amazon_product(raw_p: Dict[str, Any]) -> NormalizedProduct:
                     style=v_style or style_code,
                     ean=None,
                     available=bool(v.get("available", True)),
-                    stock=int(v.get("stock") or 1),
+                    stock=v.get("stock"),
                     price=float(v.get("price") or p_num or 0.0) if (v.get("price") or p_num) else None,
                     mrp=float(v.get("mrp") or m_num or 0.0) if (v.get("mrp") or m_num) else None,
                     url=v.get("url") or f"https://www.amazon.in/dp/{v_sku}",
@@ -2510,7 +2510,7 @@ def normalize_amazon_product(raw_p: Dict[str, Any]) -> NormalizedProduct:
                     style=v_style or style_code,
                     ean=None,
                     available=True,
-                    stock=1,
+                    stock=None,
                     price=p_num,
                     mrp=m_num,
                     url=f"https://www.amazon.in/dp/{var_asin}",
@@ -2531,7 +2531,7 @@ def normalize_amazon_product(raw_p: Dict[str, Any]) -> NormalizedProduct:
         price=p_num,
         mrp=m_num,
         available=bool(p_num or title),
-        stock=int(raw_p.get("stock") or 1 if (p_num or title) else 0),
+        stock=raw_p.get("stock"),
         image_url=image_url,
         url=url,
         variants=variants,

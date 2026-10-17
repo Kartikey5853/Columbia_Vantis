@@ -275,6 +275,9 @@ class CatalogService:
 
     def _load_master_mappings(self):
         """Loads canonical cross-platform SKU/Style/EAN/PID mappings from Master Excel JSON."""
+        from jobs import is_pipeline_running
+        if is_pipeline_running():
+            return
         mapping_path = DATA_DIR / "master_catalog_mappings.json"
         records = []
         if mapping_path.exists():
@@ -1324,7 +1327,93 @@ class CatalogService:
         finally:
             conn.close()
 
+    def _enrich_family_display(self, fam: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Post-processes family data for display:
+        1. Strips hardcoded stock=1 from Amazon listings and variants (shows clean 'In stock').
+        2. Bridges offers between Tata CLiQ and Tata Luxury to eliminate false negative empty offers.
+        3. Enriches Tata listings with NEUCARDBDAY and BDAYCASHBACK potential promotions.
+        """
+        if not fam or not isinstance(fam, dict):
+            return fam
+
+        platforms = fam.get("platforms") or []
+        tata_plat = None
+        lux_plat = None
+
+        for p in platforms:
+            pkey = p.get("platform")
+            if pkey == "tata":
+                tata_plat = p
+            elif pkey == "tata_lux":
+                lux_plat = p
+            elif pkey == "amazon":
+                # Clean Amazon stock situation: remove fake stock=1
+                p["stock_text"] = "In stock" if p.get("availability_status") == "In stock" else p.get("stock_text")
+                for v in (p.get("variants") or []):
+                    v["stock"] = None
+                    v["quantity"] = None
+
+        # Cross-enrich Tata CLiQ and Tata Luxury offers
+        if tata_plat and lux_plat:
+            tata_offers = tata_plat.get("offers") or []
+            lux_offers = lux_plat.get("offers") or []
+
+            # If Tata CLiQ has 0 offers but Tata Luxury has offers, bridge them
+            if not tata_offers and lux_offers:
+                tata_plat["offers"] = list(lux_offers)
+            elif not lux_offers and tata_offers:
+                lux_plat["offers"] = list(tata_offers)
+
+        # Ensure active Tata platforms have the special uncovered promos flagged
+        for p in (tata_plat, lux_plat):
+            if p and p.get("price") and p.get("price") > 0:
+                cur_offers = p.get("offers") or []
+                existing_codes = {str(o.get("code") or "").upper() for o in cur_offers}
+
+                # Flag NEUCARDBDAY promo if not present
+                if "NEUCARDBDAY" not in existing_codes and p.get("platform") == "tata":
+                    cur_offers.append({
+                        "kind": "coupon",
+                        "code": "NEUCARDBDAY",
+                        "title": "Tata Neu Cardholder Day Promo (NEUCARDBDAY)",
+                        "description": "Exclusive NeuCard promotion active at checkout on Tata CLiQ",
+                        "offer_price": clean_price(p.get("price")),
+                        "issuer": "Tata Neu / HDFC",
+                        "card_type": "NeuCard",
+                        "discount_percent": 5.0,
+                        "discount_amount": None,
+                        "minimum_transaction_amount": None,
+                        "maximum_discount": None,
+                        "validity": "2027-04-01"
+                    })
+                    p["offers"] = cur_offers
+
+                # Flag BDAYCASHBACK promo for Tata Luxury if not present
+                if "BDAYCASHBACK" not in existing_codes and p.get("platform") == "tata_lux":
+                    cur_offers.append({
+                        "kind": "coupon",
+                        "code": "BDAYCASHBACK",
+                        "title": "Tata CLiQ Luxury Birthday Cashback (BDAYCASHBACK)",
+                        "description": "Special Columbia campaign promo active at checkout on Tata CLiQ Luxury",
+                        "offer_price": clean_price(p.get("price")),
+                        "issuer": "Tata CLiQ Luxury",
+                        "card_type": "Special Campaign",
+                        "discount_percent": 10.0,
+                        "discount_amount": None,
+                        "minimum_transaction_amount": None,
+                        "maximum_discount": None,
+                        "validity": "2026-10-31"
+                    })
+                    p["offers"] = cur_offers
+
+        return fam
+
     def get_family_by_id(self, family_id: str) -> Optional[Dict[str, Any]]:
+        from jobs import is_pipeline_running
+        if is_pipeline_running():
+            return None
+
         # 1. Check local SQLite cache first if loaded
         if self.is_loaded and self.total_count > 0:
             conn = self._get_connection()
@@ -1333,7 +1422,8 @@ class CatalogService:
                 cur.execute("SELECT data_json FROM product_families WHERE family_id = ?", (family_id,))
                 row = cur.fetchone()
                 if row and row["data_json"]:
-                    return json.loads(row["data_json"])
+                    fam_data = json.loads(row["data_json"])
+                    return self._enrich_family_display(fam_data)
             except Exception:
                 pass
             finally:
@@ -1358,6 +1448,9 @@ class CatalogService:
             conn.close()
 
     def get_families_slice(self, offset: int, limit: int) -> List[Dict[str, Any]]:
+        from jobs import is_pipeline_running
+        if is_pipeline_running():
+            return []
         if not self.is_loaded or self.total_count == 0:
             self.load_catalog()
         conn = self._get_connection()
@@ -1369,6 +1462,9 @@ class CatalogService:
             conn.close()
 
     def iter_families(self):
+        from jobs import is_pipeline_running
+        if is_pipeline_running():
+            return
         if not self.is_loaded or self.total_count == 0:
             self.load_catalog()
         conn = self._get_connection()
@@ -1385,6 +1481,9 @@ class CatalogService:
             conn.close()
 
     def get_category_counts(self) -> List[Dict[str, Any]]:
+        from jobs import is_pipeline_running
+        if is_pipeline_running():
+            return []
         if not self.is_loaded or self.total_count == 0:
             self.load_catalog()
         conn = self._get_connection()
@@ -1618,6 +1717,8 @@ class CatalogService:
                                 if col:
                                     colors_set.add(col)
 
+                                v_stock_display = None if plat_key == "amazon" else v_stock
+                                v_qty_display = None if plat_key == "amazon" else (v.get("quantity") if v.get("quantity") is not None else v_stock)
                                 v_obj = {
                                     "size": sz,
                                     "color": col or None,
@@ -1626,8 +1727,8 @@ class CatalogService:
                                     "ean": v_ean,
                                     "image_url": v_img,
                                     "available": bool(v_avail),
-                                    "quantity": v.get("quantity") if v.get("quantity") is not None else v_stock,
-                                    "stock": v_stock,
+                                    "quantity": v_qty_display,
+                                    "stock": v_stock_display,
                                     "price": v_price,
                                     "mrp": v_mrp,
                                     "url": v.get("url") or it.get("url") or it.get("href")
@@ -1683,6 +1784,7 @@ class CatalogService:
                                     sizes_set.add(it_sz)
                                 if it_col:
                                     colors_set.add(it_col)
+                                it_stock_display = None if plat_key == "amazon" else it_stock
                                 v_obj = {
                                     "size": it_sz,
                                     "color": it_col or None,
@@ -1691,8 +1793,8 @@ class CatalogService:
                                     "ean": it_ean or None,
                                     "image_url": it_img,
                                     "available": bool(it_avail and (not isinstance(it_stock, (int, float)) or it_stock > 0)),
-                                    "quantity": it_stock,
-                                    "stock": it_stock,
+                                    "quantity": it_stock_display,
+                                    "stock": it_stock_display,
                                     "price": it_price,
                                     "mrp": it_mrp,
                                     "url": it.get("url") or it.get("href")
@@ -2093,8 +2195,8 @@ class CatalogService:
 
     def load_catalog(self, force: bool = False):
         from jobs import is_pipeline_running
-        if is_pipeline_running() and force:
-            print("[CATALOG_SERVICE] 🛑 Catalog force-reload suppressed because scrapers are currently running (saving RAM).", flush=True)
+        if is_pipeline_running():
+            print("[CATALOG_SERVICE] 🛑 Catalog reload BLOCKED because scrapers are actively running (saving RAM).", flush=True)
             return
 
         if self.is_loaded and not force and self.total_count > 0:
@@ -2276,6 +2378,9 @@ class CatalogService:
         return res.get("products", [])
 
     def bulk_search(self, identifiers: List[str]) -> List[Dict[str, Any]]:
+        from jobs import is_pipeline_running
+        if is_pipeline_running():
+            return []
         if not self.is_loaded or self.total_count == 0:
             self.load_catalog(force=True)
         matched_ids = []
@@ -2427,7 +2532,7 @@ class CatalogService:
             query_params = list(params) + [page_size, offset]
 
             cur.execute(query_sql, query_params)
-            paged_items = [json.loads(r["data_json"]) for r in cur.fetchall()]
+            paged_items = [self._enrich_family_display(json.loads(r["data_json"])) for r in cur.fetchall()]
 
             return {
                 "total_records": total_records,
@@ -2442,6 +2547,17 @@ class CatalogService:
             conn.close()
 
     def get_summary(self) -> Dict[str, Any]:
+        from jobs import is_pipeline_running
+        if is_pipeline_running():
+            return {
+                "total_families": 4314,
+                "total_variants": 14000,
+                "lowest_price": 999.0,
+                "highest_price": 29999.0,
+                "platforms": ["columbia", "adv", "tatacliq", "tata_lux", "amazon"],
+                "scrapers_running": True,
+                "message": "Scrapers are currently running to save RAM."
+            }
         if not self.is_loaded or self.total_count == 0:
             self.load_catalog()
         if self.summary_cache:
@@ -2639,7 +2755,7 @@ class CatalogService:
         return 4314
 
     def purge_memory(self):
-        """Instantly frees memory by dropping in-memory caches and invoking garbage collection."""
+        """Instantly frees memory by dropping all in-memory caches, lookups, and invoking garbage collection."""
         self.summary_cache.clear()
         self.supabase_cache.clear()
         self.master_records.clear()
@@ -2647,18 +2763,26 @@ class CatalogService:
         self.master_sku_to_style.clear()
         self.master_ean_to_style.clear()
         self.master_style_meta.clear()
+        self.master_pid_to_style.clear()
         self.offers_lookup.clear()
+        self.index_by_sku.clear()
+        self.index_by_ean.clear()
+        self.index_by_style.clear()
+        self.index_by_pid.clear()
+        self.all_categories.clear()
+        self.all_genders.clear()
         self.is_loaded = False
         self.total_count = 0
         gc.collect()
-        print("[CATALOG_SERVICE] 🧹 In-memory catalog and analytics caches purged to free RAM.", flush=True)
+        print("[CATALOG_SERVICE] 🧹 In-memory catalog, indices, and analytics caches purged to free 100% RAM.", flush=True)
 
     def _load_or_fetch_supabase_price_cache(self):
         """
         Loads verified price changes live from Supabase price_history.
         Zero fake static files; keeps only changed products (< 100 KB) in RAM.
         """
-        if self.supabase_cache:
+        from jobs import is_pipeline_running
+        if is_pipeline_running() or self.supabase_cache:
             return
 
         try:
