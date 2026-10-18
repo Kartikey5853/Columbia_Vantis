@@ -25,6 +25,10 @@ import {
   ArrowRight,
   Maximize2,
   Minimize2,
+  Calendar,
+  Clock,
+  RefreshCw,
+  SlidersHorizontal,
 } from "lucide-react";
 import analyticsService from "../services/analyticsService";
 import bundleService from "../services/bundleService";
@@ -45,6 +49,16 @@ export const AnalysisPage: React.FC = () => {
   const [pageSize, setPageSize] = useState<number>(10);
   const [isLoadingList, setIsLoadingList] = useState<boolean>(true);
 
+  // Date comparison state
+  const [availableDates, setAvailableDates] = useState<string[]>([]);
+  const [targetDate, setTargetDate] = useState<string>("");
+  const [previousDate, setPreviousDate] = useState<string>("");
+  const [changesOnly, setChangesOnly] = useState<boolean>(true);
+  const [totalDrops, setTotalDrops] = useState<number>(0);
+  const [totalRises, setTotalRises] = useState<number>(0);
+  const [totalStable, setTotalStable] = useState<number>(0);
+  const [isSyncingTelemetry, setIsSyncingTelemetry] = useState<boolean>(false);
+
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [category, setCategory] = useState<string>("All");
   const [platform, setPlatform] = useState<string>("All");
@@ -63,6 +77,44 @@ export const AnalysisPage: React.FC = () => {
   const [historyData, setHistoryData] = useState<ProductPriceHistoryResponse | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState<boolean>(false);
   const [selectedRange, setSelectedRange] = useState<string>("ALL");
+
+  const formatDateLabel = (dateStr?: string | null, isLatest: boolean = false) => {
+    if (!dateStr) return "—";
+    try {
+      const parts = dateStr.split("-");
+      if (parts.length === 3) {
+        const year = parseInt(parts[0], 10);
+        const monthIndex = parseInt(parts[1], 10) - 1;
+        const day = parseInt(parts[2], 10);
+        const d = new Date(year, monthIndex, day);
+        const formatted = d.toLocaleDateString("en-IN", {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+        });
+        return isLatest ? `${formatted} (Latest Scrape)` : formatted;
+      }
+    } catch {}
+    return dateStr;
+  };
+
+  const formatShortDate = (dateStr?: string | null) => {
+    if (!dateStr) return "";
+    try {
+      const parts = dateStr.split("-");
+      if (parts.length === 3) {
+        const year = parseInt(parts[0], 10);
+        const monthIndex = parseInt(parts[1], 10) - 1;
+        const day = parseInt(parts[2], 10);
+        const d = new Date(year, monthIndex, day);
+        return d.toLocaleDateString("en-IN", {
+          day: "numeric",
+          month: "short",
+        });
+      }
+    } catch {}
+    return dateStr;
+  };
 
   const flattenedHistoryRows = React.useMemo(() => {
     if (!historyData || !historyData.history_points) return [];
@@ -84,7 +136,7 @@ export const AnalysisPage: React.FC = () => {
     historyData.history_points.forEach((pt) => {
       const d = pt.date;
       Object.keys(pt).forEach((k) => {
-        if (k !== "date" && pt[k] !== null && pt[k] !== undefined) {
+        if (k !== "date" && k !== "raw_date" && pt[k] !== null && pt[k] !== undefined) {
           const price = Number(pt[k]);
           const ps = statsMap[k];
           const curr = ps?.current_price || price;
@@ -106,9 +158,36 @@ export const AnalysisPage: React.FC = () => {
     return rows.reverse();
   }, [historyData]);
 
+  // Initial mount: check pre-warmed bundle and available dates
+  useEffect(() => {
+    const cached = bundleService.getCachedBundle();
+    if (cached?.analytics) {
+      if (cached.analytics.available_dates?.length) {
+        setAvailableDates(cached.analytics.available_dates);
+      }
+      if (cached.analytics.target_date) setTargetDate(cached.analytics.target_date);
+      if (cached.analytics.previous_date) setPreviousDate(cached.analytics.previous_date);
+      if (cached.analytics.total_price_drops !== undefined) setTotalDrops(cached.analytics.total_price_drops);
+      if (cached.analytics.total_price_rises !== undefined) setTotalRises(cached.analytics.total_price_rises);
+      if (cached.analytics.total_stable !== undefined) setTotalStable(cached.analytics.total_stable);
+    }
+
+    analyticsService
+      .getAvailableDates()
+      .then((datesData) => {
+        if (datesData.available_dates?.length) {
+          setAvailableDates(datesData.available_dates);
+          setTargetDate((prev) => prev || datesData.latest_date);
+          setPreviousDate((prev) => prev || datesData.default_previous_date);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Fetch when filters change
   useEffect(() => {
     loadProductList(1);
-  }, [category, platform, sortBy]);
+  }, [category, platform, sortBy, targetDate, previousDate, changesOnly]);
 
   const selectInlineProduct = async (prod: AnalyticsProductRow, range: string = selectedRange) => {
     setActiveInlineProduct(prod);
@@ -123,15 +202,27 @@ export const AnalysisPage: React.FC = () => {
     }
   };
 
-  const loadProductList = async (pageToLoad: number = 1) => {
+  const loadProductList = async (
+    pageToLoad: number = 1,
+    overrideTarget?: string,
+    overridePrev?: string,
+    overrideChangesOnly?: boolean
+  ) => {
     setIsLoadingList(true);
+
+    const activeTarget = overrideTarget !== undefined ? overrideTarget : targetDate;
+    const activePrev = overridePrev !== undefined ? overridePrev : previousDate;
+    const activeChangesOnly = overrideChangesOnly !== undefined ? overrideChangesOnly : changesOnly;
 
     const isDefault =
       pageToLoad === 1 &&
       !searchTerm.trim() &&
       category === "All" &&
       platform === "All" &&
-      sortBy === "price_change";
+      sortBy === "price_change" &&
+      activeChangesOnly === true &&
+      (!activeTarget || activeTarget === availableDates[0]) &&
+      (!activePrev || activePrev === availableDates[1]);
 
     // Instant bootstrap via pre-warmed bundle
     if (isDefault) {
@@ -142,6 +233,12 @@ export const AnalysisPage: React.FC = () => {
         setTotalRecords(cached.analytics.total_records);
         setTotalPages(cached.analytics.total_pages);
         setCurrentPage(cached.analytics.page || 1);
+        if (cached.analytics.target_date) setTargetDate(cached.analytics.target_date);
+        if (cached.analytics.previous_date) setPreviousDate(cached.analytics.previous_date);
+        if (cached.analytics.available_dates?.length) setAvailableDates(cached.analytics.available_dates);
+        if (cached.analytics.total_price_drops !== undefined) setTotalDrops(cached.analytics.total_price_drops);
+        if (cached.analytics.total_price_rises !== undefined) setTotalRises(cached.analytics.total_price_rises);
+        if (cached.analytics.total_stable !== undefined) setTotalStable(cached.analytics.total_stable);
         setIsLoadingList(false);
         selectInlineProduct(items[0], selectedRange);
         return;
@@ -149,21 +246,10 @@ export const AnalysisPage: React.FC = () => {
     }
 
     try {
-      if (isDefault) {
-        const bundle = await bundleService.getBundle();
-        if (bundle && bundle.analytics && bundle.analytics.products?.length > 0) {
-          const items = bundle.analytics.products;
-          setProducts(items);
-          setTotalRecords(bundle.analytics.total_records);
-          setTotalPages(bundle.analytics.total_pages);
-          setCurrentPage(bundle.analytics.page || 1);
-          setIsLoadingList(false);
-          selectInlineProduct(items[0], selectedRange);
-          return;
-        }
-      }
-
       const data = await analyticsService.getProducts({
+        target_date: activeTarget || undefined,
+        previous_date: activePrev || undefined,
+        changes_only: activeChangesOnly,
         search: searchTerm.trim() || undefined,
         category: category !== "All" ? category : undefined,
         platform: platform !== "All" ? platform : undefined,
@@ -177,6 +263,12 @@ export const AnalysisPage: React.FC = () => {
       setTotalRecords(data.total_records);
       setTotalPages(data.total_pages);
       setCurrentPage(data.page);
+      if (data.target_date) setTargetDate(data.target_date);
+      if (data.previous_date) setPreviousDate(data.previous_date);
+      if (data.available_dates?.length) setAvailableDates(data.available_dates);
+      if (data.total_price_drops !== undefined) setTotalDrops(data.total_price_drops);
+      if (data.total_price_rises !== undefined) setTotalRises(data.total_price_rises);
+      if (data.total_stable !== undefined) setTotalStable(data.total_stable);
 
       if (items.length > 0) {
         selectInlineProduct(items[0], selectedRange);
@@ -191,6 +283,24 @@ export const AnalysisPage: React.FC = () => {
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     loadProductList(1);
+  };
+
+  const handleSyncTelemetry = async () => {
+    setIsSyncingTelemetry(true);
+    try {
+      await analyticsService.syncTelemetry();
+      const datesRes = await analyticsService.getAvailableDates();
+      if (datesRes.available_dates?.length) {
+        setAvailableDates(datesRes.available_dates);
+        setTargetDate(datesRes.latest_date);
+        setPreviousDate(datesRes.default_previous_date);
+        await loadProductList(1, datesRes.latest_date, datesRes.default_previous_date);
+      }
+    } catch (e) {
+      console.error("Telemetry sync failed", e);
+    } finally {
+      setIsSyncingTelemetry(false);
+    }
   };
 
   // Open Pop-up Graph Modal
@@ -259,8 +369,107 @@ export const AnalysisPage: React.FC = () => {
           </span>
         </div>
         <p className="text-xs sm:text-sm text-slate-500 font-medium">
-          Products with verified price changes across platforms. Click any product row to open the interactive price history graph.
+          Identify real price shifts in the latest scraped database runs. Compare price movements against any previous date.
         </p>
+      </div>
+
+      {/* DATE COMPARISON INTELLIGENCE BAR */}
+      <div className="shrink-0 bg-gradient-to-r from-sky-50/80 via-white to-slate-50 border border-sky-100 rounded-2xl p-3 shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Target Date (Latest Scraped Data) */}
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+              <Calendar className="w-3.5 h-3.5 text-[#079FE0]" />
+              Data Date:
+            </span>
+            <div className="relative">
+              <select
+                value={targetDate}
+                onChange={(e) => {
+                  const newT = e.target.value;
+                  setTargetDate(newT);
+                  // Auto-adjust previous date if needed
+                  const tIdx = availableDates.indexOf(newT);
+                  if (tIdx >= 0 && tIdx + 1 < availableDates.length) {
+                    setPreviousDate(availableDates[tIdx + 1]);
+                  }
+                }}
+                className="appearance-none bg-white border border-sky-200 text-[#079FE0] rounded-xl px-3 py-1.5 pr-7 text-xs font-black shadow-2xs focus:outline-none focus:ring-2 focus:ring-[#079FE0]/20 cursor-pointer"
+              >
+                {availableDates.map((d, idx) => (
+                  <option key={d} value={d}>
+                    {formatDateLabel(d, idx === 0)}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown className="w-3.5 h-3.5 text-[#079FE0] absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+            </div>
+          </div>
+
+          <span className="text-xs font-bold text-slate-400">vs</span>
+
+          {/* Previous Date to Compare Against */}
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+              <Clock className="w-3.5 h-3.5 text-slate-400" />
+              Compare With:
+            </span>
+            <div className="relative">
+              <select
+                value={previousDate}
+                onChange={(e) => setPreviousDate(e.target.value)}
+                className="appearance-none bg-white border border-slate-200 text-slate-800 rounded-xl px-3 py-1.5 pr-7 text-xs font-bold shadow-2xs focus:outline-none focus:ring-2 focus:ring-[#079FE0]/20 cursor-pointer"
+              >
+                {availableDates
+                  .filter((d) => d !== targetDate)
+                  .map((d) => (
+                    <option key={d} value={d}>
+                      {formatDateLabel(d)}
+                    </option>
+                  ))}
+              </select>
+              <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+            </div>
+          </div>
+
+          {/* Changed Prices Only Toggle */}
+          <button
+            type="button"
+            onClick={() => setChangesOnly(!changesOnly)}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border shadow-2xs ${
+              changesOnly
+                ? "bg-[#079FE0] text-white border-[#079FE0]"
+                : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+            }`}
+          >
+            <SlidersHorizontal className="w-3 h-3" />
+            <span>Only Changed Prices ({totalRecords})</span>
+          </button>
+        </div>
+
+        {/* Telemetry Stats & Sync Button */}
+        <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-1.5 text-[11px] font-bold">
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+              <TrendingDown className="w-3 h-3" />
+              {totalDrops} Drops
+            </span>
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-rose-50 text-rose-700 border border-rose-200">
+              <TrendingUp className="w-3 h-3" />
+              {totalRises} Rises
+            </span>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleSyncTelemetry}
+            disabled={isSyncingTelemetry}
+            className="p-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 transition-colors disabled:opacity-50 cursor-pointer shadow-2xs"
+            title="Sync latest scrape telemetry from Supabase"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isSyncingTelemetry ? "animate-spin text-[#079FE0]" : ""}`} />
+          </button>
+        </div>
       </div>
 
       {/* Filter and Control Bar (Fixed shrink-0) */}
@@ -272,7 +481,7 @@ export const AnalysisPage: React.FC = () => {
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Search by product, style code or category..."
+            placeholder="Search by product, style code or SKU..."
             className="w-full pl-9 pr-16 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-[#079FE0]/20 focus:border-[#079FE0] text-slate-900 placeholder:text-slate-400 font-semibold"
           />
           <button
@@ -332,6 +541,7 @@ export const AnalysisPage: React.FC = () => {
             >
               <option value="price_change">Price Movements</option>
               <option value="price_drop">Biggest Price Drops</option>
+              <option value="price_rise">Biggest Price Rises</option>
               <option value="price_asc">Lowest Current Price</option>
               <option value="price_desc">Highest Current Price</option>
               <option value="name">Product Name</option>
@@ -387,9 +597,13 @@ export const AnalysisPage: React.FC = () => {
         {/* Table Header (Fixed shrink-0) */}
         <div className="shrink-0 p-3.5 sm:px-6 bg-slate-50/80 border-b border-slate-200/80 flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-wider">
           <div className="flex-1">Product &amp; Style Code</div>
-          <div className="w-28 text-right">Previous Price</div>
-          <div className="w-28 text-right">Current Price</div>
-          <div className="w-32 text-right">Price Status</div>
+          <div className="w-32 text-right">
+            Price on {formatShortDate(previousDate) || "Previous"}
+          </div>
+          <div className="w-32 text-right">
+            Price on {formatShortDate(targetDate) || "Today"}
+          </div>
+          <div className="w-32 text-right">Price Movement</div>
         </div>
 
         {/* Scrollable Component Body (flex-1 overflow-y-auto) */}
@@ -397,14 +611,14 @@ export const AnalysisPage: React.FC = () => {
           {isLoadingList ? (
             <div className="py-24 text-center space-y-3">
               <div className="w-8 h-8 border-3 border-sky-200 border-t-[#079FE0] rounded-full animate-spin mx-auto" />
-              <p className="text-xs font-semibold text-slate-500">Querying Supabase real price telemetry...</p>
+              <p className="text-xs font-semibold text-slate-500">Querying verified price movements across dates...</p>
             </div>
           ) : products.length === 0 ? (
             <div className="py-20 text-center space-y-3 max-w-md mx-auto px-4">
               <Sparkles className="w-8 h-8 text-[#079FE0] mx-auto" />
-              <h3 className="font-bold text-slate-800 text-sm">No Price Changes Recorded Yet</h3>
+              <h3 className="font-bold text-slate-800 text-sm">No Price Changes Between Selected Dates</h3>
               <p className="text-xs text-slate-500 leading-relaxed">
-                The Data Analysis view exclusively tracks products with verified changes in current selling price (not MRP) on a platform over time (e.g. ₹2,000 moving to ₹2,200). Products will appear here once consecutive scrape runs confirm a price shift.
+                No price shifts were detected between {formatDateLabel(previousDate)} and {formatDateLabel(targetDate)} for the active filters. Try selecting a different prior date or unticking "Only Changed Prices" to view all recorded products.
               </p>
             </div>
           ) : (
@@ -455,9 +669,9 @@ export const AnalysisPage: React.FC = () => {
                   </div>
 
                   {/* Previous Price */}
-                  <div className="w-28 text-right shrink-0">
+                  <div className="w-32 text-right shrink-0">
                     <span className="text-xs font-bold text-slate-700 block">
-                      {prod.previous_price && prod.previous_price !== prod.lowest_price
+                      {prod.previous_price && prod.previous_price > 0
                         ? formatCurrency(prod.previous_price)
                         : "—"}
                     </span>
@@ -466,13 +680,13 @@ export const AnalysisPage: React.FC = () => {
                     </span>
                   </div>
 
-                  {/* Current Price */}
-                  <div className="w-28 text-right shrink-0">
+                  {/* Target Date Price */}
+                  <div className="w-32 text-right shrink-0">
                     <span className="text-sm font-black text-slate-900 block">
                       {formatCurrency(prod.lowest_price)}
                     </span>
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                      Current Price
+                    <span className="text-[10px] font-bold text-[#079FE0] uppercase tracking-wider block">
+                      {formatShortDate(targetDate) || "Current"}
                     </span>
                   </div>
 
@@ -564,10 +778,18 @@ export const AnalysisPage: React.FC = () => {
                     {modalProduct.title}
                   </h2>
                   <p className="text-xs text-slate-500 font-medium">
-                    Current Best Price:{" "}
+                    Price on {formatShortDate(targetDate) || "Latest"}:{" "}
                     <span className="font-bold text-slate-900">
                       {formatCurrency(modalProduct.lowest_price)}
                     </span>{" "}
+                    {modalProduct.previous_price && (
+                      <>
+                        • Prior on {formatShortDate(previousDate) || "Previous"}:{" "}
+                        <span className="font-bold text-slate-700">
+                          {formatCurrency(modalProduct.previous_price)}
+                        </span>
+                      </>
+                    )}{" "}
                     • Recorded Range: {formatCurrency(modalProduct.min_recorded_price)} – {formatCurrency(modalProduct.max_recorded_price)}
                   </p>
                 </div>
@@ -680,9 +902,9 @@ export const AnalysisPage: React.FC = () => {
                 ) : (
                   <div className="h-44 flex flex-col items-center justify-center text-slate-500 space-y-2 p-6 bg-white rounded-xl border border-slate-200">
                     <LineChartIcon className="w-7 h-7 stroke-1 text-slate-400" />
-                    <p className="text-xs font-bold text-slate-800">Single Scrape Recorded (13 Oct 2026)</p>
+                    <p className="text-xs font-bold text-slate-800">Telemetry History</p>
                     <p className="text-[11px] text-slate-500 text-center max-w-sm">
-                      This product has been recorded once. Multi-point historical price curves will plot across timeline checkpoints automatically as subsequent scraper runs complete.
+                      Detailed platform price trajectory will render across checkpoints as recorded.
                     </p>
                   </div>
                 )}

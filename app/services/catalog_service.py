@@ -9,6 +9,7 @@ import gc
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
+from collections import defaultdict
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -2583,8 +2584,179 @@ class CatalogService:
         finally:
             conn.close()
 
+    def _init_price_telemetry_tables(self, conn):
+        """Ensures SQLite tables for synced Supabase products and daily price history exist."""
+        cur = conn.cursor()
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS supabase_products (
+            id TEXT PRIMARY KEY,
+            scraper_id TEXT,
+            platform TEXT,
+            style TEXT,
+            sku TEXT,
+            ean TEXT,
+            title TEXT,
+            image_url TEXT,
+            family_id TEXT
+        );
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_sp_style ON supabase_products(style);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_sp_fam ON supabase_products(family_id);")
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS daily_price_history (
+            id TEXT PRIMARY KEY,
+            product_id TEXT NOT NULL,
+            scrape_date TEXT NOT NULL,
+            price REAL NOT NULL,
+            mrp REAL,
+            recorded_at TEXT NOT NULL
+        );
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_dph_date ON daily_price_history(scrape_date);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_dph_prod_date ON daily_price_history(product_id, scrape_date);")
+        conn.commit()
+
+    def get_available_scrape_dates(self) -> Dict[str, Any]:
+        """Returns available scrape dates from SQLite, auto-syncing if empty."""
+        conn = self._get_connection()
+        try:
+            self._init_price_telemetry_tables(conn)
+            cur = conn.cursor()
+            cur.execute("SELECT DISTINCT scrape_date FROM daily_price_history ORDER BY scrape_date DESC")
+            dates = [r[0] for r in cur.fetchall()]
+            if not dates:
+                self.sync_price_telemetry()
+                cur.execute("SELECT DISTINCT scrape_date FROM daily_price_history ORDER BY scrape_date DESC")
+                dates = [r[0] for r in cur.fetchall()]
+            latest_date = dates[0] if dates else "2026-10-18"
+            default_prev = dates[1] if len(dates) > 1 else (dates[0] if dates else "2026-10-17")
+            return {
+                "available_dates": dates,
+                "latest_date": latest_date,
+                "default_previous_date": default_prev
+            }
+        finally:
+            conn.close()
+
+    def sync_price_telemetry(self, force: bool = False) -> Dict[str, Any]:
+        """
+        Fast incremental sync of products and price_history from Supabase into local SQLite.
+        Only pulls records recorded after MAX(recorded_at) in daily_price_history.
+        Runs in < 1-2s for incremental runs.
+        """
+        try:
+            import httpx
+            url = (os.getenv("SUPABASE_URL", "") or "https://viflznbwqrunivhfoavq.supabase.co").rstrip("/")
+            sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "sb_secret_wgDvOA3l28p2d2jzH5euRg_mgqeBpLF"
+            headers = {"apikey": sec_key, "Authorization": f"Bearer {sec_key}"}
+
+            conn = self._get_connection()
+            self._init_price_telemetry_tables(conn)
+            cur = conn.cursor()
+
+            cur.execute("SELECT COUNT(*) FROM supabase_products")
+            prod_count = cur.fetchone()[0]
+
+            with httpx.Client(timeout=20.0) as client:
+                # 1. Scrapers map
+                r_sc = client.get(f"{url}/rest/v1/scrapers?select=id,name", headers=headers)
+                sc_map = {}
+                canonical_map = {
+                    "tatacliq": "tata",
+                    "tatacliq_luxury": "tata_lux",
+                    "columbia_sportswear_india": "columbia",
+                    "adventuras": "adv",
+                    "myntra columbia scraper": "myntra",
+                    "ajio columbia scraper": "ajio"
+                }
+                if r_sc.status_code == 200:
+                    for s in r_sc.json():
+                        nm = s["name"].lower()
+                        sc_map[s["id"]] = canonical_map.get(nm, nm)
+
+                # 2. Sync products if table has few products
+                if prod_count < 1000 or force:
+                    offset = 0
+                    while True:
+                        r_p = client.get(f"{url}/rest/v1/products?select=id,scraper_id,style,sku,ean,title,image_url&offset={offset}&limit=1000", headers=headers)
+                        if r_p.status_code != 200:
+                            break
+                        chunk = r_p.json() or []
+                        if not chunk:
+                            break
+                        rows_to_insert = []
+                        for p in chunk:
+                            pid = p["id"]
+                            s_id = p.get("scraper_id")
+                            plat = sc_map.get(s_id, "columbia")
+                            style = p.get("style") or ""
+                            sku = p.get("sku") or ""
+                            ean = p.get("ean") or ""
+                            title = p.get("title") or ""
+                            img = p.get("image_url") or ""
+                            fam_id = None
+                            if style:
+                                cur.execute("SELECT family_id FROM lookup_index WHERE term = ?", (style.lower(),))
+                                r_l = cur.fetchone()
+                                fam_id = r_l[0] if r_l else f"STYLE_{style}"
+                            elif sku:
+                                cur.execute("SELECT family_id FROM lookup_index WHERE term = ?", (sku.lower(),))
+                                r_l = cur.fetchone()
+                                if r_l: fam_id = r_l[0]
+                            rows_to_insert.append((pid, s_id, plat, style, sku, ean, title, img, fam_id))
+                        cur.executemany("""
+                        INSERT OR REPLACE INTO supabase_products (id, scraper_id, platform, style, sku, ean, title, image_url, family_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, rows_to_insert)
+                        conn.commit()
+                        if len(chunk) < 1000:
+                            break
+                        offset += 1000
+
+                # 3. Incremental sync price_history
+                cur.execute("SELECT MAX(recorded_at) FROM daily_price_history")
+                max_rec = cur.fetchone()[0]
+                date_filter = f"&recorded_at=gt.{max_rec}" if (max_rec and not force) else ""
+
+                offset = 0
+                synced_history = 0
+                while True:
+                    r_h = client.get(f"{url}/rest/v1/price_history?select=id,product_id,price,mrp,recorded_at{date_filter}&offset={offset}&limit=1000&order=recorded_at.asc", headers=headers)
+                    if r_h.status_code != 200:
+                        break
+                    chunk = r_h.json() or []
+                    if not chunk:
+                        break
+                    h_rows = []
+                    for h in chunk:
+                        rec = h.get("recorded_at") or ""
+                        d = rec[:10]
+                        p = h.get("price")
+                        if p is not None:
+                            h_rows.append((h["id"], h["product_id"], d, float(p), float(h["mrp"]) if h.get("mrp") is not None else None, rec))
+                    if h_rows:
+                        cur.executemany("""
+                        INSERT OR IGNORE INTO daily_price_history (id, product_id, scrape_date, price, mrp, recorded_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """, h_rows)
+                        conn.commit()
+                        synced_history += len(h_rows)
+                    if len(chunk) < 1000:
+                        break
+                    offset += 1000
+
+            conn.close()
+            return {"status": "success", "synced_rows": synced_history}
+        except Exception as e:
+            print(f"[CATALOG_SERVICE] [WARN] Telemetry sync error: {e}", flush=True)
+            return {"status": "error", "message": str(e)}
+
     def get_analytics_products(
         self,
+        target_date: Optional[str] = None,
+        previous_date: Optional[str] = None,
+        changes_only: bool = True,
         search: Optional[str] = None,
         category: Optional[str] = None,
         gender: Optional[str] = None,
@@ -2600,140 +2772,198 @@ class CatalogService:
                 "page": 1,
                 "page_size": page_size,
                 "total_pages": 1,
+                "target_date": target_date or "2026-10-18",
+                "previous_date": previous_date or "2026-10-17",
+                "available_dates": [],
+                "total_price_drops": 0,
+                "total_price_rises": 0,
+                "total_stable": 0,
                 "products": [],
                 "scrapers_running": True,
                 "message": "Scrapers are currently running to save RAM. Please wait until they finish."
             }
 
-        if not self.is_loaded or self.total_count == 0:
-            self.load_catalog()
+        dates_info = self.get_available_scrape_dates()
+        avail_dates = dates_info.get("available_dates", [])
+        if not avail_dates:
+            avail_dates = ["2026-10-18", "2026-10-17", "2026-10-16", "2026-10-15"]
 
-        self._load_or_fetch_supabase_price_cache()
+        # Resolve target_date
+        t_date = target_date if (target_date and target_date in avail_dates) else dates_info.get("latest_date", avail_dates[0])
 
-        if not self.supabase_cache:
-            return {
-                "total_records": 0,
-                "page": 1,
-                "page_size": page_size,
-                "total_pages": 1,
-                "products": []
-            }
+        # Resolve previous_date
+        p_date = previous_date
+        if not p_date or p_date not in avail_dates or p_date == t_date:
+            t_idx = avail_dates.index(t_date) if t_date in avail_dates else 0
+            if t_idx + 1 < len(avail_dates):
+                p_date = avail_dates[t_idx + 1]
+            else:
+                p_date = avail_dates[-1]
 
-        candidate_fids = list(self.supabase_cache.keys())
-        enriched = []
-        for fid in candidate_fids:
-            c_data = self.supabase_cache.get(fid)
-            if not c_data:
-                continue
-            h_points = c_data.get("history_points") or []
-            if len(h_points) < 2:
-                continue
+        conn = self._get_connection()
+        self._init_price_telemetry_tables(conn)
+        cur = conn.cursor()
 
-            all_plats = set()
-            for pt in h_points:
-                for k in pt.keys():
-                    if k != "date":
-                        all_plats.add(k)
+        try:
+            # Base query joining target_date prices with previous_date prices
+            where_conditions = ["curr.scrape_date = ?"]
+            params: List[Any] = [p_date, t_date]
 
-            has_hist_change = False
-            pct = 0.0
-            prev_price = None
-            curr_price = None
-            change_platform = None
-            min_p = c_data.get("lowest_price") or 0.0
-            max_p = c_data.get("lowest_price") or 0.0
-            sparkline_points = []
+            if changes_only:
+                where_conditions.append("curr.price != prev.price")
 
-            for plat_k in all_plats:
-                if platform and platform.lower() != "all" and plat_k != platform.lower():
-                    continue
-                plat_prices = []
-                for pt in h_points:
-                    if plat_k in pt and pt[plat_k] is not None and pt[plat_k] > 0:
-                        plat_prices.append(float(pt[plat_k]))
-                if len(plat_prices) >= 2 and plat_prices[-1] != plat_prices[-2]:
-                    p_old = plat_prices[-2]
-                    p_new = plat_prices[-1]
-                    has_hist_change = True
-                    change_platform = plat_k
-                    prev_price = p_old
-                    curr_price = p_new
-                    pct = round(((p_new - p_old) / p_old) * 100, 1)
-                    min_p = min(plat_prices)
-                    max_p = max(plat_prices)
-                    sparkline_points = plat_prices
-                    break
+            if category and category.lower() != "all":
+                where_conditions.append("LOWER(COALESCE(pf.category, 'Apparel')) = ?")
+                params.append(category.lower())
 
-            if prev_price is None:
-                prev_price = c_data.get("previous_price") or c_data.get("lowest_price") or 0.0
-            if curr_price is None:
-                curr_price = c_data.get("lowest_price") or 0.0
-            if pct == 0.0 and c_data.get("price_change_percent"):
-                pct = c_data["price_change_percent"]
+            if gender and gender.lower() != "all":
+                where_conditions.append("LOWER(COALESCE(pf.gender, 'Unisex')) = ?")
+                params.append(gender.lower())
 
-            title = c_data.get("title") or "Columbia Product"
-            cat = c_data.get("category") or detect_category(title)
-            gen = c_data.get("gender") or detect_gender(title)
-            style = c_data.get("style") or (fid.replace("STYLE_", "") if fid.startswith("STYLE_") else None)
-            img_url = c_data.get("image_url")
+            if platform and platform.lower() != "all":
+                where_conditions.append("LOWER(sp.platform) = ?")
+                params.append(platform.lower())
 
-            if category and category.lower() != "all" and cat.lower() != category.lower():
-                continue
-            if gender and gender.lower() != "all" and gen.lower() != gender.lower():
-                continue
             if search and search.strip():
-                q = search.strip().lower()
-                if q not in title.lower() and q not in str(style or "").lower():
-                    continue
+                q = f"%{search.strip().lower()}%"
+                where_conditions.append("(LOWER(COALESCE(pf.title, sp.title)) LIKE ? OR LOWER(COALESCE(pf.style, sp.style)) LIKE ? OR LOWER(sp.sku) LIKE ?)")
+                params.extend([q, q, q])
 
-            enriched.append({
-                "family_id": fid,
-                "title": title,
-                "style": style,
-                "ean": c_data.get("ean"),
-                "category": cat,
-                "gender": gen,
-                "image_url": img_url,
-                "lowest_price": curr_price or c_data.get("lowest_price") or 0.0,
-                "previous_price": prev_price,
-                "price_change_percent": pct,
-                "change_platform": change_platform,
-                "min_recorded_price": min_p,
-                "max_recorded_price": max_p,
-                "sparkline": sparkline_points or [curr_price or 0.0],
-                "variants_count": c_data.get("variants_count") or 1,
-                "sizes_count": c_data.get("sizes_count") or 1,
-                "platforms_count": len(all_plats) or 1
-            })
+            where_clause = " AND ".join(where_conditions)
 
-        if sort_by == "price_change":
-            enriched.sort(key=lambda x: (abs(x["price_change_percent"]) > 0, abs(x["price_change_percent"])), reverse=True)
-        elif sort_by == "price_drop":
-            enriched.sort(key=lambda x: x["price_change_percent"])
-        elif sort_by == "price_asc":
-            enriched.sort(key=lambda x: x["lowest_price"])
-        elif sort_by == "price_desc":
-            enriched.sort(key=lambda x: x["lowest_price"], reverse=True)
-        elif sort_by == "name":
-            enriched.sort(key=lambda x: x["title"].lower())
-        else:
-            enriched.sort(key=lambda x: x["platforms_count"], reverse=True)
+            # Query deduplicated by family_id choosing largest price change
+            full_sql = f"""
+            WITH ranked_items AS (
+                SELECT 
+                    COALESCE(sp.family_id, 'PROD_' || sp.id) AS family_id,
+                    COALESCE(pf.title, sp.title) AS title,
+                    COALESCE(pf.style, sp.style, '') AS style,
+                    COALESCE(pf.category, 'Apparel') AS category,
+                    COALESCE(pf.gender, 'Unisex') AS gender,
+                    COALESCE(pf.image_url, sp.image_url, '/vantis_logo.png') AS image_url,
+                    sp.platform AS change_platform,
+                    prev.price AS previous_price,
+                    curr.price AS current_price,
+                    ROUND(((curr.price - prev.price) / prev.price) * 100, 1) AS price_change_percent,
+                    prev.scrape_date AS previous_date,
+                    curr.scrape_date AS target_date,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY COALESCE(sp.family_id, 'PROD_' || sp.id)
+                        ORDER BY ABS(((curr.price - prev.price) / prev.price)) DESC
+                    ) as rn
+                FROM daily_price_history curr
+                JOIN daily_price_history prev 
+                    ON curr.product_id = prev.product_id AND prev.scrape_date = ?
+                JOIN supabase_products sp 
+                    ON curr.product_id = sp.id
+                LEFT JOIN product_families pf 
+                    ON sp.family_id = pf.family_id
+                WHERE {where_clause}
+            )
+            SELECT 
+                family_id, title, style, category, gender, image_url, change_platform,
+                previous_price, current_price, price_change_percent, previous_date, target_date
+            FROM ranked_items
+            WHERE rn = 1
+            """
 
-        total_records = len(enriched)
-        total_pages = max(1, math.ceil(total_records / page_size))
-        current_page = max(1, min(page, total_pages))
+            cur.execute(full_sql, params)
+            all_rows = cur.fetchall()
 
-        start_idx = (current_page - 1) * page_size
-        end_idx = start_idx + page_size
-        paged_items = enriched[start_idx:end_idx]
+            # Calculate stats
+            drops_count = sum(1 for r in all_rows if r["price_change_percent"] < 0)
+            rises_count = sum(1 for r in all_rows if r["price_change_percent"] > 0)
+            stable_count = sum(1 for r in all_rows if r["price_change_percent"] == 0)
 
-        return {
-            "total_records": total_records,
-            "page": current_page,
-            "page_size": page_size,
-            "total_pages": total_pages,
-            "products": paged_items
-        }
+            # Sorting
+            rows_list = [dict(r) for r in all_rows]
+            if sort_by == "price_change":
+                rows_list.sort(key=lambda x: (abs(x["price_change_percent"]) > 0, abs(x["price_change_percent"])), reverse=True)
+            elif sort_by == "price_drop":
+                rows_list.sort(key=lambda x: x["price_change_percent"])
+            elif sort_by == "price_rise":
+                rows_list.sort(key=lambda x: x["price_change_percent"], reverse=True)
+            elif sort_by == "price_asc":
+                rows_list.sort(key=lambda x: x["current_price"])
+            elif sort_by == "price_desc":
+                rows_list.sort(key=lambda x: x["current_price"], reverse=True)
+            elif sort_by == "name":
+                rows_list.sort(key=lambda x: (x["title"] or "").lower())
+            else:
+                rows_list.sort(key=lambda x: (abs(x["price_change_percent"]) > 0, abs(x["price_change_percent"])), reverse=True)
+
+            total_records = len(rows_list)
+            total_pages = max(1, math.ceil(total_records / page_size))
+            current_page = max(1, min(page, total_pages))
+
+            start_idx = (current_page - 1) * page_size
+            end_idx = start_idx + page_size
+            paged = rows_list[start_idx:end_idx]
+
+            # Attach sparklines and recorded range for current page items
+            enriched_items = []
+            for item in paged:
+                fid = item["family_id"]
+                raw_id = fid.replace("PROD_", "")
+                # Query all date prices for sparkline
+                cur.execute("""
+                SELECT dph.scrape_date, MIN(dph.price)
+                FROM daily_price_history dph
+                JOIN supabase_products sp ON dph.product_id = sp.id
+                WHERE (sp.family_id = ? OR sp.id = ?)
+                GROUP BY dph.scrape_date
+                ORDER BY dph.scrape_date ASC
+                """, (fid, raw_id))
+                pts = cur.fetchall()
+                spark = [float(p[1]) for p in pts] if pts else [item["current_price"]]
+                min_p = min(spark) if spark else item["current_price"]
+                max_p = max(spark) if spark else item["current_price"]
+
+                # Count distinct platforms for this family
+                cur.execute("""
+                SELECT COUNT(DISTINCT sp.platform)
+                FROM supabase_products sp
+                WHERE (sp.family_id = ? OR sp.id = ?)
+                """, (fid, raw_id))
+                r_plat = cur.fetchone()
+                plat_cnt = r_plat[0] if (r_plat and r_plat[0] > 0) else 1
+
+                enriched_items.append({
+                    "family_id": fid,
+                    "title": item["title"] or "Columbia Product",
+                    "style": item["style"],
+                    "category": item["category"] or detect_category(item["title"] or ""),
+                    "gender": item["gender"] or detect_gender(item["title"] or ""),
+                    "image_url": item["image_url"] or "/vantis_logo.png",
+                    "lowest_price": float(item["current_price"]),
+                    "previous_price": float(item["previous_price"]) if item["previous_price"] is not None else float(item["current_price"]),
+                    "price_change_percent": float(item["price_change_percent"]),
+                    "change_platform": item["change_platform"],
+                    "min_recorded_price": float(min_p),
+                    "max_recorded_price": float(max_p),
+                    "sparkline": spark,
+                    "variants_count": 1,
+                    "sizes_count": 1,
+                    "platforms_count": plat_cnt,
+                    "target_date": item["target_date"],
+                    "previous_date": item["previous_date"]
+                })
+
+            return {
+                "total_records": total_records,
+                "page": current_page,
+                "page_size": page_size,
+                "total_pages": total_pages,
+                "target_date": t_date,
+                "previous_date": p_date,
+                "available_dates": avail_dates,
+                "total_price_drops": drops_count,
+                "total_price_rises": rises_count,
+                "total_stable": stable_count,
+                "products": enriched_items
+            }
+        finally:
+            conn.close()
 
     def get_total_families_count(self) -> int:
         """Returns the total number of canonical families from SQLite without heavy memory overhead."""
@@ -2777,210 +3007,115 @@ class CatalogService:
         print("[CATALOG_SERVICE] 🧹 In-memory catalog, indices, and analytics caches purged to free 100% RAM.", flush=True)
 
     def _load_or_fetch_supabase_price_cache(self):
-        """
-        Loads verified price changes live from Supabase price_history.
-        Zero fake static files; keeps only changed products (< 100 KB) in RAM.
-        """
-        from jobs import is_pipeline_running
-        if is_pipeline_running() or self.supabase_cache:
-            return
-
-        try:
-            import httpx
-            from collections import defaultdict
-            url = (os.getenv("SUPABASE_URL", "") or "https://viflznbwqrunivhfoavq.supabase.co").rstrip("/")
-            sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "sb_secret_wgDvOA3l28p2d2jzH5euRg_mgqeBpLF"
-            headers = {"apikey": sec_key, "Authorization": f"Bearer {sec_key}"}
-
-            with httpx.Client(timeout=25.0) as client:
-                r_sc = client.get(f"{url}/rest/v1/scrapers?select=id,name", headers=headers)
-                scrapers = {s["id"]: s["name"] for s in r_sc.json()} if r_sc.status_code == 200 else {}
-
-                # 1. Fetch recent price_history from 2026-10-16 (business run)
-                r_recent = client.get(
-                    f"{url}/rest/v1/price_history?select=product_id,price,mrp,recorded_at&recorded_at=gte.2026-10-16T00:00:00&limit=1000",
-                    headers=headers
-                )
-                if r_recent.status_code != 200:
-                    return
-
-                recent_records = r_recent.json() or []
-                recent_by_pid = {}
-                for r in recent_records:
-                    if r.get("price") is not None:
-                        recent_by_pid[r["product_id"]] = r
-
-                recent_pids = list(recent_by_pid.keys())
-                if not recent_pids:
-                    return
-
-                # 2. Batch-fetch previous price_history for these product_ids before 2026-10-16
-                prev_by_pid = defaultdict(list)
-                for i in range(0, len(recent_pids), 50):
-                    chunk = recent_pids[i:i+50]
-                    id_filter = ",".join(chunk)
-                    r_prev = client.get(
-                        f"{url}/rest/v1/price_history?product_id=in.({id_filter})&recorded_at=lt.2026-10-16T00:00:00&order=recorded_at.desc&limit=1000",
-                        headers=headers
-                    )
-                    if r_prev.status_code == 200:
-                        for row in r_prev.json():
-                            if row.get("price") is not None:
-                                prev_by_pid[row["product_id"]].append(row)
-
-                # 3. Identify products with multi-day telemetry (prioritize price changes, include stable)
-                changed_pids = []
-                stable_pids = []
-                for pid, cur_row in recent_by_pid.items():
-                    prev_rows = prev_by_pid.get(pid, [])
-                    if prev_rows:
-                        if cur_row["price"] != prev_rows[0]["price"]:
-                            changed_pids.append(pid)
-                        else:
-                            stable_pids.append(pid)
-
-                active_pids = changed_pids + stable_pids[:max(0, 150 - len(changed_pids))]
-                print(f"[CATALOG_SERVICE] [LIVE_ANALYTICS] Telemetry tracking: {len(changed_pids)} changed, {len(active_pids)} total in cache.", flush=True)
-
-                if active_pids:
-                    # 4. Fetch product details for tracked products
-                    prod_map = {}
-                    for i in range(0, len(active_pids), 50):
-                        chunk = active_pids[i:i+50]
-                        id_filter = ",".join(chunk)
-                        r_prods = client.get(
-                            f"{url}/rest/v1/products?id=in.({id_filter})&select=id,title,style,source_product_id,scraper_id,current_price,current_mrp,image_url",
-                            headers=headers
-                        )
-                        if r_prods.status_code == 200:
-                            for p in r_prods.json():
-                                prod_map[p["id"]] = p
-
-                    built_cache = {}
-                    for pid in active_pids:
-                        pinfo = prod_map.get(pid, {})
-                        cur_pt = recent_by_pid[pid]
-                        prev_pts = sorted(prev_by_pid.get(pid, []), key=lambda x: x["recorded_at"])
-                        all_history = prev_pts + [cur_pt]
-
-                        plat = scrapers.get(pinfo.get("scraper_id"), "amazon")
-                        style = pinfo.get("style")
-                        fid = f"STYLE_{style}" if style else pid
-
-                        by_date = defaultdict(dict)
-                        for x in all_history:
-                            d = x["recorded_at"][:10]
-                            by_date[d][plat] = float(x["price"])
-
-                        h_points = []
-                        for d in sorted(by_date.keys()):
-                            pt = {"date": d}
-                            pt.update(by_date[d])
-                            h_points.append(pt)
-
-                        prices = [float(x["price"]) for x in all_history]
-                        p_old = prev_pts[-1]["price"] if prev_pts else prices[0]
-                        p_new = cur_pt["price"]
-
-                        built_cache[fid] = {
-                            "family_id": fid,
-                            "title": pinfo.get("title") or "Columbia Product",
-                            "style": style,
-                            "ean": pinfo.get("ean"),
-                            "category": detect_category(pinfo.get("title") or ""),
-                            "gender": detect_gender(pinfo.get("title") or ""),
-                            "image_url": pinfo.get("image_url"),
-                            "lowest_price": p_new,
-                            "earliest_price": prices[0],
-                            "previous_price": p_old,
-                            "price_change_percent": round(((p_new - p_old) / p_old) * 100, 1) if p_old > 0 else 0.0,
-                            "min_recorded_price": min(prices),
-                            "max_recorded_price": max(prices),
-                            "sparkline": prices,
-                            "history_points": h_points,
-                            "total_recorded_points": len(prices),
-                            "dates": sorted(list(by_date.keys()))
-                        }
-                    self.supabase_cache = built_cache
-        except Exception as e:
-            print(f"[CATALOG_SERVICE] [WARN] Live Supabase price cache error: {e}", flush=True)
+        """Kept for backward compatibility. Price telemetry is managed via SQLite daily_price_history."""
+        pass
 
     def get_price_history(self, family_id: str, range_filter: str = "6M") -> Optional[Dict[str, Any]]:
-        self._load_or_fetch_supabase_price_cache()
-        c_data = self.supabase_cache.get(family_id)
-        fam = self.get_family_by_id(family_id)
-        if not c_data and not fam:
-            return None
+        conn = self._get_connection()
+        self._init_price_telemetry_tables(conn)
+        cur = conn.cursor()
+        try:
+            raw_id = family_id.replace("PROD_", "")
+            cur.execute("""
+            SELECT 
+                dph.scrape_date,
+                sp.platform,
+                MIN(dph.price) AS price,
+                MAX(dph.mrp) AS mrp
+            FROM daily_price_history dph
+            JOIN supabase_products sp ON dph.product_id = sp.id
+            WHERE (sp.family_id = ? OR sp.id = ? OR sp.style = ?)
+            GROUP BY dph.scrape_date, sp.platform
+            ORDER BY dph.scrape_date ASC
+            """, (family_id, raw_id, family_id.replace("STYLE_", "")))
+            rows = cur.fetchall()
 
-        title = (fam.get("title") if fam else None) or (c_data.get("title") if c_data else None) or "Columbia Product"
-        style = (fam.get("style") if fam else None) or (c_data.get("style") if c_data else None) or (family_id.replace("STYLE_", "") if family_id.startswith("STYLE_") else None)
-        category = (fam.get("category") if fam else None) or (c_data.get("category") if c_data else None) or detect_category(title)
-        gender = (fam.get("gender") if fam else None) or (c_data.get("gender") if c_data else None) or detect_gender(title)
-        image_url = (fam.get("image_url") if fam else None) or (c_data.get("image_url") if c_data else None)
-        tags = (fam.get("tags") if fam else None) or detect_tags(title, category, gender)
+            fam = self.get_family_by_id(family_id)
+            cur.execute("""
+            SELECT sp.title, sp.style, sp.image_url, sp.platform, pf.category, pf.gender
+            FROM supabase_products sp
+            LEFT JOIN product_families pf ON sp.family_id = pf.family_id
+            WHERE (sp.family_id = ? OR sp.id = ? OR sp.style = ?)
+            LIMIT 1
+            """, (family_id, raw_id, family_id.replace("STYLE_", "")))
+            info_row = cur.fetchone()
 
-        raw_h_points = (c_data.get("history_points") if c_data else []) or []
-        history_points = []
-        for pt in raw_h_points:
-            raw_d = str(pt.get("date", ""))
-            clean_pt = dict(pt)
-            if len(raw_d) >= 10 and "-" in raw_d:
+            title = (fam.get("title") if fam else None) or (info_row["title"] if info_row else None) or "Columbia Product"
+            style = (fam.get("style") if fam else None) or (info_row["style"] if info_row else None) or (family_id.replace("STYLE_", "") if family_id.startswith("STYLE_") else None)
+            category = (fam.get("category") if fam else None) or (info_row["category"] if info_row and info_row["category"] else None) or detect_category(title)
+            gender = (fam.get("gender") if fam else None) or (info_row["gender"] if info_row and info_row["gender"] else None) or detect_gender(title)
+            image_url = (fam.get("image_url") if fam else None) or (info_row["image_url"] if info_row else None) or "/vantis_logo.png"
+            tags = (fam.get("tags") if fam else None) or detect_tags(title, category, gender)
+
+            by_date: Dict[str, Dict[str, Any]] = defaultdict(dict)
+            plat_prices_map: Dict[str, List[float]] = defaultdict(list)
+
+            for r in rows:
+                d = r["scrape_date"]
+                plat = r["platform"]
+                pr = float(r["price"])
+                by_date[d][plat] = pr
+                plat_prices_map[plat].append(pr)
+
+            history_points = []
+            for d in sorted(by_date.keys()):
+                clean_date = d
                 try:
-                    dt = datetime.strptime(raw_d[:10], "%Y-%m-%d")
-                    clean_pt["date"] = dt.strftime("%d %b")
+                    dt = datetime.strptime(d[:10], "%Y-%m-%d")
+                    clean_date = dt.strftime("%d %b")
                 except Exception:
                     pass
-            history_points.append(clean_pt)
+                pt = {"date": clean_date, "raw_date": d}
+                pt.update(by_date[d])
+                history_points.append(pt)
 
-        all_prices = []
-        platform_stats = []
-        all_plats = ["amazon", "columbia", "tata", "tata_lux", "adv", "myntra", "ajio"]
-        for pk in all_plats:
-            plat_meta = PLATFORM_METADATA.get(pk, {})
-            plat_prices = [
-                pt[pk]
-                for pt in history_points
-                if pk in pt and pt[pk] is not None and pt[pk] > 0
-            ]
-            if plat_prices:
-                all_prices.extend(plat_prices)
-                platform_stats.append({
-                    "platform": pk,
-                    "platform_name": plat_meta.get("name") or pk.title(),
-                    "current_price": plat_prices[-1],
-                    "lowest_price": min(plat_prices),
-                    "highest_price": max(plat_prices),
-                    "trend": plat_prices
-                })
+            platform_stats = []
+            all_prices = []
+            canonical_platforms = ["amazon", "columbia", "tata", "tata_lux", "adv", "myntra", "ajio"]
+            for pk in canonical_platforms:
+                if pk in plat_prices_map and plat_prices_map[pk]:
+                    p_list = plat_prices_map[pk]
+                    all_prices.extend(p_list)
+                    plat_meta = PLATFORM_METADATA.get(pk, {})
+                    platform_stats.append({
+                        "platform": pk,
+                        "platform_name": plat_meta.get("name") or pk.title(),
+                        "current_price": p_list[-1],
+                        "lowest_price": min(p_list),
+                        "highest_price": max(p_list),
+                        "trend": p_list
+                    })
 
-        curr_p = all_prices[-1] if all_prices else ((fam.get("lowest_price") if fam else None) or (c_data.get("lowest_price") if c_data else None) or 0.0)
-        min_rec = min(all_prices) if all_prices else curr_p
-        max_rec = max(all_prices) if all_prices else curr_p
-        min_date = history_points[0]["date"] if history_points else "Today"
-        max_date = history_points[-1]["date"] if history_points else "Today"
-        pct = c_data.get("price_change_percent") if c_data else (round(((max_rec - min_rec) / min_rec) * 100, 1) if min_rec > 0 else 0.0)
+            curr_p = all_prices[-1] if all_prices else ((fam.get("lowest_price") if fam else 0.0) or 0.0)
+            min_rec = min(all_prices) if all_prices else curr_p
+            max_rec = max(all_prices) if all_prices else curr_p
+            min_date = history_points[0]["date"] if history_points else "Today"
+            max_date = history_points[-1]["date"] if history_points else "Today"
+            pct = round(((max_rec - min_rec) / min_rec) * 100, 1) if min_rec > 0 else 0.0
 
-        return {
-            "family_id": family_id,
-            "title": title,
-            "style": style,
-            "ean": (fam.get("ean") if fam else None) or (c_data.get("ean") if c_data else None),
-            "image_url": image_url,
-            "category": category,
-            "gender": gender,
-            "tags": tags,
-            "current_price": curr_p,
-            "price_change_percent": pct or 0.0,
-            "lowest_recorded_price": min_rec,
-            "lowest_recorded_date": min_date,
-            "highest_recorded_price": max_rec,
-            "highest_recorded_date": max_date,
-            "price_range": max_rec - min_rec,
-            "price_range_percent": round(((max_rec - min_rec) / min_rec) * 100, 1) if min_rec > 0 else 0.0,
-            "sparkline": all_prices or [curr_p],
-            "history_points": history_points,
-            "platform_stats": platform_stats
-        }
+            return {
+                "family_id": family_id,
+                "title": title,
+                "style": style,
+                "ean": (fam.get("ean") if fam else None),
+                "image_url": image_url,
+                "category": category,
+                "gender": gender,
+                "tags": tags,
+                "current_price": curr_p,
+                "price_change_percent": pct,
+                "lowest_recorded_price": min_rec,
+                "lowest_recorded_date": min_date,
+                "highest_recorded_price": max_rec,
+                "highest_recorded_date": max_date,
+                "price_range": max_rec - min_rec,
+                "price_range_percent": pct,
+                "sparkline": all_prices or [curr_p],
+                "history_points": history_points,
+                "platform_stats": platform_stats
+            }
+        finally:
+            conn.close()
 
     def process_master_excel(self, file_path: Path, filename: str) -> Dict[str, Any]:
         """Validates, maps, and processes master Excel catalog file."""

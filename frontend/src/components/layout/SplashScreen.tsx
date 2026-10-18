@@ -1,18 +1,27 @@
 import React, { useState, useEffect, useRef } from "react";
 import VantisLogo from "../brand/VantisLogo";
 import apiClient from "../../services/apiClient";
+import bundleService from "../../services/bundleService";
+import authService from "../../services/authService";
 
 interface SplashScreenProps {
   onComplete?: () => void;
   maxWaitSeconds?: number;
+  message?: string;
+  subMessage?: string;
 }
 
 export const SplashScreen: React.FC<SplashScreenProps> = ({
   onComplete,
   maxWaitSeconds = 90,
+  message,
+  subMessage,
 }) => {
   const [secondsElapsed, setSecondsElapsed] = useState(0);
   const [isServerReady, setIsServerReady] = useState(false);
+  const [statusText, setStatusText] = useState<string>(
+    subMessage || "Connecting to database & loading workspace..."
+  );
   const completedRef = useRef(false);
 
   const finish = () => {
@@ -28,32 +37,49 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
     document.body.classList.add("splash-active");
     let timer: any = null;
     let pollInterval: any = null;
+    let isChecking = false;
 
-    // Check server health immediately and repeatedly
-    const checkServer = async () => {
+    // Check server health and ensure all bundle data is loaded
+    const checkServerAndData = async () => {
+      if (isChecking || completedRef.current) return;
+      isChecking = true;
+
       try {
-        const res = await apiClient.get("/api/health", { timeout: 2500 });
-        if (res.status === 200) {
+        let ok = false;
+        try {
+          const res = await apiClient.get("/api/health", { timeout: 3000 });
+          if (res.status === 200) ok = true;
+        } catch {
+          const res = await apiClient.get("/health", { timeout: 3000 });
+          if (res.status === 200) ok = true;
+        }
+
+        if (ok) {
           setIsServerReady(true);
-          finish();
+          // If authenticated, also wait until system bundle is completely loaded
+          if (authService.isAuthenticated()) {
+            setStatusText("Loading catalogue & real-time telemetry...");
+            try {
+              await bundleService.getBundle();
+            } catch {
+              // Proceed even if bundle fails
+            }
+          }
+          setStatusText("All data loaded! Launching dashboard...");
+          setTimeout(() => {
+            finish();
+          }, 400);
           return;
         }
       } catch {
-        try {
-          const res = await apiClient.get("/health", { timeout: 2500 });
-          if (res.status === 200) {
-            setIsServerReady(true);
-            finish();
-            return;
-          }
-        } catch {
-          // Server might still be waking up on Render free tier
-        }
+        // Server still spinning up
+      } finally {
+        isChecking = false;
       }
     };
 
-    checkServer();
-    pollInterval = setInterval(checkServer, 1500);
+    checkServerAndData();
+    pollInterval = setInterval(checkServerAndData, 1500);
 
     // Track elapsed time up to maxWaitSeconds
     timer = setInterval(() => {
@@ -92,12 +118,13 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
         {/* Status Text as explicitly requested by user */}
         <div className="space-y-3 px-4 max-w-md">
           <p className="text-base sm:text-lg font-bold text-slate-800 leading-snug">
-            Connecting to server... It might take around a minute to turn on the server.
+            {message || "Loading Columbia Platform Intelligence"}
           </p>
           <p className="text-xs sm:text-sm font-semibold text-slate-400">
-            {isServerReady
-              ? "Server responded. Entering workspace..."
-              : `Checking connection (${secondsElapsed}s / ${maxWaitSeconds}s)...`}
+            {subMessage ||
+              (isServerReady
+                ? statusText
+                : `Connecting to server (${secondsElapsed}s / ${maxWaitSeconds}s)...`)}
           </p>
         </div>
 
@@ -105,7 +132,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
         <div className="w-full max-w-xs bg-slate-100 rounded-full h-2 overflow-hidden shadow-inner">
           <div
             className="bg-gradient-to-r from-sky-400 to-[#079FE0] h-full rounded-full transition-all duration-700 ease-out"
-            style={{ width: `${Math.max(8, progressPercent)}%` }}
+            style={{ width: `${Math.max(12, isServerReady ? 92 : progressPercent)}%` }}
           />
         </div>
       </div>

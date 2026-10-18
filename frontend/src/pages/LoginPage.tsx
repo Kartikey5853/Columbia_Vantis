@@ -5,6 +5,8 @@ import VantisLogo from "../components/brand/VantisLogo";
 import SplashScreen from "../components/layout/SplashScreen";
 import authService from "../services/authService";
 import bundleService from "../services/bundleService";
+import analyticsService from "../services/analyticsService";
+import uploadService from "../services/uploadService";
 
 export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
@@ -13,6 +15,7 @@ export const LoginPage: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingStep, setLoadingStep] = useState<string>("Authenticating credentials...");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -23,14 +26,30 @@ export const LoginPage: React.FC = () => {
     }
 
     setIsLoading(true);
+    setLoadingStep("Authenticating credentials...");
     setErrorMessage(null);
 
     try {
       await authService.login(username, password, rememberMe);
-      // Pre-warm bundle in background for instant UI rendering
-      bundleService.getBundle().catch(() => {});
-      // Pass state to show splash loading screen
-      navigate("/home", { state: { justLoggedIn: true } });
+
+      setLoadingStep("Loading system catalogue & price telemetry...");
+      await bundleService.getBundle(true);
+
+      setLoadingStep("Fetching price intelligence & movement dates...");
+      await analyticsService.getAvailableDates().catch(() => null);
+
+      setLoadingStep("Verifying master data configuration...");
+      try {
+        const st = await uploadService.getMasterDataStatus();
+        if (st.is_configured) {
+          localStorage.setItem("master_excel_uploaded", "true");
+        }
+      } catch {}
+
+      setLoadingStep("All data loaded! Launching dashboard...");
+      await new Promise((r) => setTimeout(r, 400));
+
+      navigate("/home");
     } catch (err: any) {
       setErrorMessage(err.message || "Invalid username or password. Please try again.");
     } finally {
@@ -40,7 +59,13 @@ export const LoginPage: React.FC = () => {
 
   return (
     <>
-      {isLoading && <SplashScreen maxWaitSeconds={90} />}
+      {isLoading && (
+        <SplashScreen
+          maxWaitSeconds={90}
+          message="Logging in & Loading All System Data"
+          subMessage={loadingStep}
+        />
+      )}
       <div
         className="min-h-screen bg-cover bg-center bg-no-repeat flex items-center justify-center p-4 sm:p-6 select-none relative"
         style={{ backgroundImage: "url('/login-bg.png')" }}

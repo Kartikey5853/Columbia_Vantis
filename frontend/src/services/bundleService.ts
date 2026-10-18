@@ -9,6 +9,12 @@ export interface SystemBundleResponse {
     page: number;
     page_size: number;
     total_pages: number;
+    target_date?: string;
+    previous_date?: string;
+    available_dates?: string[];
+    total_price_drops?: number;
+    total_price_rises?: number;
+    total_stable?: number;
     products: AnalyticsProductRow[];
   };
   system: {

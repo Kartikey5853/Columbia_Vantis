@@ -150,6 +150,28 @@ export interface AnalyticsProductRow {
   variants_count: number;
   sizes_count: number;
   platforms_count: number;
+  target_date?: string;
+  previous_date?: string;
+}
+
+export interface AnalyticsDatesResponse {
+  available_dates: string[];
+  latest_date: string;
+  default_previous_date: string;
+}
+
+export interface AnalyticsProductsResponse {
+  total_records: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+  target_date?: string;
+  previous_date?: string;
+  available_dates?: string[];
+  total_price_drops?: number;
+  total_price_rises?: number;
+  total_stable?: number;
+  products: AnalyticsProductRow[];
 }
 
 export interface PlatformPriceStat {

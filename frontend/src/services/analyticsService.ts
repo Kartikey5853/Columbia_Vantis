@@ -1,7 +1,16 @@
 import apiClient from "./apiClient";
-import { AnalyticsSummary, AnalyticsProductRow, ProductPriceHistoryResponse } from "../types";
+import {
+  AnalyticsSummary,
+  AnalyticsProductRow,
+  ProductPriceHistoryResponse,
+  AnalyticsDatesResponse,
+  AnalyticsProductsResponse,
+} from "../types";
 
 export interface AnalyticsFilterParams {
+  target_date?: string;
+  previous_date?: string;
+  changes_only?: boolean;
   page?: number;
   page_size?: number;
   search?: string;
@@ -11,17 +20,19 @@ export interface AnalyticsFilterParams {
   sort_by?: string;
 }
 
-export interface AnalyticsProductsResponse {
-  total_records: number;
-  page: number;
-  page_size: number;
-  total_pages: number;
-  products: AnalyticsProductRow[];
-}
-
 export const analyticsService = {
   async getSummary(): Promise<AnalyticsSummary> {
     const response = await apiClient.get<AnalyticsSummary>("/api/analytics/summary");
+    return response.data;
+  },
+
+  async getAvailableDates(): Promise<AnalyticsDatesResponse> {
+    const response = await apiClient.get<AnalyticsDatesResponse>("/api/analytics/dates");
+    return response.data;
+  },
+
+  async syncTelemetry(): Promise<{ status: string; synced_rows?: number }> {
+    const response = await apiClient.post<{ status: string; synced_rows?: number }>("/api/analytics/sync");
     return response.data;
   },
 

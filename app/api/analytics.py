@@ -10,8 +10,22 @@ async def get_analytics_summary():
     """Returns high-level catalogue intelligence metrics."""
     return catalog_service.get_summary()
 
+@router.get("/dates")
+async def get_analytics_dates():
+    """Returns available scrape dates from database and default comparison dates."""
+    return catalog_service.get_available_scrape_dates()
+
+@router.post("/sync")
+@router.get("/sync")
+async def sync_analytics_telemetry():
+    """Incremental sync of live telemetry from Supabase into local cache."""
+    return catalog_service.sync_price_telemetry()
+
 @router.get("/products")
 async def get_analytics_product_list(
+    target_date: Optional[str] = Query(None, description="Target comparison date (YYYY-MM-DD), defaults to latest"),
+    previous_date: Optional[str] = Query(None, description="Base comparison date (YYYY-MM-DD), defaults to previous run"),
+    changes_only: bool = Query(True, description="Filter only products with price shifts between target and previous date"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     search: Optional[str] = Query(None),
@@ -21,10 +35,14 @@ async def get_analytics_product_list(
     sort_by: str = Query("price_change")
 ):
     """
-    Returns products formatted for the left pane of the Analytics workspace,
+    Returns products formatted for the Data Analysis workspace,
+    comparing prices between target_date and previous_date,
     including sparklines, price change %, min/max recorded prices.
     """
     return catalog_service.get_analytics_products(
+        target_date=target_date,
+        previous_date=previous_date,
+        changes_only=changes_only,
         search=search,
         category=category,
         gender=gender,
