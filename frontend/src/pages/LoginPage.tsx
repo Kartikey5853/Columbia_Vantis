@@ -8,8 +8,8 @@ import bundleService from "../services/bundleService";
 
 export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
-  const [username, setUsername] = useState("kartikey");
-  const [password, setPassword] = useState("kartikey123");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
