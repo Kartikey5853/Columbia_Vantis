@@ -13,7 +13,7 @@ interface SplashScreenProps {
 
 export const SplashScreen: React.FC<SplashScreenProps> = ({
   onComplete,
-  maxWaitSeconds = 90,
+  maxWaitSeconds = 180,
   message,
   subMessage,
 }) => {
@@ -47,10 +47,10 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
       try {
         let ok = false;
         try {
-          const res = await apiClient.get("/api/health", { timeout: 3000 });
+          const res = await apiClient.get("/api/health", { timeout: 6000 });
           if (res.status === 200) ok = true;
         } catch {
-          const res = await apiClient.get("/health", { timeout: 3000 });
+          const res = await apiClient.get("/health", { timeout: 6000 });
           if (res.status === 200) ok = true;
         }
 

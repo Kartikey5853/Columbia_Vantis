@@ -61,7 +61,7 @@ export const LoginPage: React.FC = () => {
     <>
       {isLoading && (
         <SplashScreen
-          maxWaitSeconds={90}
+          maxWaitSeconds={180}
           message="Logging in & Loading All System Data"
           subMessage={loadingStep}
         />

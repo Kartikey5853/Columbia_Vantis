@@ -29,7 +29,9 @@ let inflightPromise: Promise<SystemBundleResponse> | null = null;
 
 export const bundleService = {
   async getBundle(forceRefresh: boolean = false): Promise<SystemBundleResponse> {
-    if (!forceRefresh && cachedBundle) {
+    if (forceRefresh) {
+      cachedBundle = null;
+    } else if (cachedBundle) {
       return cachedBundle;
     }
 
@@ -38,7 +40,7 @@ export const bundleService = {
     }
 
     inflightPromise = apiClient
-      .get<SystemBundleResponse>("/api/system/bundle", { timeout: 30000 })
+      .get<SystemBundleResponse>("/api/system/bundle", { timeout: 180000 })
       .then((res) => {
         cachedBundle = res.data;
         inflightPromise = null;

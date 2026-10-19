@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import {
   Search,
   RotateCcw,
+  RefreshCw,
   ChevronDown,
   ChevronUp,
   ChevronRight,
@@ -28,6 +29,7 @@ export const CataloguePage: React.FC = () => {
   const [genders, setGenders] = useState<string[]>(["All"]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isExporting, setIsExporting] = useState<boolean>(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   // Filters & Pagination
   const [page, setPage] = useState<number>(1);
@@ -44,8 +46,9 @@ export const CataloguePage: React.FC = () => {
     fetchProducts();
   }, [page, pageSize, category, gender, priceRange]);
 
-  const fetchProducts = async (currentSearchTerm?: string) => {
+  const fetchProducts = async (currentSearchTerm?: string, forceRefresh: boolean = false) => {
     setIsLoading(true);
+    setFetchError(null);
     const searchToUse = currentSearchTerm !== undefined ? currentSearchTerm : searchTerm;
 
     let minPrice: number | undefined;
@@ -70,8 +73,8 @@ export const CataloguePage: React.FC = () => {
       gender === "All" &&
       priceRange === "All";
 
-    // Instant bootstrap via pre-warmed bundle
-    if (isDefaultFilter) {
+    // Instant bootstrap via pre-warmed bundle ONLY when not forced refresh
+    if (isDefaultFilter && !forceRefresh) {
       const cached = bundleService.getCachedBundle();
       if (cached && cached.catalog && cached.catalog.products?.length > 0) {
         setProducts(cached.catalog.products);
@@ -85,7 +88,7 @@ export const CataloguePage: React.FC = () => {
     }
 
     try {
-      if (isDefaultFilter) {
+      if (isDefaultFilter && !forceRefresh) {
         const bundle = await bundleService.getBundle();
         if (bundle && bundle.catalog && bundle.catalog.products?.length > 0) {
           setProducts(bundle.catalog.products);
@@ -108,16 +111,22 @@ export const CataloguePage: React.FC = () => {
         max_price: maxPrice,
       });
 
-      setProducts(res.products);
-      setTotalRecords(res.total_records);
-      setTotalPages(res.total_pages);
+      setProducts(res.products || []);
+      setTotalRecords(res.total_records || 0);
+      setTotalPages(res.total_pages || 1);
       if (res.categories && res.categories.length > 0) setCategories(res.categories);
       if (res.genders && res.genders.length > 0) setGenders(res.genders);
-    } catch {
-      // Fallback
+    } catch (err: any) {
+      console.error("Failed to fetch catalogue products:", err);
+      setFetchError(err?.message || "Failed to load products. Please click refresh to retry.");
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleRefresh = async () => {
+    bundleService.clearCache();
+    await fetchProducts(undefined, true);
   };
 
   const handleSearchSubmit = (e: React.FormEvent) => {
@@ -187,18 +196,34 @@ export const CataloguePage: React.FC = () => {
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-8 py-8 space-y-6">
       {/* Title & Stats */}
-      <div className="space-y-1">
-        <div className="flex items-center gap-3">
-          <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
-            Product Catalogue
-          </h1>
-          <span className="bg-[#EAF6FE] text-[#079FE0] font-extrabold text-xs sm:text-sm px-3 py-1 rounded-full border border-sky-200">
-            {totalRecords.toLocaleString("en-IN")} products
-          </span>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="space-y-1">
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
+              Product Catalogue
+            </h1>
+            <span className="bg-[#EAF6FE] text-[#079FE0] font-extrabold text-xs sm:text-sm px-3 py-1 rounded-full border border-sky-200">
+              {totalRecords.toLocaleString("en-IN")} products
+            </span>
+          </div>
+          <p className="text-xs sm:text-sm text-slate-500 font-medium">
+            Browse all products from the master catalogue. Click on a row to view platform details or open the full product page.
+          </p>
         </div>
-        <p className="text-xs sm:text-sm text-slate-500 font-medium">
-          Browse all products from the master catalogue. Click on a row to view platform details or open the full product page.
-        </p>
+
+        {/* Refresh Everything / Call back products */}
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleRefresh}
+            disabled={isLoading}
+            className="inline-flex items-center gap-2 px-3.5 py-2 bg-white hover:bg-slate-50 active:bg-slate-100 disabled:opacity-50 text-slate-700 border border-slate-200/90 rounded-xl text-xs sm:text-sm font-bold shadow-2xs transition-all cursor-pointer"
+            title="Refresh catalogue and reload all products from the server"
+          >
+            <RefreshCw className={`w-4 h-4 text-[#079FE0] ${isLoading ? "animate-spin" : ""}`} />
+            <span>{isLoading ? "Refreshing..." : "Refresh Catalogue"}</span>
+          </button>
+        </div>
       </div>
 
       {/* Filter Toolbar */}
@@ -300,9 +325,19 @@ export const CataloguePage: React.FC = () => {
             </select>
           </div>
 
-          {/* Clear Filters Button */}
-          <div className="md:col-span-1 flex justify-end">
+          {/* Action Buttons: Refresh & Clear */}
+          <div className="md:col-span-1 flex items-center justify-end gap-1.5">
             <button
+              type="button"
+              onClick={handleRefresh}
+              disabled={isLoading}
+              className="p-2 text-slate-500 hover:text-[#079FE0] hover:bg-sky-50 rounded-xl transition-colors border border-slate-200 cursor-pointer disabled:opacity-50"
+              title="Refresh catalogue and reload products from server"
+            >
+              <RefreshCw className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`} />
+            </button>
+            <button
+              type="button"
               onClick={clearFilters}
               className="p-2 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors border border-slate-200 cursor-pointer"
               title="Clear all filters"
@@ -312,6 +347,24 @@ export const CataloguePage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Error Banner if fetch failed */}
+      {fetchError && (
+        <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200/80 text-amber-900 flex items-center justify-between gap-3 text-xs sm:text-sm">
+          <div className="font-semibold">
+            {fetchError}
+          </div>
+          <button
+            type="button"
+            onClick={handleRefresh}
+            disabled={isLoading}
+            className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white rounded-xl font-bold transition-all shrink-0 cursor-pointer flex items-center gap-1.5"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? "animate-spin" : ""}`} />
+            <span>Retry</span>
+          </button>
+        </div>
+      )}
 
       {/* Main Catalogue Table */}
       <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs overflow-hidden flex flex-col">
@@ -350,8 +403,24 @@ export const CataloguePage: React.FC = () => {
                 </tr>
               ) : products.length === 0 ? (
                 <tr>
-                  <td colSpan={13} className="py-12 text-center text-slate-400">
-                    No products matching current filter criteria.
+                  <td colSpan={12} className="py-14 text-center text-slate-500">
+                    <div className="max-w-md mx-auto space-y-3 px-4">
+                      <p className="text-sm font-semibold text-slate-700">
+                        {fetchError || "No products found or catalogue is not loaded yet."}
+                      </p>
+                      <p className="text-xs text-slate-400">
+                        If the server was starting up or products haven't loaded into view, click below to refresh and load all products.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={handleRefresh}
+                        disabled={isLoading}
+                        className="inline-flex items-center gap-2 px-4 py-2 bg-[#079FE0] hover:bg-[#068ec8] active:bg-[#057cb0] disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? "animate-spin" : ""}`} />
+                        <span>{isLoading ? "Loading Products..." : "Reload All Products"}</span>
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ) : (

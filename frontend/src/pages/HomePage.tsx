@@ -189,7 +189,7 @@ export const HomePage: React.FC = () => {
     <>
       {/* Animated Splash Screen if just logged in */}
       {showSplash && (
-        <SplashScreen onComplete={() => setShowSplash(false)} maxWaitSeconds={40} />
+        <SplashScreen onComplete={() => setShowSplash(false)} maxWaitSeconds={120} />
       )}
 
       <div className={`max-w-7xl mx-auto px-4 sm:px-8 ${!hasSearched ? "py-4 sm:py-6" : "py-8 sm:py-12"}`}>
