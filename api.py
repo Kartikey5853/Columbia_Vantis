@@ -130,7 +130,12 @@ app.include_router(system_router)
 @app.api_route("/api/health", methods=["GET", "HEAD"])
 async def api_health_check(request: Request):
     if request.method == "HEAD":
+        asyncio.create_task(maybe_trigger_from_uptime())
         return Response(status_code=200, headers={"Content-Type": "application/json"})
+    
+    # Asynchronously trigger daily scraper check if pinged by UptimeRobot or keepalive
+    asyncio.create_task(maybe_trigger_from_uptime())
+
     return {
         "status": "healthy",
         "service": "Columbia Vantis backend status",
@@ -184,7 +189,7 @@ from persistence.run_store import (
 from persistence.exporter import export_canonical_backup
 
 
-async def check_and_trigger_scrapers(force: bool = False, wait_seconds: int = 0) -> Dict[str, Any]:
+async def check_and_trigger_scrapers(force: bool = False, wait_seconds: int = 0, is_uptime_ping: bool = False) -> Dict[str, Any]:
     """
     Core auto-trigger logic:
     1. Checks today's date in database (Asia/Kolkata timezone).
@@ -223,7 +228,7 @@ async def check_and_trigger_scrapers(force: bool = False, wait_seconds: int = 0)
                 "pending_scrapers": canonical_order,
             }
 
-        if not track_boot_trigger(max_retries=3):
+        if not is_uptime_ping and not track_boot_trigger(max_retries=3):
             msg = "Crash loop guard: Server auto-triggered 3 times today without finishing. Auto-trigger paused to prevent crash loops. Trigger manually via Swagger /scrape to resume."
             print(f"[DEPLOY/STARTUP TRIGGER] ⚠️ {msg}\n", flush=True)
             return {
@@ -403,17 +408,7 @@ async def on_shutdown():
     await close_shared_browser()
 
 
-@app.get("/health")
-async def health_check():
-    """
-    Immediate liveness and health check endpoint.
-    Returns 200 OK immediately without triggering any scraping operations.
-    """
-    return {
-        "status": "healthy",
-        "service": "Product Scraper API",
-        "pipeline_running": is_pipeline_running()
-    }
+# /health handled by unified api_health_check above
 
 
 @app.get("/")
@@ -555,6 +550,33 @@ async def deploy_trigger_endpoint_get(
     return JSONResponse(status_code=status_code, content=res)
 
 
+_LAST_UPTIME_CHECK_TIME = 0.0
+
+async def maybe_trigger_from_uptime(force_check: bool = False):
+    """
+    Called whenever server is pinged by UptimeRobot or keepalive monitors (every ~12 mins).
+    Checks if today's scraping (adv, columbia, tata, tata_lux, amazon) has completed.
+    If not completed after 12 AM today, triggers background sequential pipeline.
+    Fail-safe: If any scraper failed, the next ping 12 mins later retries the pending/failed scrapers.
+    """
+    global _LAST_UPTIME_CHECK_TIME
+    import time
+    now = time.time()
+    if not force_check and (now - _LAST_UPTIME_CHECK_TIME < 60.0):
+        return None
+    _LAST_UPTIME_CHECK_TIME = now
+
+    if is_pipeline_running():
+        return {"status": "already_running"}
+
+    try:
+        res = await check_and_trigger_scrapers(is_uptime_ping=True, wait_seconds=0)
+        return res
+    except Exception as e:
+        print(f"[UPTIME-ROBOT] ⚠️ Error during UptimeRobot scrape check: {e}", flush=True)
+        return {"status": "error", "error": str(e)}
+
+
 @app.api_route("/cron/uptime-trigger", methods=["HEAD", "GET", "POST"], tags=["Scraper Pipeline"])
 @app.api_route("/uptime-trigger", methods=["HEAD", "GET", "POST"], tags=["Scraper Pipeline"])
 @app.api_route("/cron/trigger", methods=["HEAD", "GET", "POST"], tags=["Scraper Pipeline"])
@@ -572,7 +594,7 @@ async def uptime_trigger_endpoint(
     - For HEAD requests, returns RFC-compliant headers with no response body.
     - Guarantees scrapers run at most once per 24 hours (one business date) even if pinged more frequently.
     """
-    res = await check_and_trigger_scrapers(force=force, wait_seconds=0)
+    res = await check_and_trigger_scrapers(force=force, wait_seconds=0, is_uptime_ping=True)
     status_str = res.get("status", "unknown")
     job_id = res.get("job_id", "")
     business_date = res.get("business_date", get_business_date())
