@@ -2935,6 +2935,11 @@ async def run_sequential_pipeline(
                 await close_shared_browser()
             except Exception:
                 pass
+            try:
+                from app.services.catalog_service import catalog_service
+                catalog_service.purge_memory()
+            except Exception:
+                pass
             import gc
             gc.collect()
 

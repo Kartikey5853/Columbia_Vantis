@@ -178,10 +178,10 @@ export const ScrapingLockModal: React.FC = () => {
 
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
-              Hey, We Are Currently Scraping!
+              The Scraper is Currently Active
             </h1>
             <p className="text-xs text-amber-400 font-medium tracking-wide mt-0.5">
-              VANTIS AUTOMATED DATA PIPELINE IN PROGRESS
+              VANTIS AUTOMATED DATA PIPELINE IN PROGRESS • RAM PROTECTED
             </p>
           </div>
         </div>
@@ -191,8 +191,12 @@ export const ScrapingLockModal: React.FC = () => {
           <div className="flex items-start gap-3">
             <ShieldAlert className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
             <div className="text-sm text-slate-300 leading-relaxed">
-              <strong className="text-white font-semibold">To save RAM, we can't let you access anything right now.</strong>{" "}
-              {customMsg || "This might take up to one hour to scrape all platforms (Columbia, Adventuras, Tata CLiQ, Tata Luxury, Amazon) cleanly without exceeding server memory."}
+              <strong className="text-white font-semibold block text-base mb-1">
+                The scraper is currently active. Come back later after 1 hour as we don't have enough RAM to load all the data presently.
+              </strong>
+              <span className="text-slate-400 text-xs">
+                {customMsg || "All in-memory catalog data has been cleared to prevent memory overload during scraping. Access to all pages will be unlocked automatically as soon as the pipeline completes."}
+              </span>
             </div>
           </div>
 

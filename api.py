@@ -64,8 +64,7 @@ app.add_middleware(
 )
 
 SCRAPING_RUNNING_MESSAGE = (
-    "Hey, we are currently scraping! To save RAM, we can't let you access anything right now. "
-    "This might take up to one hour. In-memory catalog resources are terminated."
+    "The scraper is currently active! Please come back later after 1 hour as we don't have enough RAM to load all the data presently."
 )
 
 @app.middleware("http")
