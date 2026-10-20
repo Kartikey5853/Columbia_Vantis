@@ -516,97 +516,185 @@
         return offers;
     };
 
-    const extractProductOffers = async url => {
+        function extractPdpFromHtml(html) {
+        if (!html || typeof html !== "string") return null;
+        const idx = html.indexOf("window.__myx");
+        if (idx === -1) return null;
+        const startIdx = html.indexOf("{", idx);
+        if (startIdx === -1) return null;
+        const scriptEnd = html.indexOf("</script>", startIdx);
+        const block = scriptEnd !== -1 ? html.substring(startIdx, scriptEnd) : html.substring(startIdx);
+        const trimmed = block.trim().replace(/;$/, "");
+        try {
+            const parsed = JSON.parse(trimmed);
+            if (parsed && parsed.pdpData) return parsed.pdpData;
+        } catch (e) {
+            let depth = 0;
+            let endIdx = -1;
+            for (let i = 0; i < trimmed.length; i++) {
+                if (trimmed[i] === "{") depth++;
+                else if (trimmed[i] === "}") {
+                    depth--;
+                    if (depth === 0) { endIdx = i; break; }
+                }
+            }
+            if (endIdx !== -1) {
+                try {
+                    const sub = trimmed.substring(0, endIdx + 1);
+                    const parsed = JSON.parse(sub);
+                    if (parsed && parsed.pdpData) return parsed.pdpData;
+                } catch (_) {}
+            }
+        }
+        return null;
+    }
+
+    const enrichProductFromPdp = async (url, couponData = null, basePrice = 0, baseMrp = 0) => {
         if (!url) {
-            return [];
+            return { offers: [], pdpSizes: null };
         }
 
         try {
-            log("Fetching product offer page:", url);
+            log("Fetching PDP data:", url);
 
-            const response =
-                await fetch(url, {
-                    method: "GET",
-                    credentials: "same-origin",
-                    headers: {
-                        accept:
-                            "text/html,application/xhtml+xml"
-                    }
-                });
+            const response = await fetch(url, {
+                method: "GET",
+                credentials: "same-origin",
+                headers: {
+                    accept: "text/html,application/xhtml+xml,application/json"
+                }
+            });
 
             if (!response.ok) {
-                log(
-                    "Offer page failed:",
-                    response.status,
-                    url
-                );
-
-                return [];
+                log("PDP fetch HTTP error:", response.status, url);
+                return { offers: [], pdpSizes: null };
             }
 
-            const html =
-                await response.text();
-
-            const document =
-                new DOMParser().parseFromString(
-                    html,
-                    "text/html"
-                );
-
+            const html = await response.text();
+            const pdpData = extractPdpFromHtml(html);
             const offers = [];
+            let pdpSizes = null;
 
-            for (
-                const script
-                of document.querySelectorAll("script")
-            ) {
-                const raw =
-                    (script.textContent || "").trim();
-
-                if (
-                    !raw ||
-                    raw.length > 2000000
-                ) {
-                    continue;
+            if (pdpData) {
+                // 1. Extract Real Sizes from PDP
+                if (Array.isArray(pdpData.sizes) && pdpData.sizes.length > 0) {
+                    pdpSizes = pdpData.sizes.map(s => {
+                        const stockCnt = s.selectedSeller?.sellableInventoryCount ||
+                                         s.sizeSellerData?.[0]?.sellableInventoryCount ||
+                                         (s.available ? 1 : 0);
+                        const price = Number(s.selectedSeller?.discountedPrice || pdpData.price?.discounted || pdpData.price?.mrp || pdpData.mrp || basePrice || 0);
+                        const mrp = Number(s.selectedSeller?.mrp || pdpData.price?.mrp || pdpData.mrp || baseMrp || 0);
+                        return {
+                            size: text(s.label) || "One Size",
+                            sku: text(s.skuId) || "",
+                            available: Boolean(s.available),
+                            quantity: stockCnt,
+                            stock: stockCnt,
+                            price,
+                            mrp
+                        };
+                    });
                 }
 
-                try {
-                    const parsed =
-                        JSON.parse(raw);
+                // 2. Extract Bank & EMI Offers from PDP
+                for (const raw of (pdpData.offers || [])) {
+                    const type = String(raw.type || "offer").toUpperCase();
+                    const title = safeText(raw.title);
+                    const desc = safeText(raw.description);
+                    const combined = `${title} ${desc}`;
 
-                    mergeOffers(
-                        offers,
-                        normalizeOffers(parsed)
-                    );
-                } catch (_) {
-                    // Ignore non-JSON scripts.
+                    const pctMatch = combined.match(/(\d+(?:\.\d+)?)\s*%/);
+                    const minMatch = combined.match(/(?:min\s*spend|min\s*transaction|mov\s*of|orders\s*above)\s*₹?\s*([\d,]+)/i);
+                    const maxMatch = combined.match(/(?:max\s*discount|upto|up\s*to)\s*₹?\s*([\d,]+)/i);
+
+                    let issuer = "";
+                    for (const b of ["HDFC", "SBI", "ICICI", "Axis", "Kotak", "IndusInd", "IDFC", "RBL", "HSBC", "Flipkart Axis"]) {
+                        if (new RegExp("\\b" + b + "\\b", "i").test(combined)) {
+                            issuer = b;
+                            break;
+                        }
+                    }
+
+                    offers.push({
+                        kind: type === "BANK" ? "bank_offer" : (type === "EMI" ? "emi" : "offer"),
+                        code: "",
+                        title,
+                        description: desc,
+                        issuer,
+                        card_type: /credit\s*card/i.test(combined) ? "Credit Card" : (/debit\s*card/i.test(combined) ? "Debit Card" : ""),
+                        payment_network: "",
+                        discount_percent: pctMatch ? Number(pctMatch[1]) : null,
+                        discount_amount: null,
+                        minimum_transaction_amount: minMatch ? Number(minMatch[1].replace(/,/g, "")) : null,
+                        maximum_discount: maxMatch ? Number(maxMatch[1].replace(/,/g, "")) : null,
+                        validity: "",
+                        terms_url: raw.action ? String(raw.action) : ""
+                    });
                 }
             }
 
-            mergeOffers(
-                offers,
-                parseOfferText(
-                    document.body
-                        ? document.body.innerText
-                        : ""
-                )
-            );
+            // Fallback: parse offers from HTML DOM if pdpData.offers was empty
+            if (offers.length === 0) {
+                const document = new DOMParser().parseFromString(html, "text/html");
+                mergeOffers(offers, parseOfferText(document.body ? document.body.innerText : ""));
+            }
 
-            log(
-                "Offers found:",
-                offers.length,
-                url
-            );
+            // 3. Add Coupon Offer from search couponData
+            if (couponData) {
+                const code = safeCode(couponData.couponDescription?.couponCode || couponData.couponCode || "");
+                const disc = number(couponData.couponDiscount) || 0;
+                const desc = safeText(couponData.couponDescription?.description || couponData.description || "");
+                if (code || disc > 0) {
+                    offers.push({
+                        kind: "coupon",
+                        code: code || "BFFSAVE",
+                        title: code ? `${code}: ₹${disc} Off` : `Flat ₹${disc} Coupon Discount`,
+                        description: desc || `Extra ₹${disc} off with coupon`,
+                        issuer: "Myntra",
+                        card_type: "",
+                        payment_network: "",
+                        discount_percent: null,
+                        discount_amount: disc,
+                        minimum_transaction_amount: null,
+                        maximum_discount: disc,
+                        validity: "",
+                        terms_url: couponData.tagLink ? String(couponData.tagLink) : ""
+                    });
+                }
+            }
 
-            return offers;
+            // 4. Product discount on MRP
+            const mrp = Number(pdpData?.price?.mrp || pdpData?.mrp || baseMrp || 0);
+            const price = Number(pdpData?.price?.discounted || pdpData?.discountedPrice || basePrice || mrp);
+            if (mrp > price && price > 0) {
+                const discPct = Math.round(((mrp - price) / mrp) * 100);
+                offers.push({
+                    kind: "discount",
+                    code: "MRP_DISCOUNT",
+                    title: `${discPct}% Off on MRP`,
+                    description: `Flat ₹${mrp - price} off on MRP`,
+                    issuer: "Columbia",
+                    card_type: "",
+                    payment_network: "",
+                    discount_percent: discPct,
+                    discount_amount: mrp - price,
+                    minimum_transaction_amount: null,
+                    maximum_discount: mrp - price,
+                    validity: "",
+                    terms_url: ""
+                });
+            }
+
+            return { offers, pdpSizes };
         } catch (error) {
-            log(
-                "Offer extraction error:",
-                error.message,
-                url
-            );
-
-            return [];
+            log("PDP extraction error:", error.message, url);
+            return { offers: [], pdpSizes: null };
         }
+    };
+
+    const extractProductOffers = async url => {
+        const { offers } = await enrichProductFromPdp(url);
+        return offers;
     };
 
     const fetchSearchPage = async (
@@ -626,8 +714,7 @@
             `&plaEnabled=true` +
             `&xdEnabled=false` +
             `&isFacet=true` +
-            `&p=${currentPage}` +
-            `&pincode=${PINCODE}`;
+            `&p=${currentPage}`;
 
         const headers = {
             accept: "application/json"
@@ -733,38 +820,31 @@
                 continue;
             }
 
-            const sizes =
-                Array.isArray(
-                    product.inventoryInfo
-                ) &&
-                product.inventoryInfo.length
-                    ? product.inventoryInfo.map(
-                        inventoryRecord
-                    )
-                    : String(
-                        product.sizes || ""
-                    )
-                        .split(",")
-                        .map(size =>
-                            inventoryRecord({
-                                label: size.trim()
-                            })
-                        )
-                        .filter(size =>
-                            size.label
-                        );
+            const invMap = new Map();
+            if (Array.isArray(product.inventoryInfo)) {
+                for (const inv of product.inventoryInfo) {
+                    if (inv && inv.label) invMap.set(String(inv.label).trim(), inv);
+                }
+            }
 
-            const entries =
-                sizes.length
-                    ? sizes
-                    : [
-                        {
-                            label: "",
-                            skuId: "",
-                            available: null,
-                            quantity: null
-                        }
-                    ];
+            let entries = [];
+            const rawSizesStr = String(product.sizes || "").trim();
+            if (rawSizesStr) {
+                const sizeLabels = rawSizesStr.split(",").map(s => s.trim()).filter(Boolean);
+                for (const lbl of sizeLabels) {
+                    const matchedInv = invMap.get(lbl);
+                    entries.push({
+                        label: lbl,
+                        skuId: matchedInv?.skuId ? String(matchedInv.skuId) : "",
+                        available: matchedInv ? Boolean(matchedInv.available) : true,
+                        quantity: matchedInv?.inventory != null ? matchedInv.inventory : (matchedInv?.available ? 1 : null)
+                    });
+                }
+            } else if (Array.isArray(product.inventoryInfo) && product.inventoryInfo.length > 0) {
+                entries = product.inventoryInfo.map(inventoryRecord);
+            } else {
+                entries = [{ label: "One Size", skuId: "", available: true, quantity: 1 }];
+            }
 
             const url =
                 product.landingPageUrl
@@ -824,6 +904,7 @@
                         product.image ||
                         "",
 
+                    coupon_data: product.couponData || null,
                     offers: []
                 });
             }
@@ -847,7 +928,8 @@
             data.hasNextPage === false ||
             pageProducts.length === 0 ||
             page >= totalPages ||
-            page >= 100
+            page >= 100 ||
+            (window.__MAX_PAGES__ && page >= window.__MAX_PAGES__)
         ) {
             log("No more search pages");
             break;
@@ -862,60 +944,68 @@
         await sleep(1500);
     }
 
-    const urls = [
-        ...new Set(
-            products
-                .map(product => product.url)
-                .filter(Boolean)
-        )
-    ];
+    const urlMap = new Map();
+    for (const p of products) {
+        if (p.url && !urlMap.has(p.url)) {
+            urlMap.set(p.url, { couponData: p.coupon_data, price: p.price, mrp: p.mrp, productId: p.product_id });
+        }
+    }
 
-    log(
-        "Starting offer extraction",
-        `pages=${urls.length}`
-    );
+    const urls = [...urlMap.keys()];
+    log("Starting offer & variant enrichment", `pages=${urls.length}`);
 
-    for (
-        let index = 0;
-        index < urls.length;
-        index++
-    ) {
-        const url =
-            urls[index];
+    const enrichedProducts = [];
 
-        const offers =
-            await extractProductOffers(url);
+    for (let index = 0; index < urls.length; index++) {
+        const url = urls[index];
+        const meta = urlMap.get(url);
+        const { offers, pdpSizes } = await enrichProductFromPdp(url, meta.couponData, meta.price, meta.mrp);
 
-        offerCache.set(
-            url,
-            offers
-        );
+        offerCache.set(url, offers);
 
-        log(
-            `Offer page ${index + 1}/${urls.length}`,
-            `offers=${offers.length}`
-        );
+        const matching = products.filter(p => p.url === url);
+        if (!matching.length) continue;
+        const base = matching[0];
 
-        updateProgress(
-            "Extracting offers",
-            index + 1,
-            urls.length,
-            {
-                offers: offers.length
+        if (Array.isArray(pdpSizes) && pdpSizes.length > 0) {
+            for (const sz of pdpSizes) {
+                enrichedProducts.push({
+                    product_id: base.product_id,
+                    source: "myntra",
+                    title: base.title,
+                    size: sz.size,
+                    color: base.color,
+                    variant_id: sz.sku || base.variant_id,
+                    available: sz.available,
+                    quantity: sz.quantity,
+                    price: sz.price || base.price,
+                    mrp: sz.mrp || base.mrp,
+                    url: base.url,
+                    image_url: base.image_url,
+                    offers: offers
+                });
             }
-        );
+        } else {
+            for (const m of matching) {
+                m.offers = offers;
+                enrichedProducts.push(m);
+            }
+        }
 
-        await sleep(250);
+        log(`Enriched product ${index + 1}/${urls.length}`, `sizes=${pdpSizes ? pdpSizes.length : matching.length}`, `offers=${offers.length}`);
+        updateProgress("Enriching products & offers", index + 1, urls.length, {
+            processed: index + 1,
+            total: urls.length,
+            offers: offers.length
+        });
+        await sleep(150);
     }
 
-    for (const product of products) {
-        product.offers =
-            offerCache.get(product.url) || [];
-    }
+    const finalProducts = enrichedProducts.length > 0 ? enrichedProducts : products;
 
     const uniqueProducts = [
         ...new Map(
-            products.map(product => [
+            finalProducts.map(product => [
                 [
                     product.product_id,
                     product.size,
@@ -927,9 +1017,9 @@
         ).values()
     ];
 
-    window.__MYNTRA_PRODUCTS__ =
-        uniqueProducts;
+    window.__MYNTRA_PRODUCTS__ = uniqueProducts;
 
+    window.enrichProductFromPdp = enrichProductFromPdp;
     window.__MYNTRA_SCRAPER_DONE__ =
         true;
 

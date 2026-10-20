@@ -93,7 +93,6 @@ async def launch_headed_browser(p, channel: str = "chrome") -> Tuple[Browser, Br
 
     context = await browser.new_context(
         viewport=None,  # Inherit maximized window size
-        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
         locale="en-IN",
         timezone_id="Asia/Kolkata"
     )
@@ -233,7 +232,7 @@ async def run_myntra_headed(browser_context: BrowserContext, limit: Optional[int
             }
         
         raw_sz = str(item.get("size") or "").strip()
-        norm_sz = normalize_size(raw_sz)
+        norm_sz = normalize_size(raw_sz) or (raw_sz if raw_sz and raw_sz.lower() != "standard" else "One Size")
         prods_by_id[pid]["variants"].append({
             "size": norm_sz,
             "sku": item.get("variant_id") or pid,
@@ -385,7 +384,7 @@ async def run_ajio_headed(browser_context: BrowserContext, limit: Optional[int] 
     raw_items = []
     try:
         print("[AJIO] Navigating to Ajio Columbia store in Chrome...", flush=True)
-        await page.goto("https://www.ajio.com/s/columbia", wait_until="domcontentloaded")
+        await page.goto("https://www.ajio.com/search/?text=columbia", wait_until="domcontentloaded")
         await asyncio.sleep(3)
 
         scraper_file = SCRAPER_DIR / "New_ajio_scraper.js"
@@ -487,7 +486,7 @@ async def run_ajio_headed(browser_context: BrowserContext, limit: Optional[int] 
                     import re
                     cand = re.sub(r"[Nn]+$", "", parts[2].strip()).strip() or parts[2].strip()
                     raw_v_sz = cand
-            v_sz = normalize_size(raw_v_sz) or raw_v_sz or "Standard"
+            v_sz = normalize_size(raw_v_sz) or (raw_v_sz if raw_v_sz and raw_v_sz.lower() != "standard" else "One Size")
             v_style, v_sku = normalize_sku_and_style(v_sku_raw, fallback_title=title, fallback_id=pid)
             v_avail = bool(v.get("available", True))
             v_stock = int(v.get("stock") or 1) if isinstance(v.get("stock"), (int, float)) else (1 if v_avail else 0)

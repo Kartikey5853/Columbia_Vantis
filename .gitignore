@@ -22,6 +22,7 @@ amazon_v4/data/
 *.zip
 amazon_scraper/*.json
 old files/
+old files/**
 frontend/image/download-*
 reports/
 *REPORT*.md

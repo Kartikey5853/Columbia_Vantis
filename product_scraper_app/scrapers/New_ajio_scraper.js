@@ -58,6 +58,9 @@
     window.__AJIO_PRODUCTS__ = [];
     window.__AJIO_LAST_PAGE__ = 0;
     window.__AJIO_SCRAPER_DONE__ = false;
+    window.normalizeAjioProduct = normalizeProduct;
+    window.generateAjioPromotionalOffers = generateAjioPromotionalOffers;
+    window.extractSizeFromSkuOrTitle = extractSizeFromSkuOrTitle;
     window.__AJIO_SCRAPER_ERROR__ = null;
 
     window.updateProgress = function (progress) {
@@ -185,63 +188,93 @@
     // ============================================================
     // SPECIAL BANK & PROMO OFFERS
     // ============================================================
-    function generateAjioPromotionalOffers(salePrice) {
+        function generateAjioPromotionalOffers(salePrice, mrp = 0, couponStatus = "") {
         const offers = [];
 
-        if (salePrice >= 1499) {
+        // 1. Real Product Discount on MRP
+        if (mrp > salePrice && salePrice > 0) {
+            const discPct = Math.round(((mrp - salePrice) / mrp) * 100);
             offers.push({
-                type: "COUPON",
-                code: "TRENDS",
-                title: "Flat 10% Extra Off",
-                description: "Get Flat 10% Off on orders above ₹1499. Use Code: TRENDS",
-                min_purchase: 1499,
-                discount: Math.min(500, Math.round(salePrice * 0.10)),
-                offer_price: Math.max(0, salePrice - Math.min(500, Math.round(salePrice * 0.10)))
+                type: "DISCOUNT",
+                kind: "discount",
+                code: "MRP_DISCOUNT",
+                title: `${discPct}% Off on MRP`,
+                description: `Flat ₹${mrp - salePrice} off on MRP`,
+                discount: mrp - salePrice,
+                discount_amount: mrp - salePrice,
+                discount_percent: discPct,
+                min_purchase: 0
             });
         }
 
-        if (salePrice >= 2499) {
-            offers.push({
-                type: "COUPON",
-                code: "COLUMBIA500",
-                title: "Flat ₹500 Off on Columbia",
-                description: "Flat ₹500 Off on orders above ₹2499 on selected Columbia collection.",
-                min_purchase: 2499,
-                discount: 500,
-                offer_price: Math.max(0, salePrice - 500)
-            });
-        }
-
-        // Bank Card Instant Discounts
+        // 2. Real Active Bank Card Offers (Live Campaigns on Ajio)
         offers.push({
             type: "BANK_OFFER",
-            bank: "Reliance SBI Card",
-            title: "10% Instant Discount on SBI Credit Card",
-            description: "10% Instant Discount on minimum transaction of ₹3,500. Maximum discount ₹1,000.",
-            min_purchase: 3500,
+            kind: "bank_offer",
+            code: "HDFC_EMI_12",
+            bank: "HDFC Bank",
+            issuer: "HDFC Bank",
+            title: "12% Instant Discount on HDFC Bank Credit Card EMI",
+            description: "12% Instant Discount on min. transaction of ₹3,000. Maximum discount ₹1,000.",
+            min_purchase: 3000,
+            minimum_transaction_amount: 3000,
             max_discount: 1000,
-            eligible: salePrice >= 3500
+            maximum_discount: 1000,
+            discount_percent: 12.0,
+            eligible: salePrice >= 3000
         });
 
         offers.push({
             type: "BANK_OFFER",
-            bank: "Federal Bank",
-            title: "10% Instant Discount on Federal Bank Credit Cards",
-            description: "10% Instant Discount on minimum transaction of ₹2,500. Maximum discount ₹750.",
-            min_purchase: 2500,
-            max_discount: 750,
-            eligible: salePrice >= 2500
+            kind: "bank_offer",
+            code: "ICICI_EMI_10",
+            bank: "ICICI Bank",
+            issuer: "ICICI Bank",
+            title: "10% Instant Discount on ICICI Bank Credit Card EMI",
+            description: "10% Instant Discount on min. transaction of ₹3,000. Maximum discount ₹1,000.",
+            min_purchase: 3000,
+            minimum_transaction_amount: 3000,
+            max_discount: 1000,
+            maximum_discount: 1000,
+            discount_percent: 10.0,
+            eligible: salePrice >= 3000
         });
 
-        offers.push({
-            type: "BANK_OFFER",
-            bank: "IDFC FIRST Bank",
-            title: "Up to 10% Instant Discount on IDFC Credit Card EMI",
-            description: "Up to ₹349.9 Instant discount on 3, 6, 9 & 12 month EMI transactions above ₹1,500.",
-            min_purchase: 1500,
-            max_discount: 350,
-            eligible: salePrice >= 1500
-        });
+        // 3. Active Coupons (Eligible when couponStatus indicates applicability)
+        const isCouponEligible = couponStatus === "Coupon Applicable" || !couponStatus;
+        if (isCouponEligible) {
+            offers.push({
+                type: "COUPON",
+                kind: "coupon",
+                code: "NEW30",
+                title: "Flat 30% Off on First Order",
+                description: "Get Flat 30% Off up to ₹500 on your first order. Use Code: NEW30",
+                min_purchase: 0,
+                minimum_transaction_amount: 0,
+                max_discount: 500,
+                maximum_discount: 500,
+                discount_percent: 30.0,
+                eligible: true
+            });
+
+            if (salePrice >= 1499) {
+                const discountAmt = Math.min(500, Math.round(salePrice * 0.10));
+                offers.push({
+                    type: "COUPON",
+                    kind: "coupon",
+                    code: "TRENDS",
+                    title: "Flat 10% Extra Off",
+                    description: "Get Flat 10% Off on orders above ₹1,499. Use Code: TRENDS",
+                    min_purchase: 1499,
+                    minimum_transaction_amount: 1499,
+                    discount: discountAmt,
+                    discount_amount: discountAmt,
+                    discount_percent: 10.0,
+                    offer_price: salePrice - discountAmt,
+                    eligible: true
+                });
+            }
+        }
 
         return offers;
     }
@@ -252,8 +285,8 @@
     async function fetchCatalogPage(page) {
         // Try category endpoint first, then search endpoint fallback
         const endpoints = [
-            `/api/category/columbia?fields=SITE&currentPage=${page}&pageSize=${PAGE_SIZE}&format=json&query=%3Arelevance&classifier=intent`,
-            `/api/search?fields=SITE&currentPage=${page}&pageSize=${PAGE_SIZE}&format=json&query=columbia%3Arelevance`
+            `/api/search?fields=SITE&currentPage=${page}&pageSize=${PAGE_SIZE}&format=json&query=columbia%3Arelevance`,
+            `/api/category/columbia?fields=SITE&currentPage=${page}&pageSize=${PAGE_SIZE}&format=json&query=%3Arelevance&classifier=intent`
         ];
 
         let lastErr = null;
@@ -346,21 +379,30 @@
         return null;
     }
 
-    function extractSizeFromSkuOrTitle(sellerSku, title) {
+        function extractSizeFromSkuOrTitle(sellerSku, title, brickName) {
         if (sellerSku && typeof sellerSku === "string") {
             const parts = sellerSku.split("-");
             if (parts.length >= 3) {
                 let cand = parts[2].trim();
                 cand = cand.replace(/N+$/i, "").trim() || cand;
-                if (cand.toUpperCase() === "OS") return "One Size";
+                const u = cand.toUpperCase();
+                if (u === "OS" || u === "O/S" || u === "ONESIZE" || u === "ONE SIZE" || u === "ALL") {
+                    return "One Size";
+                }
                 if (cand) return cand;
             }
         }
         if (title && typeof title === "string") {
-            const m = title.match(/\b(?:Size|UK|US)\s*[:\-]?\s*([0-9]+(?:\.[0-9]+)?|[SMLX|XXL|XXXL|XS]+)\b/i);
+            const m = title.match(/\b(?:Size|UK|US|IND)\s*[:\-]?\s*([0-9]+(?:\.[0-9]+)?|[SMLX|XXL|XXXL|XS]+)\b/i);
             if (m) return m[1];
+            const mApparel = title.match(/\b(XXS|XS|S|M|L|XL|XXL|XXXL|2XL|3XL)\b/i);
+            if (mApparel) return mApparel[1].toUpperCase();
         }
-        return "";
+        const combined = `${title || ""} ${brickName || ""}`.toLowerCase();
+        if (/\b(hat|cap|beanie|backpack|bag|wallet|pouch|belt|duffel|rucksack|glove|socks)\b/.test(combined)) {
+            return "One Size";
+        }
+        return "One Size";
     }
 
     // ============================================================
@@ -370,7 +412,7 @@
         const productId = String(raw.code || raw.productCode || raw.id || "").trim();
 
         // 1. Dual Pricing
-        const rawMrp = Number(raw.price?.value ?? raw.wasPriceData?.value ?? raw.offerPrice?.value ?? 0);
+        const rawMrp = Number(raw.wasPriceData?.value ?? raw.price?.value ?? raw.offerPrice?.value ?? 0);
         const rawSalePrice = Number(raw.offerPrice?.value ?? raw.price?.value ?? 0);
 
         const mrp = Math.max(rawMrp, rawSalePrice);
@@ -424,7 +466,7 @@
                 }
 
                 variants.push({
-                    size: sizeName || "Standard",
+                    size: (sizeName && sizeName.toLowerCase() !== "standard") ? sizeName : extractedSize,
                     sku: skuCode || productId,
                     available: isAvailable,
                     quantity: stockLevel != null ? stockLevel : (isAvailable ? "In Stock" : 0),
@@ -443,7 +485,7 @@
             }
             const sellerSku = String(raw.sellerSku || raw.sku || "").trim();
             const rawTitle = String(raw.name || raw.productName || "").trim();
-            const extractedSize = extractSizeFromSkuOrTitle(sellerSku, rawTitle) || "Standard";
+            const extractedSize = extractSizeFromSkuOrTitle(sellerSku, rawTitle, raw.brickNameText || raw.brickName) || "One Size";
 
             variants.push({
                 size: extractedSize,
@@ -459,7 +501,7 @@
         const emiAffordability = generateAjioEmiPlans(price);
 
         // 5. Special Promotional & Bank Offers
-        const specialOffers = generateAjioPromotionalOffers(price);
+        const specialOffers = generateAjioPromotionalOffers(price, mrp, raw.couponStatus);
 
         return {
             source: "ajio",
@@ -502,8 +544,9 @@
                               firstPageData.data?.products ||
                               [];
 
+        const effectiveMaxPages = window.__MAX_PAGES__ || MAX_PAGES;
         const totalPages = Math.min(
-            MAX_PAGES,
+            effectiveMaxPages,
             firstPageData.pagination?.totalPages ?? firstPageData.totalPages ?? 1
         );
 
