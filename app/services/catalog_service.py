@@ -2130,6 +2130,21 @@ class CatalogService:
             url = str(item.get("url") or "").strip()
             if not title and not pid and not sku:
                 continue
+
+            # Populate live offers lookup directly from Supabase
+            offs = item.get("offers") or []
+            if offs:
+                if plat_key not in self.offers_lookup:
+                    self.offers_lookup[plat_key] = {}
+                if pid:
+                    self.offers_lookup[plat_key][pid.lower()] = offs
+                if sku:
+                    self.offers_lookup[plat_key][sku.lower()] = offs
+                for v in (item.get("variants") or []):
+                    if isinstance(v, dict):
+                        v_sku = str(v.get("sku") or "").strip().lower()
+                        if v_sku:
+                            self.offers_lookup[plat_key][v_sku] = offs
             style = self._resolve_canonical_style(plat_key, item, title, sku, ean, url, pid)
             fkey = get_canonical_family_key(title or pid or sku, style, ean)
             raw_by_fam[fkey].append((plat_key, item))

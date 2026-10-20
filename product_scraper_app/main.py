@@ -82,7 +82,7 @@ def extract_ajio_size(seller_sku: str, title: str = "") -> str:
         if m:
             return m.group(1).upper()
 
-    return "Standard"
+    return "One Size"
 
 
 def normalize_offers(raw_offers: List[Any], platform: str) -> List[Dict[str, Any]]:
@@ -287,7 +287,7 @@ class ScraperWorker(QThread):
 
         try:
             self.log_signal.emit("🔍 Navigating to Ajio Columbia Store...")
-            await page.goto("https://www.ajio.com/s/columbia", wait_until="domcontentloaded", timeout=45000)
+            await page.goto("https://www.ajio.com/search/?text=columbia", wait_until="domcontentloaded", timeout=45000)
 
             js_file = SCRAPER_DIR / "New_ajio_scraper.js"
             if not js_file.exists():
