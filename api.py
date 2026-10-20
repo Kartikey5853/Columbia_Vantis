@@ -386,6 +386,14 @@ async def on_startup():
     if keepalive_task is None or keepalive_task.done():
         keepalive_task = asyncio.create_task(_render_keepalive_loop())
 
+    async def _safe_price_sync():
+        try:
+            await asyncio.to_thread(catalog_service.sync_price_telemetry)
+        except Exception as e:
+            print(f"[STARTUP] Background price telemetry sync warning: {e}", flush=True)
+
+    asyncio.create_task(_safe_price_sync())
+
 
 @app.on_event("shutdown")
 async def on_shutdown():

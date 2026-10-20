@@ -450,7 +450,7 @@ class CatalogService:
         """Pre-loads genuine offers indexed by platform and product ID/SKU."""
         if self.offers_lookup and any(self.offers_lookup.values()):
             return
-        self.offers_lookup = {"tata": {}, "tata_lux": {}, "ajio": {}}
+        self.offers_lookup = {"tata": {}, "tata_lux": {}, "ajio": {}, "myntra": {}}
 
         # Tata Cliq
         tata_file = NEW_DATA_DIR / "tatacliq_with_offers.json"
@@ -508,6 +508,27 @@ class CatalogService:
                             self.offers_lookup["ajio"][sku] = offs
             except Exception as e:
                 print(f"[CATALOG_SERVICE] Error loading Ajio offers lookup: {e}", flush=True)
+
+        # Myntra
+        myntra_file = DATA_DIR / "myntra" / "new_myntra_data.json"
+        if not myntra_file.exists():
+            myntra_file = DATA_DIR / "myntra" / "myntra_data.json"
+        if myntra_file.exists():
+            try:
+                with open(myntra_file, "r", encoding="utf-8") as f:
+                    mdata = json.load(f)
+                mprods = mdata.get("products", []) if isinstance(mdata, dict) else mdata
+                for p in mprods:
+                    pid = str(p.get("product_id") or p.get("productId") or "").strip().lower()
+                    sku = str(p.get("sku") or p.get("variant_id") or "").strip().lower()
+                    offs = p.get("offers") or []
+                    if offs:
+                        if pid:
+                            self.offers_lookup["myntra"][pid] = offs
+                        if sku:
+                            self.offers_lookup["myntra"][sku] = offs
+            except Exception as e:
+                print(f"[CATALOG_SERVICE] Error loading Myntra offers lookup: {e}", flush=True)
 
     def _resolve_canonical_style(
         self,
@@ -700,8 +721,6 @@ class CatalogService:
 
                 # 2. Add balanced slice from each active scraper
                 for sc_id, sc_name in scraper_map.items():
-                    if sc_name in ("myntra", "ajio"):
-                        continue
                     r_sc = client.get(
                         f"{url}/rest/v1/products?scraper_id=eq.{sc_id}&select=id,scraper_id,source_product_id,title,style,sku,ean,current_price,current_mrp,stock,image_url,url,available,variants,offers&limit={per_scraper_limit}&order=created_at.desc",
                         headers=headers
@@ -2717,13 +2736,15 @@ class CatalogService:
                 # 3. Incremental sync price_history
                 cur.execute("SELECT MAX(recorded_at) FROM daily_price_history")
                 max_rec = cur.fetchone()[0]
-                date_filter = f"&recorded_at=gt.{max_rec}" if (max_rec and not force) else ""
+                import urllib.parse
+                date_filter = f"&recorded_at=gt.{urllib.parse.quote(str(max_rec))}" if (max_rec and not force) else ""
 
                 offset = 0
                 synced_history = 0
                 while True:
                     r_h = client.get(f"{url}/rest/v1/price_history?select=id,product_id,price,mrp,recorded_at{date_filter}&offset={offset}&limit=1000&order=recorded_at.asc", headers=headers)
                     if r_h.status_code != 200:
+                        print(f"[CATALOG_SERVICE] [WARN] Failed to fetch price_history batch: status {r_h.status_code} - {r_h.text[:200]}", flush=True)
                         break
                     chunk = r_h.json() or []
                     if not chunk:
@@ -2807,7 +2828,7 @@ class CatalogService:
         try:
             # Base query joining target_date prices with previous_date prices
             where_conditions = ["curr.scrape_date = ?"]
-            params: List[Any] = [p_date, t_date]
+            params: List[Any] = [p_date, t_date, t_date]
 
             if changes_only:
                 where_conditions.append("curr.price != prev.price")
@@ -2852,8 +2873,13 @@ class CatalogService:
                         ORDER BY ABS(((curr.price - prev.price) / prev.price)) DESC
                     ) as rn
                 FROM daily_price_history curr
-                JOIN daily_price_history prev 
-                    ON curr.product_id = prev.product_id AND prev.scrape_date = ?
+                JOIN (
+                    SELECT product_id, price, mrp, scrape_date,
+                           ROW_NUMBER() OVER (PARTITION BY product_id ORDER BY scrape_date DESC) as sub_rn
+                    FROM daily_price_history
+                    WHERE scrape_date <= ? AND scrape_date < ?
+                ) prev 
+                    ON curr.product_id = prev.product_id AND prev.sub_rn = 1
                 JOIN supabase_products sp 
                     ON curr.product_id = sp.id
                 LEFT JOIN product_families pf 

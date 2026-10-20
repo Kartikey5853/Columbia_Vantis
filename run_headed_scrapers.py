@@ -479,8 +479,15 @@ async def run_ajio_headed(browser_context: BrowserContext, limit: Optional[int] 
         norm_vars = []
         raw_vars = item.get("variants") or []
         for v in raw_vars:
-            v_sz = normalize_size(str(v.get("size") or ""))
+            raw_v_sz = str(v.get("size") or "").strip()
             v_sku_raw = str(v.get("sku") or pid).strip()
+            if not raw_v_sz or raw_v_sz.lower() == "standard":
+                parts = raw_sku.split("-")
+                if len(parts) >= 3:
+                    import re
+                    cand = re.sub(r"[Nn]+$", "", parts[2].strip()).strip() or parts[2].strip()
+                    raw_v_sz = cand
+            v_sz = normalize_size(raw_v_sz) or raw_v_sz or "Standard"
             v_style, v_sku = normalize_sku_and_style(v_sku_raw, fallback_title=title, fallback_id=pid)
             v_avail = bool(v.get("available", True))
             v_stock = int(v.get("stock") or 1) if isinstance(v.get("stock"), (int, float)) else (1 if v_avail else 0)

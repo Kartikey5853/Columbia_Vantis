@@ -346,6 +346,23 @@
         return null;
     }
 
+    function extractSizeFromSkuOrTitle(sellerSku, title) {
+        if (sellerSku && typeof sellerSku === "string") {
+            const parts = sellerSku.split("-");
+            if (parts.length >= 3) {
+                let cand = parts[2].trim();
+                cand = cand.replace(/N+$/i, "").trim() || cand;
+                if (cand.toUpperCase() === "OS") return "One Size";
+                if (cand) return cand;
+            }
+        }
+        if (title && typeof title === "string") {
+            const m = title.match(/\b(?:Size|UK|US)\s*[:\-]?\s*([0-9]+(?:\.[0-9]+)?|[SMLX|XXL|XXXL|XS]+)\b/i);
+            if (m) return m[1];
+        }
+        return "";
+    }
+
     // ============================================================
     // EXTRACT & NORMALIZE PRODUCT
     // ============================================================
@@ -424,9 +441,13 @@
                 anyInStock = true;
                 totalSellableStock = 1;
             }
+            const sellerSku = String(raw.sellerSku || raw.sku || "").trim();
+            const rawTitle = String(raw.name || raw.productName || "").trim();
+            const extractedSize = extractSizeFromSkuOrTitle(sellerSku, rawTitle) || "Standard";
+
             variants.push({
-                size: "Standard",
-                sku: productId,
+                size: extractedSize,
+                sku: sellerSku || productId,
                 available: hasStock,
                 quantity: hasStock ? "In Stock" : 0,
                 stock: hasStock ? 1 : 0,

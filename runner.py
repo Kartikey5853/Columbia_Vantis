@@ -3074,8 +3074,27 @@ async def _run_cli():
                 await scrape_adv(limit=args.limit)
             elif target in ("amazon", "amz"):
                 await scrape_amazon(limit=args.limit)
+            elif target in ("ajio",):
+                print("[RUNNER] 🚀 Executing Ajio Scraper...", flush=True)
+                from run_headed_scrapers import run_ajio_headed, launch_headed_browser
+                from playwright.async_api import async_playwright
+                async with async_playwright() as p:
+                    _, ctx, _ = await launch_headed_browser(p)
+                    try:
+                        await run_ajio_headed(ctx, limit=args.limit)
+                    finally:
+                        await ctx.close()
+                return
             elif target in ("myntra",):
-                print("[RUNNER] ⚠️ Myntra scraper is disabled to preserve RAM. Skipping.", flush=True)
+                print("[RUNNER] 🚀 Executing Myntra Scraper...", flush=True)
+                from run_headed_scrapers import run_myntra_headed, launch_headed_browser
+                from playwright.async_api import async_playwright
+                async with async_playwright() as p:
+                    _, ctx, _ = await launch_headed_browser(p)
+                    try:
+                        await run_myntra_headed(ctx, limit=args.limit)
+                    finally:
+                        await ctx.close()
                 return
             else:
                 await scrape_columbia(limit=args.limit)

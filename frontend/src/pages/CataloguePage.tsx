@@ -12,6 +12,7 @@ import {
   SlidersHorizontal,
   X,
   FileSpreadsheet,
+  Tag,
 } from "lucide-react";
 import productService from "../services/productService";
 import bundleService from "../services/bundleService";
@@ -467,6 +468,12 @@ export const CataloguePage: React.FC = () => {
                         {/* Product Name */}
                         <td className="py-3.5 px-4 font-bold text-slate-900 max-w-xs">
                           <div className="line-clamp-1">{product.title}</div>
+                          {product.platforms && product.platforms.some((p) => p.offers && p.offers.length > 0) && (
+                            <div className="inline-flex items-center gap-1 mt-1 text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                              <Tag className="w-2.5 h-2.5 text-amber-600" />
+                              <span>Special Offers Available</span>
+                            </div>
+                          )}
                         </td>
 
                         {/* Style / SKU */}
@@ -562,6 +569,12 @@ export const CataloguePage: React.FC = () => {
                                           {t}
                                         </span>
                                       ))}
+                                      {product.platforms && product.platforms.some((p) => p.offers && p.offers.length > 0) && (
+                                        <span className="bg-amber-50 text-amber-800 border border-amber-200/80 text-[11px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shadow-2xs">
+                                          <Tag className="w-3 h-3 text-amber-600" />
+                                          Special Offers
+                                        </span>
+                                      )}
                                     </div>
                                   </div>
                                 </div>
@@ -656,6 +669,14 @@ export const CataloguePage: React.FC = () => {
                                         <div className="text-[10px] text-slate-400">
                                           {hasPlat ? plat.sizes_summary : "—"}
                                         </div>
+                                        {hasPlat && plat.offers && plat.offers.length > 0 && (
+                                          <div className="mt-1 pt-1 border-t border-slate-200/60 flex items-center gap-1 text-[10px] font-bold text-amber-800 bg-amber-50/90 px-1.5 py-0.5 rounded border border-amber-200/80 truncate shadow-2xs">
+                                            <Tag className="w-2.5 h-2.5 text-amber-600 shrink-0" />
+                                            <span className="truncate" title={(plat.offers[0].title || plat.offers[0].description || plat.offers[0].code) ?? undefined}>
+                                              {plat.offers[0].code ? `Code: ${plat.offers[0].code}` : (plat.offers[0].title || `${plat.offers.length} Offers`)}
+                                            </span>
+                                          </div>
+                                        )}
                                       </div>
                                     );
                                   })}
