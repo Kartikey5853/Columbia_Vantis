@@ -20,7 +20,7 @@ We created Columbia Vantis to fix that. It tracks our catalog across all seven p
 
 ## System Architecture
 
-![Columbia Vantis System Architecture](image/architecture.png)
+![Columbia Vantis System Architecture](image/arch.png)
 
 ---
 
@@ -102,6 +102,12 @@ In earlier versions of this project, we focused on image recognition and multi-p
 * Automation: Playwright, Patchright, PyInstaller
 * Frontend: React 18, TypeScript, Vite, Tailwind CSS, Lucide Icons
 * Deployment: Docker, Render
+
+---
+
+## Live Deployment
+
+* Production Web App: [columbia-vantis-git-main-kartikeymanthra-7724s-projects.vercel.app](https://columbia-vantis-git-main-kartikeymanthra-7724s-projects.vercel.app/)
 
 ---
 
