@@ -20,38 +20,7 @@ We created Columbia Vantis to fix that. It tracks our catalog across all seven p
 
 ## System Architecture
 
-```mermaid
-flowchart TD
-    subgraph S1["Cloudflare Protected Platforms"]
-        P1["Amazon India"]
-        P2["Tata CLiQ"]
-        P3["Tata CLiQ Luxury"]
-        P4["Columbia India"]
-        P5["Adventuras"]
-    end
-
-    subgraph S2["Akamai Protected Platforms"]
-        P6["AJIO"]
-        P7["Myntra"]
-    end
-
-    DOCKER["Docker Backend Scrapers<br/>Direct backend REST and GraphQL calls"]
-    LOCAL["Local Profile Scraper<br/>Residential Chrome session with saved cookies"]
-
-    MEM["Render Memory Route<br/>Disk SQLite B-Tree keeping RAM under 250MB"]
-    DB[("Supabase Database<br/>Normalized products and price logs")]
-    API["FastAPI Search Engine<br/>Bulk lookup for up to 5000 SKUs"]
-    UI["React Dashboard<br/>Live catalog and size-level stock"]
-
-    S1 --> DOCKER
-    S2 --> LOCAL
-
-    DOCKER --> MEM
-    LOCAL --> DB
-    MEM --> DB
-    DB --> API
-    API --> UI
-```
+![Columbia Vantis System Architecture](image/architecture.png)
 
 ---
 
@@ -146,8 +115,20 @@ cd Columbia_Vantis
 
 Create a `.env` file in the root folder:
 ```env
-SUPABASE_URL=https://<your-project-id>.supabase.co
-SUPABASE_KEY=<your-supabase-key>
+# Shopify Storefront Access Token for Columbia Sportswear India
+SHOPIFY_TOKEN=your_shopify_storefront_access_token_here
+
+# Supabase Configuration
+SUPABASE_URL=https://<your-project-ref>.supabase.co
+SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
+SUPABASE_SECRET_KEY=sb_secret_...
+SUPABASE_KEY=your_supabase_service_role_or_secret_key_here
+SUPABASE_JWKS_URL=https://<your-project-ref>.supabase.co/auth/v1/.well-known/jwks.json
+
+# Optional: Direct PostgreSQL Connection
+DATABASE_URL=postgresql://postgres:[PASSWORD]@db.[PROJECT-REF].supabase.co:5432/postgres
+
+# Server Port
 PORT=8000
 ```
 
