@@ -1,21 +1,37 @@
 /**
- * New Ajio Columbia Scraper (With Dual Pricing, EMI Plans, Bank Offers, Full Size Variants & Real-Time Stock Quantities)
+ * New Ajio Columbia Scraper (With Dual Pricing, EMI Plans, Bank Offers & Variant Stock Quantities)
  * 
- * Architecture:
- * - Playwright-injected JavaScript running inside genuine Chrome session with session cookies.
- * - Stage 1 (Catalog Discovery): Fetches brand-filtered Columbia search/category catalog across all pages.
- * - Stage 2 (Variant & Stock Enrichment): Concurrently fetches PDP JSON-LD (ProductGroup schema) and
- *   window.__PRELOADED_STATE__ in-page to extract:
- *     - ALL size variants (e.g., 6, 7, 8, 9, 10, 11, 12 or S, M, L, XL, XXL)
- *     - Specific individual variant SKUs
- *     - Real-time stock status (inStock, lowStock, outOfStock)
- *     - Exact numeric inventory quantities (e.g. stock=303, stock=1, stock=0)
- *     - Per-variant pricing and variant image URLs
- * - Dual pricing: Sale price, MRP, discount percentage
- * - Full Affordability / EMI Plans across all 16 major Indian banks (3m/6m/9m/12m)
- * - Bank Offers & Promo Coupons
- * - Real-time progress updates via window.__SCRAPER_PROGRESS__ and window.updateProgress
- * - Standard schema_version: 2 output compatible with Supabase and backend catalog
+ * Features:
+ * - Collects Columbia catalog from Ajio Search / Category API:
+ *   /api/category/columbia or /api/search?fields=SITE&currentPage={page}&pageSize=45&format=json&query=columbia:relevance
+ * - Dual pricing:
+ *   - price (Sale price / offer price, e.g. ₹10,999)
+ *   - mrp (Original List price, e.g. ₹15,999)
+ *   - discount_percent (e.g. 31%)
+ * - Full Affordability / EMI Plans across all 16 major Indian banks:
+ *   - IDFC Credit Card (@16% p.a, starting from ₹285.72/m, 3m/6m/9m/12m with up to ₹349.9 instant discount)
+ *   - ICICI Credit Card (@15.99% p.a, starting from ₹285.71/m)
+ *   - IDBI Credit Card (@13% p.a, starting from ₹312.52/m)
+ *   - ONECARD Credit Card (@16% p.a, starting from ₹317.47/m)
+ *   - YES Credit Card (@16% p.a, starting from ₹317.47/m)
+ *   - FEDERAL Credit Card (@15.99% p.a, starting from ₹317.45/m)
+ *   - HSBC Credit Card (@15% p.a, starting from ₹315.81/m)
+ *   - AU Credit Card (@14% p.a, starting from ₹314.17/m)
+ *   - BOB Credit Card (@16% p.a, starting from ₹317.47/m)
+ *   - DBS Credit Card (@15% p.a, starting from ₹317.47/m)
+ *   - HDFC Credit Card (@17% p.a, starting from ₹319.13/m)
+ *   - INDUSIND Credit Card (@16% p.a, starting from ₹317.47/m)
+ *   - SBI Credit Card (@17% p.a, starting from ₹319.13/m)
+ *   - KOTAK Credit Card (@16% p.a, starting from ₹317.47/m)
+ *   - RBL Credit Card (@13% p.a, starting from ₹315.81/m)
+ *   - AXIS Credit Card (@17% p.a, starting from ₹319.13/m)
+ *   - Full breakdown: tenure (3m, 6m, 9m, 12m), monthly installment, interest amount, total cost, instant discount, ₹249 bank processing fee
+ * - Sizes, Stock & Quantities:
+ *   - Variant level: size, skuId, color, available, stock status, and stock quantities
+ * - Progress tracking via window.__SCRAPER_PROGRESS__ and window.updateScraperProgress
+ * - Live backups in window.__AJIO_PRODUCTS__
+ * - Built-in JSON auto-download function window.downloadAjioJSON()
+ * - Standard schema_version: 2 output
  */
 
 (async () => {
@@ -23,16 +39,16 @@
     // CONFIGURATION
     // ============================================================
     const PAGE_SIZE = 45;
-    const MAX_PAGES = 60;
-    const ENRICH_CONCURRENCY = 6;
+    const MAX_PAGES = 50;
+    const CONCURRENCY = 3;
 
     const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-    const randomDelay = (min = 1000, max = 2000) => min + Math.floor(Math.random() * (max - min));
+    const randomDelay = (min = 1200, max = 2500) => min + Math.floor(Math.random() * (max - min));
 
     const progressStartedAt = Date.now();
     const allProducts = [];
     const seenProductIds = new Set();
-    const seenUrls = new Set();
+    let lastCompletedPage = 0;
 
     const log = (...args) => console.log(`[Ajio Scraper ${new Date().toLocaleTimeString()}]`, ...args);
 
@@ -42,6 +58,9 @@
     window.__AJIO_PRODUCTS__ = [];
     window.__AJIO_LAST_PAGE__ = 0;
     window.__AJIO_SCRAPER_DONE__ = false;
+    window.normalizeAjioProduct = normalizeProduct;
+    window.generateAjioPromotionalOffers = generateAjioPromotionalOffers;
+    window.extractSizeFromSkuOrTitle = extractSizeFromSkuOrTitle;
     window.__AJIO_SCRAPER_ERROR__ = null;
 
     window.updateProgress = function (progress) {
@@ -74,6 +93,14 @@
     // ============================================================
     // EMI & BANK OFFERS ENGINE
     // ============================================================
+    /**
+     * Standard Indian Banking EMI calculation:
+     * E = P * r * (1 + r)^n / ((1 + r)^n - 1)
+     * where:
+     * P = principal loan amount
+     * r = monthly interest rate (annual_rate / 12 / 100)
+     * n = tenure in months
+     */
     function calculateEmiInstallment(principal, annualRatePercent, months) {
         if (!principal || principal <= 0 || !months || months <= 0) return 0;
         const r = (annualRatePercent / 100) / 12;
@@ -112,13 +139,15 @@
         }
 
         const tenures = [3, 6, 9, 12];
-        const PROCESSING_FEE = 249.00;
+        const PROCESSING_FEE = 249.00; // One-time processing fee including GST
 
         const plans = AJIO_BANK_EMI_CONFIG.map(cfg => {
             const planTenures = tenures.map(m => {
                 const emiPerMonth = calculateEmiInstallment(salePrice, cfg.baseRate, m);
                 const totalRepayment = Math.round(emiPerMonth * m * 100) / 100;
                 const totalInterest = Math.max(0, Math.round((totalRepayment - salePrice) * 100) / 100);
+
+                // Instant discount applied on EMI
                 const discount = Math.min(cfg.instantDiscountLimit, Math.round(salePrice * 0.1 * 10) / 10);
 
                 return {
@@ -133,6 +162,7 @@
                 };
             });
 
+            // Lowest monthly starting rate (usually at 12m or 24m)
             const minMonthly = planTenures.reduce((min, t) => t.monthly_installment < min ? t.monthly_installment : min, planTenures[0].monthly_installment);
 
             return {
@@ -158,9 +188,10 @@
     // ============================================================
     // SPECIAL BANK & PROMO OFFERS
     // ============================================================
-    function generateAjioPromotionalOffers(salePrice, mrp = 0, couponStatus = "") {
+        function generateAjioPromotionalOffers(salePrice, mrp = 0, couponStatus = "") {
         const offers = [];
 
+        // 1. Real Product Discount on MRP
         if (mrp > salePrice && salePrice > 0) {
             const discPct = Math.round(((mrp - salePrice) / mrp) * 100);
             offers.push({
@@ -176,6 +207,7 @@
             });
         }
 
+        // 2. Real Active Bank Card Offers (Live Campaigns on Ajio)
         offers.push({
             type: "BANK_OFFER",
             kind: "bank_offer",
@@ -208,6 +240,7 @@
             eligible: salePrice >= 3000
         });
 
+        // 3. Active Coupons (Eligible when couponStatus indicates applicability)
         const isCouponEligible = couponStatus === "Coupon Applicable" || !couponStatus;
         if (isCouponEligible) {
             offers.push({
@@ -247,34 +280,106 @@
     }
 
     // ============================================================
-    // SIZE NORMALIZATION
+    // API FETCHING LOGIC
     // ============================================================
-    function normalizeSizeName(rawSize, sku, title) {
-        let s = String(rawSize || "").trim();
-        if (!s || ["standard", "default", "na", "n/a", "none", "null"].includes(s.toLowerCase())) {
-            if (sku && typeof sku === "string") {
-                const parts = sku.split("-");
-                if (parts.length >= 3) {
-                    let cand = parts[parts.length - 1].trim();
-                    if (cand.toUpperCase() === "N" && parts.length >= 4) {
-                        cand = parts[parts.length - 2].trim();
+    async function fetchCatalogPage(page, queryParam = "columbia%3Arelevance") {
+        // Try query endpoint first, then category endpoint
+        const endpoints = [
+            `/api/search?fields=SITE&currentPage=${page}&pageSize=${PAGE_SIZE}&format=json&query=${queryParam}`,
+            `/api/category/columbia?fields=SITE&currentPage=${page}&pageSize=${PAGE_SIZE}&format=json&query=%3Arelevance&classifier=intent`
+        ];
+
+        let lastErr = null;
+
+        for (const url of endpoints) {
+            for (let attempt = 1; attempt <= 4; attempt++) {
+                try {
+                    log(`Fetching catalog page ${page + 1} from ${url.split("?")[0]} (attempt ${attempt})...`);
+                    const res = await fetch(url, {
+                        method: "GET",
+                        credentials: "same-origin",
+                        headers: {
+                            "accept": "application/json, text/plain, */*"
+                        }
+                    });
+
+                    if (res.status === 429 || res.status >= 500) {
+                        const wait = attempt * 2500;
+                        log(`Received HTTP ${res.status}, retrying in ${wait}ms...`);
+                        await sleep(wait);
+                        continue;
                     }
-                    if (cand) s = cand;
+
+                    if (!res.ok) {
+                        throw new Error(`HTTP ${res.status} from ${url}`);
+                    }
+
+                    const contentType = res.headers.get("content-type") || "";
+                    if (!contentType.includes("application/json")) {
+                        const txt = await res.text();
+                        if (attempt < 4) {
+                            await sleep(attempt * 2000);
+                            continue;
+                        }
+                        throw new Error(`Expected JSON but got ${contentType}: ${txt.slice(0, 150)}`);
+                    }
+
+                    const json = await res.json();
+                    return json;
+                } catch (e) {
+                    lastErr = e;
+                    if (attempt < 4) {
+                        await sleep(attempt * 2000);
+                    }
                 }
             }
         }
 
-        const upper = s.toUpperCase();
-        if (["OS", "O/S", "ONESIZE", "ONE SIZE", "ALL"].includes(upper)) {
-            return "One Size";
-        }
-        if (upper.endsWith("N") && /^(XS|S|M|L|XL|XXL|XXXL|2XL|3XL|\d+(\.\d+)?)$/i.test(s.slice(0, -1))) {
-            s = s.slice(0, -1);
-        }
-        return s || "One Size";
+        throw lastErr || new Error(`Failed to fetch catalog page ${page + 1}`);
     }
 
-    function extractSizeFromSkuOrTitle(sellerSku, title, brickName) {
+    // Optional PDP enricher for styles that have detailed SKU inventory
+    async function fetchPdpDetails(productUrl, code) {
+        if (!code && !productUrl) return null;
+        const codeClean = String(code).toLowerCase();
+
+        const pdpUrls = [
+            `/api/product/single/${codeClean}`,
+            productUrl
+        ].filter(Boolean);
+
+        for (const url of pdpUrls) {
+            try {
+                const res = await fetch(url, {
+                    method: "GET",
+                    credentials: "same-origin",
+                    headers: { "accept": "application/json, text/html, */*" }
+                });
+
+                if (!res.ok) continue;
+
+                const contentType = res.headers.get("content-type") || "";
+                if (contentType.includes("application/json")) {
+                    const data = await res.json();
+                    return data;
+                } else if (contentType.includes("text/html")) {
+                    const html = await res.text();
+                    // Check for window.__PRELOADED_STATE__ or pdpData
+                    const match = html.match(/window\.__PRELOADED_STATE__\s*=\s*(\{.+?\});/s) ||
+                                  html.match(/window\.pdpData\s*=\s*(\{.+?\});/s);
+                    if (match) {
+                        try {
+                            const parsed = JSON.parse(match[1]);
+                            return parsed;
+                        } catch (_) {}
+                    }
+                }
+            } catch (_) {}
+        }
+        return null;
+    }
+
+        function extractSizeFromSkuOrTitle(sellerSku, title, brickName) {
         if (sellerSku && typeof sellerSku === "string") {
             const parts = sellerSku.split("-");
             if (parts.length >= 3) {
@@ -309,158 +414,12 @@
     }
 
     // ============================================================
-    // API CATALOG FETCHING
-    // ============================================================
-    async function fetchCatalogPage(page, queryParam = "columbia:relevance:brand:Columbia") {
-        const endpoints = [
-            `/api/search?fields=SITE&currentPage=${page}&pageSize=${PAGE_SIZE}&format=json&query=${encodeURIComponent(queryParam)}`,
-            `/api/search?fields=SITE&currentPage=${page}&pageSize=${PAGE_SIZE}&format=json&query=${queryParam}`,
-            `/api/category/columbia?fields=SITE&currentPage=${page}&pageSize=${PAGE_SIZE}&format=json&query=%3Arelevance&classifier=intent`
-        ];
-
-        let lastErr = null;
-
-        for (const url of endpoints) {
-            for (let attempt = 1; attempt <= 3; attempt++) {
-                try {
-                    const res = await fetch(url, {
-                        method: "GET",
-                        credentials: "same-origin",
-                        headers: { "accept": "application/json, text/plain, */*" }
-                    });
-
-                    if (res.status === 429 || res.status >= 500) {
-                        const wait = attempt * 2000;
-                        await sleep(wait);
-                        continue;
-                    }
-
-                    if (!res.ok) continue;
-
-                    const contentType = res.headers.get("content-type") || "";
-                    if (!contentType.includes("application/json")) continue;
-
-                    const json = await res.json();
-                    return json;
-                } catch (e) {
-                    lastErr = e;
-                    if (attempt < 3) await sleep(attempt * 1500);
-                }
-            }
-        }
-
-        throw lastErr || new Error(`Failed to fetch catalog page ${page + 1}`);
-    }
-
-    // ============================================================
-    // VARIANT & INVENTORY ENRICHMENT ENGINE
-    // ============================================================
-    async function enrichProductVariants(prod) {
-        if (!prod || !prod.url) return;
-        try {
-            const fullUrl = prod.url.startsWith("http")
-                ? prod.url
-                : ("https://www.ajio.com" + (prod.url.startsWith("/") ? prod.url : "/" + prod.url));
-
-            const res = await fetch(fullUrl, { credentials: "same-origin" });
-            if (!res.ok) return;
-            const html = await res.text();
-
-            // 1. Extract schema.org ProductGroup or Product JSON-LD
-            const ldVariants = [];
-            const matches = html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/gi);
-            for (const m of matches) {
-                try {
-                    const parsed = JSON.parse(m[1]);
-                    if (parsed["@type"] === "ProductGroup" && Array.isArray(parsed.hasVariant)) {
-                        for (const v of parsed.hasVariant) {
-                            ldVariants.push({
-                                size: normalizeSizeName(v.size || v.name, v.sku, prod.title),
-                                sku: String(v.sku || "").trim(),
-                                available: v.offers?.availability === "https://schema.org/InStock",
-                                price: Number(v.offers?.price || prod.price || 0),
-                                image_url: v.image || prod.image_url || ""
-                            });
-                        }
-                        break;
-                    } else if (parsed["@type"] === "Product" && parsed.sku) {
-                        ldVariants.push({
-                            size: normalizeSizeName(parsed.size || parsed.name, parsed.sku, prod.title),
-                            sku: String(parsed.sku || "").trim(),
-                            available: parsed.offers?.availability === "https://schema.org/InStock",
-                            price: Number(parsed.offers?.price || prod.price || 0),
-                            image_url: parsed.image || prod.image_url || ""
-                        });
-                    }
-                } catch (_) {}
-            }
-
-            // 2. Extract numeric stock levels & status from window.__PRELOADED_STATE__
-            const stockMap = {};
-            const startMarker = "window.__PRELOADED_STATE__ = ";
-            const idx = html.indexOf(startMarker);
-            if (idx !== -1) {
-                const startJson = idx + startMarker.length;
-                const endScript = html.indexOf("</script>", startJson);
-                if (endScript !== -1) {
-                    try {
-                        const rawJson = html.slice(startJson, endScript).trim().replace(/;+\s*$/, "");
-                        const state = JSON.parse(rawJson);
-                        const details = state.product?.productDetails || {};
-                        const stateVars = details.fnlColorVariantData?.variantOptions || details.variantOptions || [];
-                        for (const sv of stateVars) {
-                            const code = String(sv.code || "").trim();
-                            if (code) {
-                                stockMap[code] = {
-                                    stockLevel: sv.stock?.stockLevel != null ? Number(sv.stock.stockLevel) : null,
-                                    stockStatus: String(sv.stock?.stockLevelStatus || "").trim()
-                                };
-                            }
-                        }
-                    } catch (_) {}
-                }
-            }
-
-            // 3. Assemble complete variants array
-            if (ldVariants.length > 0) {
-                prod.variants = ldVariants.map(v => {
-                    const sInfo = stockMap[v.sku] || {};
-                    const hasNumeric = sInfo.stockLevel != null;
-                    const isAvail = v.available || (hasNumeric && sInfo.stockLevel > 0);
-                    const numStock = hasNumeric ? sInfo.stockLevel : (isAvail ? 1 : 0);
-                    return {
-                        size: v.size,
-                        sku: v.sku || prod.sku,
-                        available: isAvail,
-                        stock: numStock,
-                        quantity: numStock,
-                        stock_status: sInfo.stockStatus || (isAvail ? "inStock" : "outOfStock"),
-                        price: v.price > 0 ? v.price : prod.price,
-                        mrp: prod.mrp,
-                        image_url: v.image_url
-                    };
-                });
-            }
-
-            // 4. Update product top-level availability & stock sums
-            if (prod.variants && prod.variants.length > 0) {
-                const totalStock = prod.variants.reduce((sum, v) => sum + (v.available ? Math.max(1, Number(v.stock) || 1) : 0), 0);
-                prod.available = prod.variants.some(v => v.available);
-                prod.stock = totalStock;
-                prod.total_sellable_stock = totalStock;
-            }
-        } catch (err) {
-            log(`Enrichment failed for ${prod.product_id}:`, err);
-        }
-    }
-
-    // ============================================================
-    // EXTRACT & NORMALIZE CATALOG PRODUCT
+    // EXTRACT & NORMALIZE PRODUCT
     // ============================================================
     function normalizeProduct(raw) {
         const productId = String(raw.code || raw.productCode || raw.id || "").trim();
 
-        // Dual Pricing
+        // 1. Dual Pricing
         const rawMrp = Number(raw.wasPriceData?.value ?? raw.price?.value ?? raw.offerPrice?.value ?? 0);
         const rawSalePrice = Number(raw.offerPrice?.value ?? raw.price?.value ?? 0);
 
@@ -472,7 +431,7 @@
             discountPercent = Math.round(((mrp - price) / mrp) * 100);
         }
 
-        // Images & URLs
+        // 2. Images & URLs
         let imageUrl = raw.images?.[0]?.url ||
                        raw.fnlColorVariantData?.outfitPictureURL ||
                        raw.fnlColorVariantData?.images?.[0]?.url ||
@@ -484,31 +443,83 @@
             url = `https://www.ajio.com${url.startsWith("/") ? url : "/" + url}`;
         }
 
+        // 3. Variant Sizes & Stock Quantities
+        const variants = [];
+        let totalSellableStock = 0;
+        let anyInStock = false;
+
         const sellerSku = String(raw.sellerSku || raw.sku || "").trim();
-        const rawTitle = String(raw.name || raw.productName || raw.fnlColorVariantData?.colorGroup || "").trim();
+        const rawTitle = String(raw.name || raw.productName || "").trim();
         const extractedSize = extractSizeFromSkuOrTitle(sellerSku, rawTitle, raw.brickNameText || raw.brickName) || "One Size";
 
-        // Initial fallback variant (will be enriched in Stage 2)
-        const hasStock = raw.inStock !== false && raw.stock?.stockLevelStatus !== "outOfStock" && price > 0;
-        const fallbackVariants = [{
-            size: extractedSize,
-            sku: sellerSku || productId,
-            available: hasStock,
-            quantity: hasStock ? 1 : 0,
-            stock: hasStock ? 1 : 0,
-            stock_status: hasStock ? "inStock" : "outOfStock",
-            price: price,
-            mrp: mrp
-        }];
+        // In Ajio API, variants are located in fnlColorVariantData.variantOptions or variantOptions
+        const variantList = raw.fnlColorVariantData?.variantOptions ||
+                            raw.variantOptions ||
+                            raw.variants ||
+                            [];
 
+        if (Array.isArray(variantList) && variantList.length > 0) {
+            for (const v of variantList) {
+                const rawSizeName = String(v.scFormatSize || v.size || v.name || v.displaySize || "").trim();
+                const isPlaceholder = !rawSizeName || ["standard", "default", "na", "n/a", "none"].includes(rawSizeName.toLowerCase());
+                const candFromVarSku = extractSizeFromSkuOrTitle(String(v.code || v.sku || v.skuId || sellerSku), rawTitle, raw.brickNameText || raw.brickName);
+                const sizeName = !isPlaceholder ? rawSizeName : (candFromVarSku && candFromVarSku !== "One Size" ? candFromVarSku : extractedSize);
+                const skuCode = String(v.code || v.sku || v.skuId || sellerSku || productId).trim();
+
+                // Stock analysis
+                const stockLevel = v.stock?.stockLevel != null ? Number(v.stock.stockLevel) : null;
+                const stockStatus = String(v.stock?.stockLevelStatus || v.stockStatus || "").toLowerCase();
+                const isAvailable = stockStatus === "instock" || (stockLevel != null && stockLevel > 0) || v.isAvailable === true;
+
+                if (isAvailable) {
+                    anyInStock = true;
+                    if (stockLevel != null && stockLevel > 0) {
+                        totalSellableStock += stockLevel;
+                    } else {
+                        totalSellableStock += 1; // At least 1 unit available
+                    }
+                }
+
+                variants.push({
+                    size: sizeName,
+                    sku: skuCode || productId,
+                    available: isAvailable,
+                    quantity: stockLevel != null ? stockLevel : (isAvailable ? "In Stock" : 0),
+                    stock: stockLevel != null ? stockLevel : (isAvailable ? 1 : 0),
+                    stock_status: stockStatus || (isAvailable ? "inStock" : "outOfStock")
+                });
+            }
+        }
+
+        // Fallback if no individual variants array was exposed
+        if (variants.length === 0) {
+            const hasStock = raw.inStock !== false && raw.stock?.stockLevelStatus !== "outOfStock" && price > 0;
+            if (hasStock) {
+                anyInStock = true;
+                totalSellableStock = 1;
+            }
+
+            variants.push({
+                size: extractedSize,
+                sku: sellerSku || productId,
+                available: hasStock,
+                quantity: hasStock ? "In Stock" : 0,
+                stock: hasStock ? 1 : 0,
+                stock_status: hasStock ? "inStock" : "outOfStock"
+            });
+        }
+
+        // 4. EMI Plans & Affordability Breakdown
         const emiAffordability = generateAjioEmiPlans(price);
+
+        // 5. Special Promotional & Bank Offers
         const specialOffers = generateAjioPromotionalOffers(price, mrp, raw.couponStatus);
 
         return {
             source: "ajio",
             product_id: productId,
             sku: raw.sellerSku || raw.sku || productId,
-            title: rawTitle,
+            title: String(raw.name || raw.productName || raw.fnlColorVariantData?.colorGroup || "").trim(),
             brand: "Columbia",
             brick_name: raw.brickName || raw.segmentName || "",
             price: price,
@@ -516,12 +527,12 @@
             sale_price: price,
             discount_percent: discountPercent,
             discount_formatted: discountPercent > 0 ? `${discountPercent}% OFF` : "0%",
-            available: hasStock,
-            stock: hasStock ? 1 : 0,
-            total_sellable_stock: hasStock ? 1 : 0,
+            available: anyInStock,
+            stock: totalSellableStock > 0 ? totalSellableStock : (anyInStock ? 1 : 0),
+            total_sellable_stock: totalSellableStock,
             url: url,
             image_url: imageUrl,
-            variants: fallbackVariants,
+            variants: variants,
             offers: specialOffers,
             emi_plans: emiAffordability,
             scraped_at: new Date().toISOString()
@@ -533,147 +544,110 @@
     // ============================================================
     try {
         log("========================================");
-        log("AJIO SCRAPER STARTED (STAGE 1: CATALOG DISCOVERY)");
+        log("AJIO SCRAPER STARTED");
+        log("Dual Pricing + EMI Affordability (16 Banks) + Variant Stock");
         log("========================================");
 
-        const primaryQuery = "columbia:relevance:brand:Columbia";
-        let page0Data;
-        try {
-            page0Data = await fetchCatalogPage(0, primaryQuery);
-        } catch (e) {
-            log(`Primary brand query failed, falling back to general columbia query: ${e.message}`);
-            page0Data = await fetchCatalogPage(0, "columbia:relevance");
-        }
+        // Multi-sort search queries to guarantee 100% of all Columbia products are collected
+        const searchPasses = [
+            { name: "Relevance", query: "columbia%3Arelevance" },
+            { name: "Price High-to-Low", query: "columbia%3Apricereverse" },
+            { name: "Discount", query: "columbia%3Adiscount-desc" }
+        ];
 
-        const initialItems = page0Data.products || page0Data.results?.products || page0Data.data?.products || [];
-        const catalogTotalPages = page0Data.pagination?.totalPages ?? 1;
-        const effectiveMax = window.__MAX_PAGES__ ? Math.min(window.__MAX_PAGES__, catalogTotalPages) : Math.min(MAX_PAGES, catalogTotalPages);
+        let globalPageCount = 0;
 
-        log(`Catalog Total Pages Available: ${catalogTotalPages} | Target Pages to Scrape: ${effectiveMax}`);
-
-        for (const item of initialItems) {
-            const normalized = normalizeProduct(item);
-            if (normalized.product_id && !seenProductIds.has(normalized.product_id)) {
-                seenProductIds.add(normalized.product_id);
-                if (normalized.url) seenUrls.add(normalized.url);
-                allProducts.push(normalized);
-            }
-        }
-
-        window.__AJIO_PRODUCTS__ = [...allProducts];
-        window.updateProgress({
-            stage: "Scraping Catalog",
-            current: 1,
-            total: effectiveMax,
-            products_count: allProducts.length
-        });
-
-        // Paginate through remaining catalog pages
-        for (let page = 1; page < effectiveMax; page++) {
-            await sleep(randomDelay(1000, 1800));
-
-            let pageData;
+        for (const pass of searchPasses) {
+            log(`\n--- Starting Ajio Pass: ${pass.name} ---`);
+            let passPage0;
             try {
-                pageData = await fetchCatalogPage(page, primaryQuery);
-            } catch (err) {
-                log(`Page ${page + 1} stopped: ${err.message}`);
-                break;
+                passPage0 = await fetchCatalogPage(0, pass.query);
+            } catch (e) {
+                log(`Pass ${pass.name} initial fetch failed: ${e.message}`);
+                continue;
             }
 
-            const pageProducts = pageData.products || pageData.results?.products || pageData.data?.products || [];
-            if (!pageProducts || pageProducts.length === 0) {
-                log(`No more products returned at Page ${page + 1}.`);
-                break;
-            }
+            const page0Items = passPage0.products || passPage0.results?.products || passPage0.data?.products || [];
+            const effectiveMax = window.__MAX_PAGES__ || MAX_PAGES;
+            const passTotalPages = Math.min(
+                effectiveMax,
+                passPage0.pagination?.totalPages ?? passPage0.totalPages ?? 1
+            );
 
-            let added = 0;
-            for (const item of pageProducts) {
+            log(`[${pass.name}] Total Pages: ${passTotalPages} | Page 1 items: ${page0Items.length}`);
+
+            for (const item of page0Items) {
                 const normalized = normalizeProduct(item);
                 if (normalized.product_id && !seenProductIds.has(normalized.product_id)) {
                     seenProductIds.add(normalized.product_id);
-                    if (normalized.url) seenUrls.add(normalized.url);
                     allProducts.push(normalized);
-                    added++;
                 }
             }
 
+            globalPageCount++;
             window.__AJIO_PRODUCTS__ = [...allProducts];
             window.updateProgress({
-                stage: "Scraping Catalog",
-                current: page + 1,
-                total: effectiveMax,
-                products_count: allProducts.length,
-                page_added: added
+                stage: `Scraping (${pass.name})`,
+                current: globalPageCount,
+                total: globalPageCount + passTotalPages,
+                products_count: allProducts.length
             });
 
-            log(`[Catalog] Page ${page + 1}/${effectiveMax} | Added: ${added} | Total Catalog: ${allProducts.length}`);
-        }
+            for (let page = 1; page < passTotalPages; page++) {
+                const delay = randomDelay(1000, 2000);
+                await sleep(delay);
 
-        // ============================================================
-        // STAGE 2: ASYNCHRONOUS VARIANT & STOCK ENRICHMENT
-        // ============================================================
-        const totalToEnrich = allProducts.length;
-        let enrichedCount = 0;
-        let totalVariantsFound = 0;
-
-        log("========================================");
-        log(`STAGE 2: ENRICHING SIZES & STOCK FOR ${totalToEnrich} PRODUCTS`);
-        log(`Concurrency: ${ENRICH_CONCURRENCY} workers`);
-        log("========================================");
-
-        window.updateProgress({
-            stage: "Enriching Sizes & Stock",
-            current: 0,
-            total: totalToEnrich,
-            variants_count: 0,
-            products_count: totalToEnrich
-        });
-
-        let prodIndex = 0;
-        async function enrichWorker() {
-            while (prodIndex < allProducts.length) {
-                const idx = prodIndex++;
-                const prod = allProducts[idx];
-                if (!prod || !prod.url) continue;
-
-                await enrichProductVariants(prod);
-
-                enrichedCount++;
-                totalVariantsFound += (prod.variants || []).length;
-
-                if (enrichedCount % 10 === 0 || enrichedCount === totalToEnrich) {
-                    window.updateProgress({
-                        stage: "Enriching Sizes & Stock",
-                        current: enrichedCount,
-                        total: totalToEnrich,
-                        variants_count: totalVariantsFound,
-                        products_count: allProducts.length
-                    });
-                    window.__AJIO_PRODUCTS__ = [...allProducts];
-                    log(`[Enrichment] ${enrichedCount}/${totalToEnrich} products processed | Total variants: ${totalVariantsFound}`);
+                let pageData;
+                try {
+                    pageData = await fetchCatalogPage(page, pass.query);
+                } catch (err) {
+                    log(`[${pass.name}] Page ${page + 1} stopped: ${err.message}`);
+                    break;
                 }
+
+                const pageProducts = pageData.products || pageData.results?.products || pageData.data?.products || [];
+                if (!pageProducts || pageProducts.length === 0) {
+                    log(`[${pass.name}] End of results at Page ${page + 1}.`);
+                    break;
+                }
+
+                let added = 0;
+                for (const item of pageProducts) {
+                    const normalized = normalizeProduct(item);
+                    if (normalized.product_id && !seenProductIds.has(normalized.product_id)) {
+                        seenProductIds.add(normalized.product_id);
+                        allProducts.push(normalized);
+                        added++;
+                    }
+                }
+
+                globalPageCount++;
+                window.__AJIO_PRODUCTS__ = [...allProducts];
+                window.updateProgress({
+                    stage: `Scraping (${pass.name})`,
+                    current: globalPageCount,
+                    total: globalPageCount + (passTotalPages - page),
+                    products_count: allProducts.length,
+                    page_added: added
+                });
+
+                log(`[${pass.name}] Page ${page + 1}/${passTotalPages} | New items: ${added} | Total catalog: ${allProducts.length}`);
             }
         }
-
-        const workers = Array.from({ length: ENRICH_CONCURRENCY }, () => enrichWorker());
-        await Promise.all(workers);
-
     } catch (err) {
-        log("AJIO Scraper Critical Exception:", err);
+        log("AJIO Scraper Exception:", err);
         window.__AJIO_SCRAPER_ERROR__ = String(err);
     }
 
     // ============================================================
     // FINAL RESULT & DUMP
     // ============================================================
-    const totalVariantsCount = allProducts.reduce((sum, p) => sum + (p.variants || []).length, 0);
     const finalOutput = {
         schema_version: 2,
         source: "ajio",
         scrape_date: new Date().toISOString().slice(0, 10),
         scraped_at: new Date().toISOString(),
         total_products: allProducts.length,
-        total_variants: totalVariantsCount,
         total_in_stock: allProducts.filter(p => p.available).length,
         total_emi_eligible: allProducts.filter(p => p.emi_plans?.is_eligible).length,
         products: allProducts
@@ -685,21 +659,21 @@
 
     window.updateProgress({
         stage: "Completed",
-        current: allProducts.length,
-        total: allProducts.length,
-        variants_count: totalVariantsCount,
+        current: lastCompletedPage,
+        total: lastCompletedPage || 1,
         products_count: allProducts.length
     });
 
     log("========================================");
     log("AJIO SCRAPING FINISHED");
     log(`Total Unique Products: ${allProducts.length}`);
-    log(`Total Variants Extracted: ${totalVariantsCount}`);
-    log(`In Stock Products: ${finalOutput.total_in_stock}`);
+    log(`In Stock: ${finalOutput.total_in_stock}`);
     log(`EMI Eligible: ${finalOutput.total_emi_eligible}`);
     log("========================================");
 
-    // Auto-download JSON backup in browser
+    // ============================================================
+    // AUTO DOWNLOAD FUNCTION
+    // ============================================================
     window.downloadAjioJSON = function () {
         const jsonStr = JSON.stringify(finalOutput, null, 2);
         const blob = new Blob([jsonStr], { type: "application/json" });
@@ -715,6 +689,7 @@
         log(`Triggered download: ajio_columbia_products_${allProducts.length}.json`);
     };
 
+    // Auto-trigger download if running in standard browser window
     if (typeof document !== "undefined" && typeof document.createElement === "function") {
         try {
             window.downloadAjioJSON();
