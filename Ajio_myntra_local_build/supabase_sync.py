@@ -34,6 +34,24 @@ SCRAPER_IDS = {
 }
 
 
+def extract_columbia_size_from_sku(sku: Optional[str]) -> str:
+    """Extracts genuine garment or footwear size from standard Columbia SKU."""
+    if not sku:
+        return ""
+    parts = str(sku).strip().split("-")
+    if len(parts) >= 3:
+        cand = parts[-1].strip().upper()
+        if cand == "N" and len(parts) >= 4:
+            cand = parts[-2].strip().upper()
+        if cand.endswith("N") and (cand[:-1] in ("XS", "S", "M", "L", "XL", "XXL", "XXXL", "2XL", "3XL") or cand[:-1].replace(".", "").isdigit()):
+            cand = cand[:-1]
+        if cand in ("OS", "O/S", "ONESIZE", "ONE SIZE", "ALL"):
+            return "One Size"
+        if cand and cand not in ("STANDARD", "DEFAULT", "NA", "N/A", "NONE"):
+            return cand
+    return ""
+
+
 def normalize_style_code(raw: str) -> Optional[str]:
     if not raw:
         return None
@@ -101,11 +119,16 @@ async def sync_products_to_supabase(
 
         # Extract variants from current item
         incoming_variants = p.get("variants") or []
+        sku_extracted_size = extract_columbia_size_from_sku(raw_sku)
+
         if not incoming_variants:
-            size_val = p.get("size") or "One Size"
+            size_val = (p.get("size") or "").strip()
+            if not size_val or size_val.lower() in ("standard", "default", "na", "none", "one size"):
+                size_val = sku_extracted_size or "One Size"
+
             qty = int(p.get("quantity") or p.get("stock") or (1 if available else 0))
             incoming_variants = [{
-                "size": size_val if size_val != "Standard" else "One Size",
+                "size": size_val,
                 "sku": str(p.get("variant_id") or raw_sku),
                 "style": style,
                 "available": available,
@@ -118,7 +141,13 @@ async def sync_products_to_supabase(
         # Append non-duplicate variants
         existing_sizes = {v.get("size") for v in target["variants"]}
         for v in incoming_variants:
-            v_size = v.get("size") or "One Size"
+            v_size = (v.get("size") or "").strip()
+            v_sku = str(v.get("sku") or raw_sku)
+            if not v_size or v_size.lower() in ("standard", "default", "na", "none"):
+                cand_from_vsku = extract_columbia_size_from_sku(v_sku)
+                v_size = cand_from_vsku or sku_extracted_size or "One Size"
+            v["size"] = v_size
+
             if v_size not in existing_sizes:
                 target["variants"].append(v)
                 existing_sizes.add(v_size)

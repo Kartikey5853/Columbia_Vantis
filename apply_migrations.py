@@ -29,6 +29,13 @@ def check_tables_via_rest(supabase_url: str, supabase_key: str) -> dict:
         "scrape_runs",
         "scrape_listing_pages",
         "scrape_product_progress",
+        "products_ajio",
+        "products_myntra",
+        "products_amazon",
+        "products_columbia",
+        "products_tata",
+        "products_tata_lux",
+        "products_adv",
     ]
     results = {}
     headers = {"apikey": supabase_key, "Authorization": f"Bearer {supabase_key}"}
@@ -103,14 +110,14 @@ def run_migration():
             print("       (Automatic JSON fallback to last_error is currently active and fully supported).")
         return True
     else:
-        print(f"\n[INFO] Missing core tables in Supabase REST API: {', '.join(missing)}")
+        proj_ref = supabase_url.replace("https://", "").replace(".supabase.co", "").split("/")[0]
+        print(f"\n[INFO] Missing tables or views in Supabase REST API: {', '.join(missing)}")
         print("\n" + "=" * 60)
         print("ACTION REQUIRED: Execute migrations in Supabase SQL Editor")
         print("=" * 60)
-        print("1. Open your Supabase Dashboard: https://supabase.com/dashboard/project/_/sql")
-        print("2. Navigate to 'SQL Editor'")
-        for mf in migration_files:
-            print(f"3. Run contents of: {mf.resolve()}")
+        print(f"1. Open your Supabase Dashboard: https://supabase.com/dashboard/project/{proj_ref}/sql/new")
+        print("2. Copy contents of: migrations/005_platform_normalized_tables_and_views.sql")
+        print("3. Click 'RUN' to create dedicated platform views: products_ajio, products_myntra, etc.")
         print("4. Re-run this script: python apply_migrations.py")
         print("=" * 60 + "\n")
         return False
