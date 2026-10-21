@@ -282,10 +282,10 @@
     // ============================================================
     // API FETCHING LOGIC
     // ============================================================
-    async function fetchCatalogPage(page) {
-        // Try category endpoint first, then search endpoint fallback
+    async function fetchCatalogPage(page, queryParam = "columbia%3Arelevance") {
+        // Try query endpoint first, then category endpoint
         const endpoints = [
-            `/api/search?fields=SITE&currentPage=${page}&pageSize=${PAGE_SIZE}&format=json&query=columbia%3Arelevance`,
+            `/api/search?fields=SITE&currentPage=${page}&pageSize=${PAGE_SIZE}&format=json&query=${queryParam}`,
             `/api/category/columbia?fields=SITE&currentPage=${page}&pageSize=${PAGE_SIZE}&format=json&query=%3Arelevance&classifier=intent`
         ];
 
@@ -548,96 +548,91 @@
         log("Dual Pricing + EMI Affordability (16 Banks) + Variant Stock");
         log("========================================");
 
-        // Fetch page 0
-        const firstPageData = await fetchCatalogPage(0);
+        // Multi-sort search queries to guarantee 100% of all Columbia products are collected
+        const searchPasses = [
+            { name: "Relevance", query: "columbia%3Arelevance" },
+            { name: "Price High-to-Low", query: "columbia%3Apricereverse" },
+            { name: "Discount", query: "columbia%3Adiscount-desc" }
+        ];
 
-        const firstProducts = firstPageData.products ||
-                              firstPageData.results?.products ||
-                              firstPageData.data?.products ||
-                              [];
+        let globalPageCount = 0;
 
-        const effectiveMaxPages = window.__MAX_PAGES__ || MAX_PAGES;
-        const totalPages = Math.min(
-            effectiveMaxPages,
-            firstPageData.pagination?.totalPages ?? firstPageData.totalPages ?? 1
-        );
-
-        const totalResults = firstPageData.pagination?.totalResults ??
-                             firstPageData.pagination?.totalNumberOfResults ??
-                             firstPageData.totalResults ??
-                             firstProducts.length;
-
-        log(`Catalog Total Pages: ${totalPages} | Total Results: ${totalResults} | Page 1 items: ${firstProducts.length}`);
-
-        // Process First Page
-        for (const item of firstProducts) {
-            const normalized = normalizeProduct(item);
-            if (normalized.product_id && !seenProductIds.has(normalized.product_id)) {
-                seenProductIds.add(normalized.product_id);
-                allProducts.push(normalized);
-            }
-        }
-
-        lastCompletedPage = 1;
-        window.__AJIO_PRODUCTS__ = [...allProducts];
-        window.__AJIO_LAST_PAGE__ = 1;
-        window.updateProgress({
-            stage: "Collecting Products",
-            current: 1,
-            total: totalPages,
-            products_count: allProducts.length
-        });
-
-        log(`Page 1/${totalPages} processed. Unique products: ${allProducts.length}`);
-
-        // Fetch Remaining Pages
-        for (let page = 1; page < totalPages; page++) {
-            const delay = randomDelay(1200, 2400);
-            log(`Waiting ${delay}ms before Page ${page + 1}...`);
-            await sleep(delay);
-
-            let pageData;
+        for (const pass of searchPasses) {
+            log(`\n--- Starting Ajio Pass: ${pass.name} ---`);
+            let passPage0;
             try {
-                pageData = await fetchCatalogPage(page);
-            } catch (err) {
-                log(`Failed on Page ${page + 1}: ${err.message}. Stopping pagination gracefully.`);
-                window.__AJIO_SCRAPER_ERROR__ = String(err);
-                break;
+                passPage0 = await fetchCatalogPage(0, pass.query);
+            } catch (e) {
+                log(`Pass ${pass.name} initial fetch failed: ${e.message}`);
+                continue;
             }
 
-            const pageProducts = pageData.products ||
-                                 pageData.results?.products ||
-                                 pageData.data?.products ||
-                                 [];
+            const page0Items = passPage0.products || passPage0.results?.products || passPage0.data?.products || [];
+            const effectiveMax = window.__MAX_PAGES__ || MAX_PAGES;
+            const passTotalPages = Math.min(
+                effectiveMax,
+                passPage0.pagination?.totalPages ?? passPage0.totalPages ?? 1
+            );
 
-            if (!pageProducts || pageProducts.length === 0) {
-                log(`Page ${page + 1} returned no items. Reached end of catalog.`);
-                break;
-            }
+            log(`[${pass.name}] Total Pages: ${passTotalPages} | Page 1 items: ${page0Items.length}`);
 
-            let added = 0;
-            for (const item of pageProducts) {
+            for (const item of page0Items) {
                 const normalized = normalizeProduct(item);
                 if (normalized.product_id && !seenProductIds.has(normalized.product_id)) {
                     seenProductIds.add(normalized.product_id);
                     allProducts.push(normalized);
-                    added++;
                 }
             }
 
-            lastCompletedPage = page + 1;
+            globalPageCount++;
             window.__AJIO_PRODUCTS__ = [...allProducts];
-            window.__AJIO_LAST_PAGE__ = lastCompletedPage;
-
             window.updateProgress({
-                stage: "Collecting Products",
-                current: lastCompletedPage,
-                total: totalPages,
-                products_count: allProducts.length,
-                page_added: added
+                stage: `Scraping (${pass.name})`,
+                current: globalPageCount,
+                total: globalPageCount + passTotalPages,
+                products_count: allProducts.length
             });
 
-            log(`Page ${lastCompletedPage}/${totalPages} | Added: ${added} | Total Unique: ${allProducts.length}`);
+            for (let page = 1; page < passTotalPages; page++) {
+                const delay = randomDelay(1000, 2000);
+                await sleep(delay);
+
+                let pageData;
+                try {
+                    pageData = await fetchCatalogPage(page, pass.query);
+                } catch (err) {
+                    log(`[${pass.name}] Page ${page + 1} stopped: ${err.message}`);
+                    break;
+                }
+
+                const pageProducts = pageData.products || pageData.results?.products || pageData.data?.products || [];
+                if (!pageProducts || pageProducts.length === 0) {
+                    log(`[${pass.name}] End of results at Page ${page + 1}.`);
+                    break;
+                }
+
+                let added = 0;
+                for (const item of pageProducts) {
+                    const normalized = normalizeProduct(item);
+                    if (normalized.product_id && !seenProductIds.has(normalized.product_id)) {
+                        seenProductIds.add(normalized.product_id);
+                        allProducts.push(normalized);
+                        added++;
+                    }
+                }
+
+                globalPageCount++;
+                window.__AJIO_PRODUCTS__ = [...allProducts];
+                window.updateProgress({
+                    stage: `Scraping (${pass.name})`,
+                    current: globalPageCount,
+                    total: globalPageCount + (passTotalPages - page),
+                    products_count: allProducts.length,
+                    page_added: added
+                });
+
+                log(`[${pass.name}] Page ${page + 1}/${passTotalPages} | New items: ${added} | Total catalog: ${allProducts.length}`);
+            }
         }
     } catch (err) {
         log("AJIO Scraper Exception:", err);
