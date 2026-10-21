@@ -58,7 +58,7 @@ async def reload_catalog():
 @router.get("/search", response_model=List[ProductFamilySummary])
 async def search_products(
     q: str = Query(..., min_length=1, description="Query string"),
-    limit: int = Query(24, ge=1, le=100, description="Maximum results to return")
+    limit: int = Query(50, ge=1, le=5000, description="Maximum results to return")
 ):
     """
     Fast search by product name, SKU, EAN, or style code across all 7 platforms.
@@ -135,7 +135,8 @@ async def export_catalog_excel_post(req: ExportExcelRequest):
     products = []
     if req.family_ids:
         for fid in req.family_ids:
-            fam = catalog_service.get_family_by_id(fid)
+            clean_fid = str(fid).split("::")[0]
+            fam = catalog_service.get_family_by_id(clean_fid)
             if fam:
                 products.append(fam)
     elif req.search:
@@ -161,7 +162,8 @@ async def get_product_details(family_id: str):
     Returns comprehensive product family details including 3-column metadata,
     variant options, size selector, and 7-platform comparison.
     """
-    fam = catalog_service.get_family_by_id(family_id)
+    clean_id = str(family_id).split("::")[0]
+    fam = catalog_service.get_family_by_id(clean_id)
     if not fam:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -171,21 +173,24 @@ async def get_product_details(family_id: str):
 
 @router.get("/{family_id}/variants", response_model=List[ProductVariant])
 async def get_product_variants(family_id: str):
-    fam = catalog_service.get_family_by_id(family_id)
+    clean_id = str(family_id).split("::")[0]
+    fam = catalog_service.get_family_by_id(clean_id)
     if not fam:
         raise HTTPException(status_code=404, detail="Product family not found")
     return fam.get("variants", [])
 
 @router.get("/{family_id}/platforms", response_model=List[PlatformListing])
 async def get_product_platforms(family_id: str):
-    fam = catalog_service.get_family_by_id(family_id)
+    clean_id = str(family_id).split("::")[0]
+    fam = catalog_service.get_family_by_id(clean_id)
     if not fam:
         raise HTTPException(status_code=404, detail="Product family not found")
     return fam.get("platforms", [])
 
 @router.get("/{family_id}/offers", response_model=List[ProductOffer])
 async def get_product_offers(family_id: str):
-    fam = catalog_service.get_family_by_id(family_id)
+    clean_id = str(family_id).split("::")[0]
+    fam = catalog_service.get_family_by_id(clean_id)
     if not fam:
         raise HTTPException(status_code=404, detail="Product family not found")
     all_offers = []

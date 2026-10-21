@@ -93,11 +93,14 @@ export interface ProductFamily {
 
 export interface ProductFamilySummary {
   family_id: string;
+  canonical_family_id?: string | null;
   title: string;
   brand: string;
   style?: string | null;
   ean?: string | null;
   sku?: string | null;
+  matched_sku?: string | null;
+  matched_size?: string | null;
   category: string;
   gender: string;
   tags: string[];

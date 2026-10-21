@@ -7,6 +7,7 @@ import {
   UploadCloud,
   ChevronDown,
   ChevronUp,
+  ChevronLeft,
   ExternalLink,
   ChevronRight,
   Sparkles,
@@ -14,6 +15,8 @@ import {
   CheckCircle2,
   AlertCircle,
   FileUp,
+  Maximize2,
+  Minimize2,
 } from "lucide-react";
 import productService from "../services/productService";
 import uploadService from "../services/uploadService";
@@ -49,6 +52,11 @@ export const HomePage: React.FC = () => {
   const [isExporting, setIsExporting] = useState(false);
   const [expandedCardId, setExpandedCardId] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<string>("relevance");
+
+  // Pagination & Fullscreen view state
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(5);
+  const [isExpandedSearch, setIsExpandedSearch] = useState<boolean>(false);
 
   // Bulk / CSV search modal state
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
@@ -95,14 +103,21 @@ export const HomePage: React.FC = () => {
 
     setIsLoading(true);
     setHasSearched(true);
+    setCurrentPage(1);
     try {
-      const data = await productService.searchProducts(q.trim(), 24);
+      const tokens = q.trim().split(/[\s,\n\r\t]+/).map(t => t.trim()).filter(t => t.length >= 2);
+      let data: ProductFamilySummary[] = [];
+      if (tokens.length > 1) {
+        data = await productService.bulkSearch(tokens);
+      } else {
+        data = await productService.searchProducts(q.trim(), 5000);
+      }
       setResults(data);
       if (data.length > 0 && !expandedCardId) {
         setExpandedCardId(data[0].family_id);
       }
-    } catch {
-      // Fallback
+    } catch (err) {
+      console.error("Search error:", err);
     } finally {
       setIsLoading(false);
     }
@@ -111,6 +126,16 @@ export const HomePage: React.FC = () => {
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
       handleSearch();
+    }
+  };
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const text = e.clipboardData.getData("text");
+    if (!text) return;
+    const tokens = text.split(/[\s,\n\r\t]+/).map(t => t.trim()).filter(Boolean);
+    if (tokens.length > 1) {
+      e.preventDefault();
+      setSearchTerm(tokens.join(" "));
     }
   };
 
@@ -125,21 +150,23 @@ export const HomePage: React.FC = () => {
   };
 
   const handleCardClick = (familyId: string) => {
-    navigate(`/products/${encodeURIComponent(familyId)}${searchTerm ? `?q=${encodeURIComponent(searchTerm.trim())}` : ""}`);
+    const cleanId = familyId.split("::")[0];
+    navigate(`/products/${encodeURIComponent(cleanId)}${searchTerm ? `?q=${encodeURIComponent(searchTerm.trim())}` : ""}`);
   };
 
   const handleBulkSearch = async (identifiers: string[]) => {
     if (identifiers.length === 0) return;
     setIsLoading(true);
     setHasSearched(true);
+    setCurrentPage(1);
     try {
       const data = await productService.bulkSearch(identifiers);
       setResults(data);
       if (data.length > 0) {
         setExpandedCardId(data[0].family_id);
       }
-    } catch {
-      // Handle error
+    } catch (err) {
+      console.error("Bulk search error:", err);
     } finally {
       setIsLoading(false);
     }
@@ -178,12 +205,19 @@ export const HomePage: React.FC = () => {
 
   // Sort results in-place
   const sortedResults = [...results].sort((a, b) => {
-    if (sortBy === "price_asc") return a.lowest_price - b.lowest_price;
-    if (sortBy === "price_desc") return b.lowest_price - a.lowest_price;
-    if (sortBy === "variants") return b.variants_count - a.variants_count;
+    if (sortBy === "price_asc") return (a.lowest_price || 0) - (b.lowest_price || 0);
+    if (sortBy === "price_desc") return (b.lowest_price || 0) - (a.lowest_price || 0);
+    if (sortBy === "variants") return (b.variants_count || 0) - (a.variants_count || 0);
     if (sortBy === "name") return a.title.localeCompare(b.title);
-    return b.platforms_count - a.platforms_count; // relevance
+    return (b.platforms_count || 0) - (a.platforms_count || 0);
   });
+
+  const effectivePageSize = isExpandedSearch ? pageSize : 5;
+  const totalPages = Math.max(1, Math.ceil(sortedResults.length / effectivePageSize));
+  const paginatedResults = sortedResults.slice(
+    (currentPage - 1) * effectivePageSize,
+    currentPage * effectivePageSize
+  );
 
   return (
     <>
@@ -291,7 +325,8 @@ export const HomePage: React.FC = () => {
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
                       onKeyDown={handleKeyDown}
-                      placeholder="Search by SKU, EAN, Style or product name..."
+                      onPaste={handlePaste}
+                      placeholder="Search by SKU, EAN, style, or paste multiple SKUs (space/newline separated)..."
                       className="w-full px-4 py-2.5 sm:py-3 text-base sm:text-lg text-slate-900 placeholder:text-slate-400 focus:outline-none bg-transparent font-medium"
                     />
                     <button
@@ -305,27 +340,18 @@ export const HomePage: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Action Pills below Search */}
-                <div className="flex items-center justify-center gap-4 text-xs font-medium text-slate-600 pt-2">
-                  <button
-                    onClick={() => {
-                      setBulkModalMode("paste");
-                      setIsBulkModalOpen(true);
-                    }}
-                    className="inline-flex items-center gap-1.5 hover:text-sky-600 transition-colors cursor-pointer"
-                  >
-                    <ClipboardList className="w-3.5 h-3.5 text-slate-400" />
-                    <span>Paste multiple SKUs / EANs</span>
-                  </button>
+                {/* Subtext below Search */}
+                <div className="flex items-center justify-center gap-3 text-xs font-medium text-slate-500 pt-2">
+                  <span>Tip: Paste up to 5,000 SKUs directly via Ctrl+V (space, comma, or newline separated)</span>
                   <span className="text-slate-300">|</span>
                   <button
                     onClick={() => {
                       setBulkModalMode("csv");
                       setIsBulkModalOpen(true);
                     }}
-                    className="inline-flex items-center gap-1.5 hover:text-sky-600 transition-colors cursor-pointer"
+                    className="inline-flex items-center gap-1.5 hover:text-sky-600 transition-colors cursor-pointer font-semibold text-sky-700"
                   >
-                    <UploadCloud className="w-3.5 h-3.5 text-slate-400" />
+                    <UploadCloud className="w-3.5 h-3.5 text-sky-600" />
                     <span>Upload CSV</span>
                   </button>
                 </div>
@@ -334,41 +360,140 @@ export const HomePage: React.FC = () => {
 
             {/* Results Section (only displayed once user searches) */}
             {hasSearched && (
-              <div className="space-y-6 animate-in fade-in duration-200">
-                {/* Results Controls Bar */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-4 border-t border-slate-200/60">
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-base font-bold text-slate-900">Search Results</h2>
-                    <span className="text-xs text-slate-500 font-semibold bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-200">
-                      ({sortedResults.length} products found)
-                    </span>
-                  </div>
+              <div
+                className={
+                  isExpandedSearch
+                    ? "fixed inset-0 z-50 bg-white p-4 sm:p-6 flex flex-col space-y-4 overflow-hidden animate-in fade-in"
+                    : "space-y-6 animate-in fade-in duration-200"
+                }
+              >
+                {/* Fullscreen Overlay Header */}
+                {isExpandedSearch && (
+                  <div className="shrink-0 flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-slate-200">
+                    <div className="flex items-center gap-3">
+                      <h2 className="text-lg font-black text-slate-900">
+                        Fullscreen Product Search
+                      </h2>
+                      <span className="bg-[#EAF6FE] text-[#079FE0] font-extrabold text-xs px-2.5 py-0.5 rounded-full border border-sky-200">
+                        {sortedResults.length} products
+                      </span>
+                    </div>
 
-                  <div className="flex items-center gap-3 self-end sm:self-auto">
-                    {/* Export to Excel (Visible only AFTER searching with results) */}
-                    <button
-                      type="button"
-                      onClick={handleExportExcel}
-                      disabled={isExporting || sortedResults.length === 0}
-                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-2xs cursor-pointer"
-                      title="Export search results to multi-sheet Excel"
-                    >
-                      {isExporting ? (
-                        <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      ) : (
-                        <FileSpreadsheet className="w-4 h-4 shrink-0" />
-                      )}
-                      <span>{isExporting ? "Exporting..." : `Export (${sortedResults.length}) to Excel`}</span>
-                    </button>
+                    {/* Quick search input in fullscreen */}
+                    <div className="flex-1 max-w-md mx-2">
+                      <div className="relative flex items-center bg-slate-50 rounded-xl border border-slate-200 px-3 py-1.5 focus-within:ring-2 focus-within:ring-sky-500/20 focus-within:border-sky-500">
+                        <Search className="w-4 h-4 text-slate-400 mr-2 shrink-0" />
+                        <input
+                          type="text"
+                          value={searchTerm}
+                          onChange={(e) => setSearchTerm(e.target.value)}
+                          onKeyDown={handleKeyDown}
+                          onPaste={handlePaste}
+                          placeholder="Search or paste SKUs..."
+                          className="w-full bg-transparent text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none font-medium"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleSearch()}
+                          disabled={isLoading || !searchTerm.trim()}
+                          className="ml-2 px-3 py-1 bg-[#079FE0] hover:bg-[#068ec8] text-white text-xs font-bold rounded-lg transition-colors cursor-pointer"
+                        >
+                          Search
+                        </button>
+                      </div>
+                    </div>
 
                     <div className="flex items-center gap-2">
-                      <span className="text-xs text-slate-500 font-medium">Sort by</span>
-                      <div className="relative">
+                      <div className="flex items-center gap-1.5 text-xs text-slate-500 font-medium">
+                        <span>Per Page:</span>
                         <select
-                          value={sortBy}
-                          onChange={(e) => setSortBy(e.target.value)}
-                          className="appearance-none bg-white border border-slate-200 rounded-xl px-3 py-1.5 pr-8 text-xs font-semibold text-slate-700 hover:border-slate-300 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all cursor-pointer"
+                          value={pageSize}
+                          onChange={(e) => {
+                            setPageSize(Number(e.target.value));
+                            setCurrentPage(1);
+                          }}
+                          className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-xs font-bold text-slate-700 cursor-pointer"
                         >
+                          <option value={5}>5</option>
+                          <option value={10}>10</option>
+                          <option value={25}>25</option>
+                          <option value={50}>50</option>
+                          <option value={100}>100</option>
+                        </select>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleExportExcel}
+                        disabled={isExporting || sortedResults.length === 0}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-2xs cursor-pointer"
+                        title="Export search results to Excel"
+                      >
+                        <FileSpreadsheet className="w-3.5 h-3.5" />
+                        <span>Export</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setIsExpandedSearch(false)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 text-white text-xs font-bold hover:bg-slate-800 transition-all cursor-pointer shadow-xs"
+                      >
+                        <Minimize2 className="w-3.5 h-3.5" />
+                        <span>Exit Fullscreen</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Normal Results Controls Bar (when not fullscreen) */}
+                {!isExpandedSearch && (
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-4 border-t border-slate-200/60">
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-base font-bold text-slate-900">Search Results</h2>
+                      <span className="text-xs text-slate-500 font-semibold bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-200">
+                        ({sortedResults.length} products found)
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-3 self-end sm:self-auto">
+                      {/* Fullscreen Table Mode Button */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsExpandedSearch(true);
+                          if (pageSize === 5) setPageSize(25);
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
+                        title="Fullscreen Expanded Search Mode"
+                      >
+                        <Maximize2 className="w-3.5 h-3.5" />
+                        <span>Fullscreen</span>
+                      </button>
+
+                      {/* Export to Excel (Visible only AFTER searching with results) */}
+                      <button
+                        type="button"
+                        onClick={handleExportExcel}
+                        disabled={isExporting || sortedResults.length === 0}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-2xs cursor-pointer"
+                        title="Export search results to multi-sheet Excel"
+                      >
+                        {isExporting ? (
+                          <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        ) : (
+                          <FileSpreadsheet className="w-4 h-4 shrink-0" />
+                        )}
+                        <span>{isExporting ? "Exporting..." : `Export (${sortedResults.length}) to Excel`}</span>
+                      </button>
+
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-slate-500 font-medium">Sort by</span>
+                        <div className="relative">
+                          <select
+                            value={sortBy}
+                            onChange={(e) => setSortBy(e.target.value)}
+                            className="appearance-none bg-white border border-slate-200 rounded-xl px-3 py-1.5 pr-8 text-xs font-semibold text-slate-700 hover:border-slate-300 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all cursor-pointer"
+                          >
                           <option value="relevance">Relevance</option>
                           <option value="name">Product Name</option>
                           <option value="price_asc">Lowest Listed Price</option>
@@ -380,6 +505,7 @@ export const HomePage: React.FC = () => {
                     </div>
                   </div>
                 </div>
+              )}
 
                 {/* Product Results List */}
                 {isLoading ? (
@@ -396,8 +522,8 @@ export const HomePage: React.FC = () => {
                     </p>
                   </div>
                 ) : (
-                  <div className="space-y-4">
-                    {sortedResults.map((product) => {
+                  <div className={isExpandedSearch ? "flex-1 min-h-0 overflow-y-auto space-y-4 pr-1" : "space-y-4"}>
+                    {paginatedResults.map((product) => {
                       const isExpanded = expandedCardId === product.family_id;
 
                       return (
@@ -428,6 +554,16 @@ export const HomePage: React.FC = () => {
 
                               <div className="space-y-1.5 min-w-0">
                                 <div className="flex flex-wrap items-center gap-2">
+                                  {product.matched_sku && (
+                                    <span className="text-[11px] font-bold text-emerald-800 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                                      Searched SKU: {product.matched_sku}
+                                    </span>
+                                  )}
+                                  {product.matched_size && (
+                                    <span className="text-[11px] font-bold text-sky-800 bg-sky-50 px-2 py-0.5 rounded-full border border-sky-200">
+                                      Size: {product.matched_size}
+                                    </span>
+                                  )}
                                   <span className="text-[11px] font-bold text-sky-700 bg-sky-50 px-2.5 py-0.5 rounded-full border border-sky-100">
                                     {product.category}
                                   </span>
@@ -496,7 +632,7 @@ export const HomePage: React.FC = () => {
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    handleCardClick(product.family_id);
+                                    handleCardClick(product.canonical_family_id || product.family_id);
                                   }}
                                   className="px-4 py-2 bg-[#079FE0] hover:bg-[#068ec8] text-white text-xs font-bold rounded-xl shadow-xs transition-colors flex items-center gap-1 cursor-pointer"
                                 >
@@ -608,6 +744,77 @@ export const HomePage: React.FC = () => {
                         </div>
                       );
                     })}
+                  </div>
+                )}
+
+                {/* Multi-page Pagination Controls */}
+                {!isLoading && sortedResults.length > 0 && totalPages > 1 && (
+                  <div className="shrink-0 flex flex-col sm:flex-row items-center justify-between gap-3 pt-4 border-t border-slate-200">
+                    <div className="text-xs text-slate-500 font-medium">
+                      Showing{" "}
+                      <span className="font-bold text-slate-800">
+                        {(currentPage - 1) * effectivePageSize + 1}
+                      </span>{" "}
+                      to{" "}
+                      <span className="font-bold text-slate-800">
+                        {Math.min(currentPage * effectivePageSize, sortedResults.length)}
+                      </span>{" "}
+                      of{" "}
+                      <span className="font-bold text-slate-800">
+                        {sortedResults.length}
+                      </span>{" "}
+                      products
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                        disabled={currentPage === 1}
+                        className="px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1 transition-colors"
+                      >
+                        <ChevronLeft className="w-3.5 h-3.5" />
+                        <span>Previous</span>
+                      </button>
+
+                      {/* Numeric page pills */}
+                      <div className="flex items-center gap-1">
+                        {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                          let pNum = i + 1;
+                          if (totalPages > 5) {
+                            if (currentPage > 3 && currentPage < totalPages - 2) {
+                              pNum = currentPage - 2 + i;
+                            } else if (currentPage >= totalPages - 2) {
+                              pNum = totalPages - 4 + i;
+                            }
+                          }
+                          return (
+                            <button
+                              key={pNum}
+                              type="button"
+                              onClick={() => setCurrentPage(pNum)}
+                              className={`w-8 h-8 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                                currentPage === pNum
+                                  ? "bg-[#079FE0] text-white shadow-xs"
+                                  : "bg-white border border-slate-200 text-slate-700 hover:bg-slate-50"
+                              }`}
+                            >
+                              {pNum}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                        disabled={currentPage === totalPages}
+                        className="px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1 transition-colors"
+                      >
+                        <span>Next</span>
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>

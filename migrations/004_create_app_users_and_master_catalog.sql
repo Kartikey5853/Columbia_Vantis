@@ -88,5 +88,15 @@ VALUES
         true,
         'Master_Catalog_Columbia.xlsx',
         3513
+    ),
+    (
+        'krishana',
+        'e94e3e8e234ee80ad22b3681c24906dd3cf9bb03e7a2952bde9c844db230f86c',
+        'Krishana',
+        '',
+        NULL,
+        true,
+        'Master_Catalog_Columbia.xlsx',
+        3513
     )
 ON CONFLICT (username) DO NOTHING;

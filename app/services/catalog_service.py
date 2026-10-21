@@ -16,7 +16,7 @@ from collections import defaultdict
 from dotenv import load_dotenv
 load_dotenv()
 
-from persistence.normalizer import normalize_size, detect_color
+from persistence.normalizer import normalize_size, detect_color, extract_columbia_size_from_sku
 from app.core.config import NEW_DATA_DIR, DATA_DIR, AMAZON_DATA_DIR, BASE_DIR
 from app.schemas.models import (
     ProductOffer, ProductVariant, PlatformListing, ProductFamily, ProductFamilySummary,
@@ -2645,7 +2645,19 @@ class CatalogService:
                 print(f"[CATALOG_SERVICE] [WARN] Failed to load Supabase cache: {e}", flush=True)
 
     def search(self, query: str, limit: int = 50) -> List[Dict[str, Any]]:
-        res = self.paginate_catalog(page=1, page_size=limit, search=query)
+        clean_q = str(query or "").strip()
+        if not clean_q:
+            return []
+        tokens = [t.strip() for t in re.split(r"[\s,\n\r\t]+", clean_q) if len(t.strip()) >= 2]
+        if len(tokens) > 1:
+            return self.bulk_search(tokens)
+
+        # Single identifier: check if exact SKU/variant match in lookup_index
+        variant_res = self.bulk_search([clean_q])
+        if variant_res and (variant_res[0].get("matched_size") or variant_res[0].get("family_id", "").startswith("STYLE_")):
+            return variant_res
+
+        res = self.paginate_catalog(page=1, page_size=limit, search=clean_q)
         return res.get("products", [])
 
     def bulk_search(self, identifiers: List[str]) -> List[Dict[str, Any]]:
@@ -2653,31 +2665,116 @@ class CatalogService:
         if is_pipeline_running():
             return []
         if not self.is_loaded or self.total_count == 0:
-            self.load_catalog(force=True)
-        matched_ids = []
+            self.load_catalog()
         conn = self._get_connection()
         try:
             cur = conn.cursor()
+            results = []
+            seen_tokens = set()
+
             for raw_id in identifiers:
-                ident = str(raw_id).strip().lower()
-                if not ident:
+                ident = str(raw_id).strip()
+                if not ident or len(ident) < 2:
                     continue
-                cur.execute("SELECT family_id FROM lookup_index WHERE term = ? LIMIT 1", (ident,))
+                ident_lower = ident.lower()
+                if ident_lower in seen_tokens:
+                    continue
+                seen_tokens.add(ident_lower)
+
+                # Look up family_id from lookup_index
+                cur.execute("SELECT family_id FROM lookup_index WHERE term = ? LIMIT 1", (ident_lower,))
                 r = cur.fetchone()
-                if r and r[0] not in matched_ids:
-                    matched_ids.append(r[0])
-                elif "-" in ident:
-                    base_id = ident.split("-")[0]
+                fid = r[0] if r else None
+                if not fid and "-" in ident_lower:
+                    base_id = ident_lower.split("-")[0]
                     cur.execute("SELECT family_id FROM lookup_index WHERE term = ? LIMIT 1", (base_id,))
                     r2 = cur.fetchone()
-                    if r2 and r2[0] not in matched_ids:
-                        matched_ids.append(r2[0])
+                    if r2:
+                        fid = r2[0]
 
-            results = []
-            for fid in matched_ids:
+                if not fid:
+                    continue
+
                 fam = self.get_family_by_id(fid)
-                if fam:
-                    results.append(fam)
+                if not fam:
+                    continue
+
+                ident_upper = ident.upper()
+                ident_size = extract_columbia_size_from_sku(ident_upper)
+                matching_var = None
+                for v in fam.get("variants", []):
+                    v_sku = str(v.get("sku") or "").upper()
+                    v_sz = str(v.get("size") or "").upper()
+                    if v_sku == ident_upper:
+                        matching_var = v
+                        break
+                    if ident_size and v_sz == ident_size:
+                        matching_var = v
+                        break
+
+                if matching_var:
+                    sz = matching_var.get("size") or ident_size
+                    v_sku = matching_var.get("sku") or ident_upper
+                    v_ean = matching_var.get("ean") or fam.get("ean")
+                    v_price = clean_price(matching_var.get("price")) or fam.get("lowest_price")
+                    v_mrp = clean_price(matching_var.get("mrp")) or fam.get("mrp")
+
+                    custom_platforms = []
+                    for p in fam.get("platforms", []):
+                        p_copy = dict(p)
+                        plat_v_match = None
+                        for pv in p.get("variants", []):
+                            pv_sku = str(pv.get("sku") or "").upper()
+                            pv_sz = str(pv.get("size") or "").upper()
+                            if pv_sku == v_sku or (sz and pv_sz == sz):
+                                plat_v_match = pv
+                                break
+                        if plat_v_match:
+                            p_copy["price"] = clean_price(plat_v_match.get("price")) or p.get("price")
+                            p_copy["mrp"] = clean_price(plat_v_match.get("mrp")) or p.get("mrp")
+                            p_copy["availability_status"] = "In stock" if plat_v_match.get("available") else "Out of stock"
+                            stock_qty = plat_v_match.get("stock")
+                            p_copy["stock_text"] = f"{stock_qty} in stock" if stock_qty is not None else p.get("stock_text")
+                            p_copy["sizes_summary"] = sz
+                            p_copy["sizes_available_count"] = 1 if plat_v_match.get("available") else 0
+                        elif p.get("availability_status") == "In stock":
+                            if sz and sz in [v.get("size") for v in p.get("variants", [])]:
+                                p_copy["sizes_summary"] = sz
+                            else:
+                                p_copy["availability_status"] = "Out of stock"
+                                p_copy["stock_text"] = f"Size {sz} unavailable"
+                                p_copy["sizes_summary"] = "—"
+                        custom_platforms.append(p_copy)
+
+                    results.append({
+                        "family_id": f"{fid}::{v_sku}",
+                        "canonical_family_id": fid,
+                        "title": f"{fam.get('title')} (Size {sz})" if sz and sz != "One Size" else fam.get("title"),
+                        "brand": fam.get("brand", "Columbia"),
+                        "style": fam.get("style"),
+                        "ean": v_ean,
+                        "sku": v_sku,
+                        "matched_sku": v_sku,
+                        "matched_size": sz,
+                        "category": fam.get("category"),
+                        "gender": fam.get("gender"),
+                        "tags": fam.get("tags", []),
+                        "image_url": matching_var.get("image_url") or fam.get("image_url"),
+                        "lowest_price": v_price,
+                        "mrp": v_mrp,
+                        "discount_percent": fam.get("discount_percent"),
+                        "variants_count": 1,
+                        "sizes_count": 1,
+                        "platforms_count": len([p for p in custom_platforms if p.get("price")]),
+                        "colours_count": 1,
+                        "platforms": custom_platforms
+                    })
+                else:
+                    fam_copy = dict(fam)
+                    fam_copy["canonical_family_id"] = fid
+                    fam_copy["matched_sku"] = ident_upper
+                    results.append(fam_copy)
+
             return results
         finally:
             conn.close()

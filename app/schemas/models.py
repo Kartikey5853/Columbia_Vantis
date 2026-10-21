@@ -114,11 +114,14 @@ class ProductFamily(BaseModel):
 
 class ProductFamilySummary(BaseModel):
     family_id: str
+    canonical_family_id: Optional[str] = None
     title: str
     brand: str = "Columbia"
     style: Optional[str] = None
     ean: Optional[str] = None
     sku: Optional[str] = None
+    matched_sku: Optional[str] = None
+    matched_size: Optional[str] = None
     category: str
     gender: str
     tags: List[str] = []
