@@ -1,49 +1,20 @@
-# VANTIS 4.0 — High-Frequency Retail Intelligence & Multi-Platform Price Arbitrage Engine
+# Columbia Vantis
 
 <div align="center">
 
-![VANTIS Banner](image/image2.png)
-
-**An ultra-lean, high-throughput e-commerce intelligence engine orchestrating real-time catalog synchronization, multi-platform inventory discovery, and bank-offer-adjusted price tracking across 7 enterprise retail platforms.**
-
-[![Runtime](https://img.shields.io/badge/RAM_Footprint-%3C_512_MB-brightgreen.svg?style=for-the-badge&logo=ram)](https://github.com)
-[![Anti-Bot Bypass](https://img.shields.io/badge/WAF_Bypass-Akamai_%2F_PerimeterX-orange.svg?style=for-the-badge&logo=shield)](https://github.com)
-[![Throughput](https://img.shields.io/badge/Search_Throughput-42%2C595_ops%2Fsec-blue.svg?style=for-the-badge&logo=speedtest)](https://github.com)
-[![Coverage](https://img.shields.io/badge/Active_Catalog-5%2C712+_Products-purple.svg?style=for-the-badge)](https://github.com)
-[![Platforms](https://img.shields.io/badge/Platforms-7_Live_Connectors-red.svg?style=for-the-badge)](https://github.com)
+![Columbia Vantis](image/banner.png)
 
 </div>
 
 ---
 
-## Executive Summary
+## What we made
 
-VANTIS is an industrial-grade competitive intelligence platform engineered to track, normalize, and match multi-variant apparel catalogs across **Amazon India, Tata CLiQ, Tata CLiQ Luxury, Columbia Sportswear India, Adventuras, Myntra, and AJIO**.
+Columbia Sportswear in India is distributed exclusively by **Chogori India Retail Limited**. If you run an apparel and footwear brand at this scale, your products are listed across almost every major online platform: Amazon India, Tata CLiQ, Tata CLiQ Luxury, Myntra, AJIO, Adventuras, and your own official Columbia India storefront.
 
-Unlike traditional scrapers that bloat cloud bills with heavyweight headless browsers, frequent OOM crashes, and instant IP bans from Akamai/PerimeterX WAFs, VANTIS operates under an aggressive **< 512 MB RAM strict memory budget** while pulling full catalog and variant availability in seconds.
+Every single day, these platforms change product prices, drop surprise bank discounts (like 10% instant off on HDFC or 12.5% on Kotak), run flash sales, or run out of specific sizes. Keeping track of 5,000+ products and over 25,000 size-color SKUs manually by clicking around websites is practically impossible.
 
----
-
-## Visual Showcase
-
-### 1. Global Multi-Platform Master Catalogue
-*Unified catalog consolidating 5,712+ parent products, instant multi-attribute search (SKU, EAN, ASIN, Style Code), category and gender filters, and 1-click cross-platform price/stock comparison across all 7 channels simultaneously.*
-
-![Global Master Catalogue](image/image2.png)
-
----
-
-### 2. High-Fidelity Variant Inventory & Real-Time Bank Offers
-*Deep variant-level inspection exposing exact warehouse unit stock numbers per size run (S, M, L, XL, XXL) across all marketplaces alongside live bank discounts (Kotak 12.5%, Axis 12%, Instant UPI cashback, EMI promos).*
-
-![Variant Inventory & Stock Intelligence](image/image.png)
-
----
-
-### 3. Scraper Orchestration & System Health Telemetry
-*Real-time FastAPI telemetry, round-trip latency monitoring (85ms), and persistent execution records tracking individual platform scraper runs, duration, and catalog ingestion rates.*
-
-![Platform Scraper Monitoring & Real-Time Orchestration Telemetry](image/image3.png)
+So we built **Columbia Vantis** — an automated system that monitors our entire catalog across all 7 platforms, pulls live inventory down to the exact warehouse unit count per size, calculates the actual price customers pay after bank offers, and flags price changes instantly.
 
 ---
 
@@ -51,152 +22,166 @@ Unlike traditional scrapers that bloat cloud bills with heavyweight headless bro
 
 ```mermaid
 flowchart TD
-    subgraph "Distributed Data Ingestion Layer"
+    %% The 7 Platforms
+    subgraph PLATFORMS["The 7 Monitored E-Commerce Platforms"]
         direction TB
-        A1["Amazon India\n(ASIN Extraction Engine)"]
-        A2["Tata CLiQ & CLiQ Luxury\n(Direct BFF REST APIs)"]
-        A3["Columbia Sportswear\n(Native Shopify GraphQL)"]
-        A4["Adventuras India\n(Direct Storefront APIs)"]
-        A5["Myntra\n(DOM Injection Scraper)"]
-        A6["AJIO\n(Hybrid Catalog & Stealth Collector)"]
+        subgraph CF_GROUP["Cloudflare & Standard Protected (5 Platforms)"]
+            P1["Amazon India"]
+            P2["Tata CLiQ"]
+            P3["Tata CLiQ Luxury"]
+            P4["Columbia Sportswear India"]
+            P5["Adventuras India"]
+        end
+
+        subgraph AKAMAI_GROUP["Akamai Bot Manager Protected (2 Platforms)"]
+            P6["AJIO"]
+            P7["Myntra"]
+        end
     end
 
-    subgraph "Anti-Bot WAF Bypass Core"
+    %% Ingestion Routes
+    subgraph CLOUD_WORKERS["Docker Backend Scrapers (Deployed on Render)"]
         direction TB
-        B1["Reverse-Engineered Backend Endpoints\n(Bypasses Akamai/PerimeterX PDP Blocks)"]
-        B2["Deterministic Master Catalog Mapping\n(0ms In-Memory Sibling Size Run Synthesis)"]
-        B3["Distributed Residential Node Bundles\n(Vantis_Local_Scraper.exe Standalone)"]
+        DIRECT_API["Direct Backend API Ingestion\n• Hits internal REST and GraphQL endpoints\n• Injects lightweight JS without rendering full pages\n• Bypasses Cloudflare checks with zero browser bloat"]
     end
 
-    subgraph "Ultra-Lean Engine (< 512 MB RAM)"
+    subgraph LOCAL_WORKER["Local Persistent Profile Scraper"]
         direction TB
-        C1["Disk-Backed SQLite B-Tree Index\n(87,197 Compound-Indexed Lookup Nodes)"]
-        C2["Zero In-Memory Bloat\n(Chunked Streams & Eager Memory Eviction)"]
-        C3["Shared Lean Browser Lifecycle\n(Aggressive Asset & Tracker Drop: -75% RAM)"]
+        LOCAL_EXE["Vantis_Local_Scraper.exe (Residential Node)\n• Launches real Chrome with saved login profile & session cookies\n• Executes JS inside page context (page.evaluate)\n• Uses Master Catalog Mapping to synthesize all sibling sizes (S-XXL)\n• Bypasses Akamai 403 blocks completely"]
     end
 
-    subgraph "Unified Persistence & Analytics"
+    %% Memory Management
+    subgraph MEMORY_MGMT["Memory Management (< 512 MB RAM Budget)"]
         direction TB
-        D1["PostgreSQL / Supabase\n(Normalized Canonical Model)"]
-        D2["FastAPI Streaming Engine\n(42,595 queries/sec Bulk Search)"]
-        D3["React 18 + Tailwind SPA\n(5,000 Multi-SKU Workspace)"]
+        RAM_SAVER["Render 512 MB Optimization Route\n• Disk-backed SQLite B-Tree index (87,000+ keys)\n• Blocks images, fonts, and CSS in browser\n• Streams in 100-item chunks + forced garbage collection\n• Server stays around ~200 MB RAM"]
     end
 
-    A1 & A2 & A3 & A4 & A5 & A6 --> B1 & B2 & B3
-    B1 & B2 & B3 --> C1 & C2 & C3
-    C1 & C2 & C3 --> D1
-    D1 --> D2 --> D3
+    %% Storage & UI
+    subgraph CORE_SYSTEM["Central Database & Web App"]
+        direction TB
+        SUPABASE[("Supabase / PostgreSQL\n• Normalized Products Table\n• Historical Price Log\n• Live Run Telemetry")]
+        API["FastAPI Backend\n• Bulk Search up to 5,000 SKUs\n• 42,595 queries/sec benchmark"]
+        UI["React 18 + Tailwind Dashboard\n• Master Catalog Browser\n• Exact Size-Level Stock Units\n• Price Difference & Offer Tracking"]
+    end
+
+    %% Relationships
+    CF_GROUP -->|Direct API Extraction| DIRECT_API
+    AKAMAI_GROUP -->|Residential Session| LOCAL_EXE
+
+    DIRECT_API --> MEMORY_MGMT
+    LOCAL_EXE -->|Direct Encrypted PostgREST Stream| SUPABASE
+
+    MEMORY_MGMT --> SUPABASE
+    SUPABASE --> API
+    API --> UI
 ```
 
 ---
 
-## Core Engineering Innovations
+## The unique problems we faced
 
-### 1. Operating Smoothly Under a 512 MB RAM Constraint
+When you try to scrape enterprise e-commerce platforms at this scale and run it on real-world servers, things break in unexpected ways. Here is how we tackled the biggest roadblocks:
 
-Running competitive intelligence on thousands of multi-variant fashion products with dozens of size and color permutations typically crashes low-tier cloud instances (AWS t3.nano, Render free tiers, or 512MB Docker containers). VANTIS was engineered from the ground up to **run flawlessly in under 512 MB RAM**:
+### 1. Surviving on a tiny 512 MB RAM budget on Render
+We deployed the backend on Render's 512 MB RAM tier. If you try to open standard headless Chrome or load thousands of products into Python memory all at once, the server crashes immediately with an Out-of-Memory (OOM) error.
 
-* **Zero In-Memory Catalog Storage**: Rather than loading multi-megabyte JSON trees into Python dictionaries, VANTIS utilizes a disk-backed SQLite database with compound B-Tree indexes on `(sku, ean, style_code, source_id, platform)`.
-* **Sub-Millisecond Indexed Disk Lookups**: Resolves queries across **87,197 catalog index entries** in microseconds without allocating resident memory.
-* **42,595 Ops/Sec Throughput**: The bulk search and reconciliation engine processes large-scale procurement queries without buffer bloat.
-* **Aggressive Headless Browser Optimization**: Whenever browser execution is required, VANTIS intercepts network requests at the engine level, instantly aborting:
-  - High-res images (`.png`, `.jpg`, `.webp`)
-  - Web fonts (`.woff`, `.woff2`, `.ttf`)
-  - Stylesheets (`.css`)
-  - Third-party tracking and analytics scripts
-  
-  This brings browser memory usage down from ~450 MB per instance to **under 85 MB**, closing tabs immediately after payload extraction.
-* **Batch Streaming & Chunked Persistence**: Upserts and delta calculations are processed in deterministic 100-row chunks with explicit garbage collection passes (`gc.collect()`), guaranteeing predictable memory overhead.
+Here is how we kept the whole system running smoothly under 300 MB:
+* **Disk-backed SQLite indexing instead of RAM**: We don't store 5,000+ nested JSON products in RAM. We wrote a disk-backed SQLite database with compound B-Tree indexes. When you search by SKU, EAN, or style code, it fetches from disk in microseconds.
+* **Blocking heavy assets in browsers**: Whenever we do need to spin up a browser, we intercept every single network request and abort all images (`.png`, `.jpg`), web fonts, CSS stylesheets, and tracking pixels. This drops Chrome's memory usage from over 450 MB down to under 85 MB per tab.
+* **100-item batch streaming**: Data writes to the database happen in small 100-item chunks followed by explicit garbage collection (`gc.collect()`), keeping memory usage flat.
 
 ---
 
-### 2. Solving Enterprise Scraper Detection (Akamai & WAF Bypass)
+### 2. The 5 Cloudflare-protected scrapers (Direct backend APIs on Docker)
+Five of our platforms — **Amazon India, Tata CLiQ, Tata CLiQ Luxury, Columbia Sportswear India, and Adventuras** — run behind Cloudflare or basic bot protection.
 
-Major e-commerce marketplaces (such as AJIO, Tata CLiQ, and Myntra) deploy sophisticated bot mitigation systems (Akamai Bot Manager, PerimeterX/Human Security, and Cloudflare WAF). Scraping individual Product Detail Pages (PDPs) triggers Javascript fingerprint challenges, IP rate limits, and `403 Forbidden` barriers.
+If you try to scrape them like a traditional scraper (opening web pages and parsing HTML with Beautiful Soup), you get slow speeds, high CPU usage, and Cloudflare challenge blocks.
 
-VANTIS bypasses scraper detection via a **Direct Backend Architectural Strategy**:
-
-#### A. Decoupled Catalog Discovery vs. Heavy PDP Scraping
-Instead of opening thousands of individual PDP URLs in a browser (which triggers Akamai's behavioural detection algorithms), VANTIS decouples the operation:
-1. **Catalog Harvesting via Native Search APIs**: Ingests full catalog listings in clean batches via reverse-engineered internal BFF search endpoints.
-2. **Master Catalog Mapping (0ms Sibling Expansion)**: Using pre-compiled deterministic master catalog mapping rules, single-variant listings are matched against canonical size runs (e.g., mapping a single AJIO listing to S, M, L, XL, XXL siblings with correct style codes and EANs) without sending a single suspect request to protected PDP endpoints.
-
-#### B. Direct Client-Side JS Execution in Active Session Context
-For platforms enforcing session tokens and dynamic device fingerprints, VANTIS leverages lightweight browser injection scripts:
-* Executes API requests directly inside the browser's native JavaScript execution context (`page.evaluate()`).
-* Requests inherit verified Akamai session cookies, TLS fingerprints, and headers identical to a legitimate browser user.
-* Eliminates external HTTP bot fingerprints.
-
-#### C. Distributed Local Scraper Architecture (`Vantis_Local_Scraper.exe`)
-To completely eliminate cloud datacenter IP blocks:
-* Packaged as an autonomous, self-contained standalone executable for local client machines.
-* Executes automated scraping pipelines over residential connections.
-* Seamlessly synchronizes scraped, verified payloads to the central Supabase database via secure TLS PostgREST streams.
+Instead, we reverse-engineered their internal Backend-For-Frontend (BFF) endpoints and native mobile APIs. We don't load the website HTML at all — we fetch the raw JSON directly using lightweight requests and injected JS. This is 10 times faster, requires virtually zero CPU or memory, and runs cleanly inside our Docker container on Render.
 
 ---
 
-### 3. Bulk Multi-SKU Search Engine (Up to 5,000 SKUs)
+### 3. The Akamai wall on AJIO and Myntra (Our local scraper solution)
+AJIO and Myntra are protected by **Akamai Bot Manager**, which is significantly tougher:
+* If you run scrapers from cloud datacenters (like AWS, Render, or DigitalOcean), Akamai flags the IP immediately and returns `HTTP 403 Forbidden`.
+* Even if you use a browser, if you try to click into every single size on 2,000 product pages, Akamai detects the automated pattern and throws up a CAPTCHA.
 
-VANTIS features a high-throughput search system tailored for procurement teams, merchandisers, and e-commerce managers:
-
-* **Instant Multi-SKU Ingestion**: Directly paste up to **5,000 SKUs or style codes** at once (via standard `Ctrl+V` space, comma, or newline-delimited inputs).
-* **Fullscreen Expandable Workspace**: 1-click modal expansion transforming the standard view into an ultra-dense, scrollable inventory management table.
-* **Family Grouping & Variant Granularity**: Sibling SKUs belonging to the same product family (e.g. `ABCDE-S` and `ABCDE-M`) are automatically clustered while presenting isolated stock and platform price points per size.
-* **True Selling Price Arbitrage**: Price movement tracking calculates discounts against **previous active selling prices** rather than inflated manufacturer MRPs.
-
----
-
-## Platform Connectors
-
-| Platform | Extraction Technique | Rate Limit Strategy | Anti-Bot Resilience |
-| :--- | :--- | :--- | :--- |
-| **Amazon India** | Direct Search ASIN Ingestion & Algorithmic Extraction | Exponential Backoff (3 retries) | Session Rotation |
-| **Tata CLiQ** | Direct BFF Internal REST Endpoints | Concurrency: 2 workers, 7s timeout | Native Request Headers |
-| **Tata CLiQ Luxury** | Luxury BFF JSON Catalog Stream | Concurrency: 2 workers, 7s timeout | Native Request Headers |
-| **Columbia India** | Native Shopify Storefront GraphQL | High-speed single payload (<30s) | GraphQL Pagination |
-| **Adventuras** | Storefront Product Catalog API | High-speed batch streaming | Direct API Endpoint |
-| **Myntra** | In-Browser JS Context Injection | Dynamic jitter delay (200-500ms) | Active Session Context |
-| **AJIO** | Hybrid Search Discovery + Master Catalog Mapping | Batch catalog pagination + 0ms mapping | Full Akamai WAF Bypass |
+To bypass this without spending thousands of dollars on proxy networks:
+* **We built a standalone local runner (`Vantis_Local_Scraper.exe`)**: It runs right on your local PC using your normal home residential internet connection.
+* **Persistent Chrome profile with real session cookies**: The runner opens a real browser with a persistent user profile. Because it uses your real IP and real browser fingerprint, Akamai lets the session through without any bot challenges.
+* **In-session JS injection**: Once inside, the scraper injects JavaScript directly into the browser tab (`page.evaluate`), calling internal catalog APIs using the browser's own active session cookies.
+* **Master Catalog Sibling Mapping**: Instead of clicking through 2,000 separate product pages to find what sizes are in stock (which triggers Akamai's rate limiter), we grab the base product and map it against our pre-compiled Master Catalog Mapping. In 0 milliseconds, we synthesize the entire size run (S, M, L, XL, XXL) along with legitimate EAN barcodes and style codes.
+* Once the scrape is done, it pushes the clean data straight to our central Supabase cloud database.
 
 ---
 
-## Technical Stack
+## App Walkthrough & Screenshots
 
-* **Backend Core**: Python 3.11, FastAPI, Pydantic v2, Uvicorn (ASGI)
-* **Storage & Indexing**: SQLite (Disk-backed B-Tree), PostgreSQL / Supabase, PostgREST Async Client (`httpx`)
-* **Scraper Automation**: Playwright, Patchright, PyInstaller (Standalone Local Engine)
-* **Frontend**: React 18, TypeScript, Tailwind CSS, Vite, Lucide Icons, Headless UI
-* **Deployment Footprint**: Docker, Linux container (< 512 MB RAM footprint verified)
+### 1. Master Product Catalogue
+Browse through all 5,712 products from our master catalog. You can search by SKU, EAN, ASIN, or style code, filter by category or gender, and see prices across all 7 platforms side by side.
+
+![Master Product Catalogue](image/image2.png)
 
 ---
 
-## Quickstart & Local Setup
+### 2. Size-Level Stock & Bank Offer Breakdown
+Clicking into any product shows the exact warehouse inventory for each size (S, M, L, XL, XXL), which platform has stock, and active bank offers (e.g. Kotak 12.5%, Axis 12%, Tata CLiQ Luxury Birthday promo) to calculate the real selling price.
 
-### 1. Prerequisites
-- Python 3.10+
-- Node.js 18+
-- Supabase project or PostgreSQL instance
+![Variant Inventory & Stock Intelligence](image/image.png)
 
-### 2. Environment Configuration
-Create a `.env` file in the root directory:
+---
+
+### 3. Live Scraper Telemetry & Monitoring
+A live status dashboard showing the health of the FastAPI backend, round-trip database latency (85ms), and a log of every scraper execution with product counts and run times.
+
+![Platform Scraper Monitoring](image/image3.png)
+
+---
+
+## Previous Build Work
+
+The previous iteration of this project laid the analytical and computer-vision groundwork:
+
+> • Built an automated product intelligence pipeline to scrape, normalize, match, and consolidate 5,400+ products across 25,000+ SKUs from 8 e-commerce platforms for cross-platform comparison.  
+> • Re-engineered scraping workflows using backend API extraction and optimized browser automation, reducing scraping time from 6 hours to under 30 minutes while preventing Akamai and Cloudflare protection from being triggered.  
+> • Developed a custom product-matching pipeline combining CLIP, DINOv2, price signals, and a title-matching model trained on a 1,000-product golden dataset, achieving 85% matching accuracy.  
+> • Built a CI pipeline with automated test cases and validation checks to continuously verify scraper, data-processing, and product-matching workflows.
+
+---
+
+## Tech Stack
+
+* **Backend**: Python 3.11, FastAPI, Uvicorn, Pydantic v2
+* **Database & Auth**: PostgreSQL on Supabase, PostgREST Async Client (`httpx`), SQLite B-Tree for local indexing
+* **Scraper Automation**: Playwright, Patchright, PyInstaller
+* **Frontend**: React 18, TypeScript, Vite, Tailwind CSS, Lucide Icons
+* **Deployment**: Docker, Render
+
+---
+
+## Getting Started Locally
+
+### 1. Clone & Configure
+```bash
+git clone https://github.com/Kartikey5853/Columbia_4.0.git
+cd Columbia_4.0
+```
+
+Create a `.env` file in the root folder:
 ```env
 SUPABASE_URL=https://<your-project-id>.supabase.co
-SUPABASE_KEY=<your-service-role-or-anon-key>
-SHOPIFY_TOKEN=<optional-columbia-token>
+SUPABASE_KEY=<your-supabase-key>
 PORT=8000
 ```
 
-### 3. Backend Setup
+### 2. Run the Backend
 ```bash
-# Install Python dependencies
 pip install -r requirements.txt
 playwright install chromium
-
-# Start the high-performance FastAPI server
 uvicorn api:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### 4. Frontend Setup
+### 3. Run the Frontend
 ```bash
 cd frontend
 npm install
@@ -205,6 +190,6 @@ npm run dev
 
 ---
 
-<div align="center">
-<b>VANTIS Retail Intelligence Engine</b> &bull; Built for extreme speed, low footprint, and resilient extraction.
-</div>
+## Contributors
+
+* **Raj** ([@Raj-dev18](https://github.com/Raj-dev18)) — Responsible for half of the scraper development, frontend, the local build, packaging, and development.

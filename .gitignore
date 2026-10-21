@@ -37,9 +37,6 @@ reports/
 *.sqlite3
 frontend/dist/
 *.log
-# Scraper screenshots & media (do not push)
-image/
-image/**
 
 # Ajio & Myntra Local Build ignored directories
 Ajio_myntra_local_build/chrome_profile/
