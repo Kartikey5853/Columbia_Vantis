@@ -75,6 +75,14 @@ def build():
         (dist_dir / "data").mkdir(parents=True, exist_ok=True)
         (dist_dir / "chrome_profile").mkdir(parents=True, exist_ok=True)
 
+        # Copy master catalog mappings if available
+        master_src = BASE_DIR / "data" / "master_catalog_mappings.json"
+        if not master_src.exists():
+            master_src = BASE_DIR.parent / "data" / "master_catalog_mappings.json"
+        if master_src.exists():
+            shutil.copy2(master_src, dist_dir / "data" / "master_catalog_mappings.json")
+            print(f"[BUILD] Copied master_catalog_mappings.json into {dist_dir / 'data'}")
+
         # Copy .env template if not present
         if (BASE_DIR / ".env.example").exists() and not (dist_dir / ".env").exists():
             shutil.copy(BASE_DIR / ".env.example", dist_dir / ".env")

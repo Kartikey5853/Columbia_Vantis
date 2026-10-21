@@ -268,6 +268,8 @@ class CatalogService:
             "last_updated": None
         }
         self.master_records: List[Dict[str, Any]] = []
+        self.master_records_by_style: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        self.master_records_by_style_code: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         self.master_pid_to_style: Dict[str, str] = {}
         self.master_pid_to_record: Dict[str, Dict[str, Any]] = {}
         self.master_sku_to_style: Dict[str, str] = {}
@@ -330,6 +332,8 @@ class CatalogService:
 
         try:
             self.master_records = records
+            self.master_records_by_style.clear()
+            self.master_records_by_style_code.clear()
             self.master_pid_to_style.clear()
             self.master_sku_to_style.clear()
             self.master_ean_to_style.clear()
@@ -339,6 +343,10 @@ class CatalogService:
                 style = str(rec.get("style") or "").strip().upper()
                 if not style:
                     continue
+                self.master_records_by_style[style].append(rec)
+                sc_rec = str(rec.get("style_code") or "").strip().upper()
+                if sc_rec:
+                    self.master_records_by_style_code[sc_rec].append(rec)
                 if style not in self.master_style_meta:
                     self.master_style_meta[style] = {
                         "skus": set(),
@@ -377,6 +385,11 @@ class CatalogService:
                     self.master_pid_to_style[pval_str.lower()] = style
                     self.master_pid_to_record[f"{pk}:{pval_str.lower()}"] = rec
                     self.master_pid_to_record[pval_str.lower()] = rec
+                    if pk == "ajio" and len(pval_str) >= 9:
+                        self.master_pid_to_style[f"ajio:{pval_str[:9].lower()}"] = style
+                        self.master_pid_to_style[pval_str[:9].lower()] = style
+                        self.master_pid_to_record[f"ajio:{pval_str[:9].lower()}"] = rec
+                        self.master_pid_to_record[pval_str[:9].lower()] = rec
                     meta["pids"].setdefault(pk, set()).add(pval_str)
 
             self.master_catalogue_info = {
@@ -832,6 +845,8 @@ class CatalogService:
         }
 
     def _get_family_from_supabase_live(self, family_id: str) -> Optional[Dict[str, Any]]:
+        if not self.master_records:
+            self._load_master_mappings()
         import httpx
         url = (os.getenv("SUPABASE_URL", "") or "https://viflznbwqrunivhfoavq.supabase.co").rstrip("/")
         sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "sb_secret_wgDvOA3l28p2d2jzH5euRg_mgqeBpLF"
@@ -901,7 +916,28 @@ class CatalogService:
                             all_prices.append(p_val)
                         if m_val:
                             all_mrps.append(m_val)
-                        v_list = row.get("variants") or []
+                        v_list = list(row.get("variants") or [])
+                        if len(v_list) <= 1 and style and style.upper() in self.master_records_by_style and cat not in ("Accessories", "Backpacks & Bags", "Socks"):
+                            master_sibs = self.master_records_by_style[style.upper()]
+                            if master_sibs:
+                                seen_v_sizes = {str(v.get("size")) for v in v_list if v.get("size")}
+                                for sib in master_sibs:
+                                    sib_sku = sib.get("sku") or ""
+                                    sib_sz = normalize_size(sib_sku.split("-")[-1] if "-" in sib_sku else sib_sku, sku=sib_sku)
+                                    if sib_sz and sib_sz not in seen_v_sizes:
+                                        seen_v_sizes.add(sib_sz)
+                                        sib_soh = int(sib.get("soh") or 1)
+                                        v_list.append({
+                                            "size": sib_sz,
+                                            "sku": sib_sku,
+                                            "ean": sib.get("ean"),
+                                            "style": style,
+                                            "available": bool(row.get("available") and sib_soh > 0),
+                                            "stock": sib_soh,
+                                            "quantity": sib_soh,
+                                            "price": p_val,
+                                            "mrp": m_val,
+                                        })
                         all_variants.extend(v_list)
                         for v in v_list:
                             if v.get("size"):
@@ -1519,6 +1555,8 @@ class CatalogService:
             conn.close()
 
     def _build_families_from_raw_items(self, raw_items_by_family: Dict[str, List[Tuple[str, Dict[str, Any]]]]) -> Dict[str, Dict[str, Any]]:
+        if not self.master_records:
+            self._load_master_mappings()
         processed_families: Dict[str, Dict[str, Any]] = {}
         categories_set = set()
         genders_set = set()
@@ -2058,6 +2096,42 @@ class CatalogService:
                         stock_text = f"{total_plat_stock} units in stock"
                     else:
                         stock_text = "In stock" if any_item_avail else "Out of stock"
+
+                    # Master Catalog variant expansion for platforms returning single/missing variants
+                    if len(plat_variants) <= 1 and not is_accessory:
+                        lookup_style = (best_style or "").upper()
+                        master_sibs = self.master_records_by_style.get(lookup_style, [])
+                        if master_sibs:
+                            seen_master_sizes = {str(v.get("size")) for v in plat_variants if v.get("size")}
+                            for sib in master_sibs:
+                                sib_sku = sib.get("sku") or ""
+                                sib_sz = normalize_size(sib_sku.split("-")[-1] if "-" in sib_sku else sib_sku, sku=sib_sku)
+                                if not sib_sz:
+                                    continue
+                                if sib_sz not in seen_master_sizes:
+                                    seen_master_sizes.add(sib_sz)
+                                    sib_col = detect_color(sib.get("style_code") or "") or None
+                                    sib_soh = int(sib.get("soh") or 1)
+                                    sib_avail = bool(any_item_avail and sib_soh > 0)
+                                    sib_v = {
+                                        "size": sib_sz,
+                                        "color": sib_col,
+                                        "title": f"{primary_title} - Size {sib_sz}",
+                                        "sku": sib_sku,
+                                        "ean": sib.get("ean"),
+                                        "image_url": primary_image,
+                                        "available": sib_avail,
+                                        "quantity": sib_soh if plat_key != "amazon" else None,
+                                        "stock": sib_soh if plat_key != "amazon" else None,
+                                        "price": p_val,
+                                        "mrp": m_val,
+                                        "url": str(best_item.get("url") or best_item.get("href") or meta["base_url"]),
+                                    }
+                                    plat_variants.append(sib_v)
+                                    variants_list.append(sib_v)
+                                    if sib_sz not in plat_sizes:
+                                        plat_sizes.append(sib_sz)
+                                    sizes_set.add(sib_sz)
 
                     sizes_summary = ", ".join(plat_sizes[:6]) if plat_sizes else "—"
                     best_pid = str(best_item.get("product_id") or best_item.get("source_product_id") or best_item.get("asin") or "").strip()

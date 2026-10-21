@@ -3,7 +3,7 @@ import sys
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import httpx
 from dotenv import load_dotenv
 
@@ -63,6 +63,138 @@ def normalize_style_code(raw: str) -> Optional[str]:
     if parts and len(parts[0]) >= 4:
         return parts[0].strip().upper()
     return cleaned[:20].upper()
+
+
+_MASTER_CATALOG_CACHE = None
+
+
+def get_master_catalog_lookups():
+    global _MASTER_CATALOG_CACHE
+    if _MASTER_CATALOG_CACHE is not None:
+        return _MASTER_CATALOG_CACHE
+
+    records = []
+    candidates = [
+        Path(getattr(sys, "_MEIPASS", "")) / "data" / "master_catalog_mappings.json",
+        ENV_DIR / "data" / "master_catalog_mappings.json",
+        ENV_DIR.parent / "data" / "master_catalog_mappings.json",
+        Path("data/master_catalog_mappings.json"),
+    ]
+    for c in candidates:
+        if c.exists():
+            try:
+                import json
+                with open(c, "r", encoding="utf-8") as f:
+                    d = json.load(f)
+                    records = d.get("records") or []
+                    if records:
+                        break
+            except Exception:
+                pass
+
+    pid_to_rec = {}
+    by_style = {}
+    by_sc = {}
+
+    for r in records:
+        st = str(r.get("style") or "").strip().upper()
+        sc = str(r.get("style_code") or "").strip().upper()
+        if st:
+            by_style.setdefault(st, []).append(r)
+        if sc:
+            by_sc.setdefault(sc, []).append(r)
+
+        pids = r.get("platform_ids") or {}
+        for pk, pval in pids.items():
+            if pval and str(pval).upper() not in ("NONE", "ERROR", "NAN"):
+                pval_str = str(pval).strip().lower()
+                pid_to_rec[f"{pk}:{pval_str}"] = r
+                pid_to_rec[pval_str] = r
+                if len(pval_str) >= 9:
+                    pid_to_rec.setdefault(f"{pk}:{pval_str[:9]}", r)
+                    pid_to_rec.setdefault(pval_str[:9], r)
+
+    _MASTER_CATALOG_CACHE = (pid_to_rec, by_style, by_sc)
+    return _MASTER_CATALOG_CACHE
+
+
+def enrich_variants_from_master(
+    pid: str,
+    raw_sku: str,
+    title: str,
+    price: float,
+    mrp: float,
+    available: bool,
+    source: str,
+) -> Tuple[List[Dict[str, Any]], Optional[str], Optional[str]]:
+    pid_to_rec, by_style, by_sc = get_master_catalog_lookups()
+    if not pid_to_rec and not by_style:
+        return [], None, None
+
+    pid_clean = str(pid or "").strip().lower()
+    base_pid = pid_clean.split("_")[0]
+    raw_sku_upper = str(raw_sku or "").strip().upper()
+    source_clean = str(source or "").strip().lower()
+
+    m_rec = (
+        pid_to_rec.get(f"{source_clean}:{pid_clean}")
+        or pid_to_rec.get(pid_clean)
+        or pid_to_rec.get(f"{source_clean}:{base_pid}")
+        or pid_to_rec.get(base_pid)
+        or (pid_to_rec.get(f"{source_clean}:{base_pid[:9]}") if len(base_pid) >= 9 else None)
+        or (pid_to_rec.get(base_pid[:9]) if len(base_pid) >= 9 else None)
+    )
+
+    matched_style = None
+    matched_sc = None
+    if m_rec:
+        matched_style = m_rec.get("style")
+        matched_sc = m_rec.get("style_code")
+    else:
+        sc_cand = "-".join(raw_sku_upper.split("-")[:2]) if "-" in raw_sku_upper else raw_sku_upper
+        st_cand = raw_sku_upper.split("-")[0] if "-" in raw_sku_upper else raw_sku_upper
+        if sc_cand in by_sc:
+            matched_sc = sc_cand
+            matched_style = st_cand
+        elif st_cand in by_style:
+            matched_style = st_cand
+        else:
+            m = re.search(r"\b([A-Z0-9]{2}[0-9]{4})\b", f"{title} {raw_sku_upper}", re.IGNORECASE)
+            if m and m.group(1).upper() in by_style:
+                matched_style = m.group(1).upper()
+
+    siblings = []
+    if matched_sc and matched_sc in by_sc:
+        siblings = by_sc[matched_sc]
+    elif matched_style and matched_style in by_style:
+        siblings = by_style[matched_style]
+
+    if not siblings:
+        return [], matched_style, None
+
+    matched_ean = siblings[0].get("ean") or None
+    variants = []
+    seen_sizes = set()
+
+    for sib in siblings:
+        sib_sku = sib.get("sku") or ""
+        sz = extract_columbia_size_from_sku(sib_sku) or "One Size"
+        if sz not in seen_sizes:
+            seen_sizes.add(sz)
+            qty = int(sib.get("soh") or (1 if available else 0))
+            variants.append({
+                "size": sz,
+                "sku": sib_sku,
+                "ean": sib.get("ean"),
+                "style": matched_style,
+                "available": available,
+                "stock": qty,
+                "quantity": qty,
+                "price": price,
+                "mrp": mrp,
+            })
+
+    return variants, matched_style, matched_ean
 
 
 async def sync_products_to_supabase(
@@ -137,6 +269,24 @@ async def sync_products_to_supabase(
                 "price": price,
                 "mrp": mrp
             }]
+
+        # Master Catalog enrichment for single/missing variant items
+        if len(incoming_variants) <= 1:
+            m_vars, m_style, m_ean = enrich_variants_from_master(
+                pid=pid,
+                raw_sku=raw_sku,
+                title=title,
+                price=price,
+                mrp=mrp,
+                available=available,
+                source=source,
+            )
+            if m_vars:
+                incoming_variants = m_vars
+            if m_style:
+                target["style"] = m_style
+            if m_ean and not target.get("ean"):
+                target["ean"] = m_ean
 
         # Append non-duplicate variants
         existing_sizes = {v.get("size") for v in target["variants"]}

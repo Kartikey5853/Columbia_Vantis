@@ -9,9 +9,15 @@ block_cipher = None
 base_dir = os.path.abspath(SPECPATH)
 scrapers_dir = os.path.join(base_dir, 'scrapers')
 
+master_data_file = os.path.join(base_dir, 'data', 'master_catalog_mappings.json')
+if not os.path.exists(master_data_file):
+    master_data_file = os.path.join(os.path.dirname(base_dir), 'data', 'master_catalog_mappings.json')
+
 datas = [
     (scrapers_dir, 'scrapers'),
 ]
+if os.path.exists(master_data_file):
+    datas.append((master_data_file, 'data'))
 datas += collect_data_files('playwright')
 
 hiddenimports = [
