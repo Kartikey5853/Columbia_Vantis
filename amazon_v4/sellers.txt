@@ -1,0 +1,13 @@
+# =============================================================================
+# Amazon Sellers Configuration
+# =============================================================================
+# Format:
+# Direct seller store search URLs:
+# - Cocoblu: https://www.amazon.in/s?k=columbia&me=A1WYWER0W24N8S
+# - Chogori: https://www.amazon.in/s?k=columbia&me=AUEEW31YCNC4K
+# - Columbia India: https://www.amazon.in/s?k=columbia&me=A28E8JCZPT1G5K
+# =============================================================================
+
+https://www.amazon.in/s?k=columbia&me=A1WYWER0W24N8S
+https://www.amazon.in/s?k=columbia&me=AUEEW31YCNC4K
+https://www.amazon.in/s?k=columbia&me=A28E8JCZPT1G5K

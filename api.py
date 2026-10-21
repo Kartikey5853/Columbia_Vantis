@@ -383,12 +383,21 @@ async def on_startup():
     Server startup hook.
     Automatic background scraping on boot is disabled to prevent unwanted scrapes/OOM.
     Starts background keepalive loop to keep Render awake during active jobs.
-    Catalog indexing/fetching is strictly disabled on startup to prevent RAM spikes.
+    Pre-warms disk-backed SQLite catalog asynchronously so user login is instantaneous.
     """
     global keepalive_task
-    print("[STARTUP] Server started. Automatic startup scraping and catalog pre-loading are disabled to save RAM.", flush=True)
+    print("[STARTUP] Server started. Pre-warming disk-backed catalog cache...", flush=True)
     if keepalive_task is None or keepalive_task.done():
         keepalive_task = asyncio.create_task(_render_keepalive_loop())
+
+    async def _safe_catalog_warmup():
+        try:
+            await asyncio.to_thread(catalog_service.load_catalog)
+            print(f"[STARTUP] ✅ Catalog pre-warmed successfully ({catalog_service.total_count} families ready).", flush=True)
+        except Exception as e:
+            print(f"[STARTUP] ⚠️ Catalog warmup notice: {e}", flush=True)
+
+    asyncio.create_task(_safe_catalog_warmup())
 
     async def _safe_price_sync():
         try:

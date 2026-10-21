@@ -5,8 +5,8 @@ __pycache__/
 .pytest_cache/
 env
 test-results/
-data/
 data/*
+!data/catalog_cache.zip
 *.db
 jobs_data/
 new_data/
@@ -20,6 +20,7 @@ master_data_uploads/
 amazon_scraper/data/
 amazon_v4/data/
 *.zip
+!data/catalog_cache.zip
 amazon_scraper/*.json
 old files/
 old files/**
@@ -30,7 +31,7 @@ reports/
 *.xlsx
 *.xls
 *.csv
-*catalog_cache*
+# *catalog_cache*
 *price_history*
 *.sqlite
 *.sqlite3
