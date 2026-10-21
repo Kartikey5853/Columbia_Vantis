@@ -1,8 +1,13 @@
 chrome_profile/
 chrome_profile/**
 data/
+data/**
 dist/
+dist/**
 build/
+build/**
+*.exe
+**/*.exe
 *.pyc
 __pycache__/
 .env

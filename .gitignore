@@ -37,8 +37,14 @@ reports/
 *.sqlite3
 frontend/dist/
 *.log
+# Ajio & Myntra Local Build ignored directories
 Ajio_myntra_local_build/chrome_profile/
 Ajio_myntra_local_build/chrome_profile/**
 Ajio_myntra_local_build/dist/
+Ajio_myntra_local_build/dist/**
 Ajio_myntra_local_build/build/
+Ajio_myntra_local_build/build/**
 Ajio_myntra_local_build/data/
+Ajio_myntra_local_build/data/**
+Ajio_myntra_local_build/*.exe
+Ajio_myntra_local_build/**/*.exe
