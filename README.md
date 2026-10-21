@@ -10,11 +10,11 @@
 
 ## What we made
 
-Columbia Sportswear in India is distributed exclusively by **Chogori India Retail Limited**. If you run an apparel and footwear brand at this scale, your products are listed across almost every major online platform: Amazon India, Tata CLiQ, Tata CLiQ Luxury, Myntra, AJIO, Adventuras, and your own official Columbia India storefront.
+Columbia Sportswear in India is distributed exclusively by Chogori India Retail Limited. When you manage an outdoor and sportswear brand of this scale, your items end up on every major shopping portal in the country: Amazon India, Tata CLiQ, Tata CLiQ Luxury, Myntra, AJIO, Adventuras, and your own official Columbia India website.
 
-Every single day, these platforms change product prices, drop surprise bank discounts (like 10% instant off on HDFC or 12.5% on Kotak), run flash sales, or run out of specific sizes. Keeping track of 5,000+ products and over 25,000 size-color SKUs manually by clicking around websites is practically impossible.
+Every single day, these platforms update prices, launch bank offers like instant discounts on HDFC or Kotak, run flash deals, or run out of stock in specific sizes. Trying to keep track of 5,000 products and over 25,000 size and color options by hand is practically impossible.
 
-So we built **Columbia Vantis** — an automated system that monitors our entire catalog across all 7 platforms, pulls live inventory down to the exact warehouse unit count per size, calculates the actual price customers pay after bank offers, and flags price changes instantly.
+We created Columbia Vantis to fix that. It tracks our catalog across all seven platforms, monitors live inventory down to the exact unit count in each warehouse, calculates what shoppers actually pay after bank discounts, and flags price changes as soon as they happen.
 
 ---
 
@@ -22,57 +22,34 @@ So we built **Columbia Vantis** — an automated system that monitors our entire
 
 ```mermaid
 flowchart TD
-    %% The 7 Platforms
-    subgraph PLATFORMS["The 7 Monitored E-Commerce Platforms"]
-        direction TB
-        subgraph CF_GROUP["Cloudflare & Standard Protected (5 Platforms)"]
-            P1["Amazon India"]
-            P2["Tata CLiQ"]
-            P3["Tata CLiQ Luxury"]
-            P4["Columbia Sportswear India"]
-            P5["Adventuras India"]
-        end
-
-        subgraph AKAMAI_GROUP["Akamai Bot Manager Protected (2 Platforms)"]
-            P6["AJIO"]
-            P7["Myntra"]
-        end
+    subgraph S1["Cloudflare Protected Platforms"]
+        P1["Amazon India"]
+        P2["Tata CLiQ"]
+        P3["Tata CLiQ Luxury"]
+        P4["Columbia India"]
+        P5["Adventuras"]
     end
 
-    %% Ingestion Routes
-    subgraph CLOUD_WORKERS["Docker Backend Scrapers (Deployed on Render)"]
-        direction TB
-        DIRECT_API["Direct Backend API Ingestion\n• Hits internal REST and GraphQL endpoints\n• Injects lightweight JS without rendering full pages\n• Bypasses Cloudflare checks with zero browser bloat"]
+    subgraph S2["Akamai Protected Platforms"]
+        P6["AJIO"]
+        P7["Myntra"]
     end
 
-    subgraph LOCAL_WORKER["Local Persistent Profile Scraper"]
-        direction TB
-        LOCAL_EXE["Vantis_Local_Scraper.exe (Residential Node)\n• Launches real Chrome with saved login profile & session cookies\n• Executes JS inside page context (page.evaluate)\n• Uses Master Catalog Mapping to synthesize all sibling sizes (S-XXL)\n• Bypasses Akamai 403 blocks completely"]
-    end
+    DOCKER["Docker Backend Scrapers<br/>Direct backend REST and GraphQL calls"]
+    LOCAL["Local Profile Scraper<br/>Residential Chrome session with saved cookies"]
 
-    %% Memory Management
-    subgraph MEMORY_MGMT["Memory Management (< 512 MB RAM Budget)"]
-        direction TB
-        RAM_SAVER["Render 512 MB Optimization Route\n• Disk-backed SQLite B-Tree index (87,000+ keys)\n• Blocks images, fonts, and CSS in browser\n• Streams in 100-item chunks + forced garbage collection\n• Server stays around ~200 MB RAM"]
-    end
+    MEM["Render Memory Route<br/>Disk SQLite B-Tree keeping RAM under 250MB"]
+    DB[("Supabase Database<br/>Normalized products and price logs")]
+    API["FastAPI Search Engine<br/>Bulk lookup for up to 5000 SKUs"]
+    UI["React Dashboard<br/>Live catalog and size-level stock"]
 
-    %% Storage & UI
-    subgraph CORE_SYSTEM["Central Database & Web App"]
-        direction TB
-        SUPABASE[("Supabase / PostgreSQL\n• Normalized Products Table\n• Historical Price Log\n• Live Run Telemetry")]
-        API["FastAPI Backend\n• Bulk Search up to 5,000 SKUs\n• 42,595 queries/sec benchmark"]
-        UI["React 18 + Tailwind Dashboard\n• Master Catalog Browser\n• Exact Size-Level Stock Units\n• Price Difference & Offer Tracking"]
-    end
+    S1 --> DOCKER
+    S2 --> LOCAL
 
-    %% Relationships
-    CF_GROUP -->|Direct API Extraction| DIRECT_API
-    AKAMAI_GROUP -->|Residential Session| LOCAL_EXE
-
-    DIRECT_API --> MEMORY_MGMT
-    LOCAL_EXE -->|Direct Encrypted PostgREST Stream| SUPABASE
-
-    MEMORY_MGMT --> SUPABASE
-    SUPABASE --> API
+    DOCKER --> MEM
+    LOCAL --> DB
+    MEM --> DB
+    DB --> API
     API --> UI
 ```
 
@@ -80,59 +57,64 @@ flowchart TD
 
 ## The unique problems we faced
 
-When you try to scrape enterprise e-commerce platforms at this scale and run it on real-world servers, things break in unexpected ways. Here is how we tackled the biggest roadblocks:
+When you try to pull data from major shopping portals at this scale and host it on real cloud infrastructure, you hit walls fast. Here is how we solved our biggest hurdles.
 
-### 1. Surviving on a tiny 512 MB RAM budget on Render
-We deployed the backend on Render's 512 MB RAM tier. If you try to open standard headless Chrome or load thousands of products into Python memory all at once, the server crashes immediately with an Out-of-Memory (OOM) error.
+### 1. Surviving on a strict 512 MB RAM budget on Render
 
-Here is how we kept the whole system running smoothly under 300 MB:
-* **Disk-backed SQLite indexing instead of RAM**: We don't store 5,000+ nested JSON products in RAM. We wrote a disk-backed SQLite database with compound B-Tree indexes. When you search by SKU, EAN, or style code, it fetches from disk in microseconds.
-* **Blocking heavy assets in browsers**: Whenever we do need to spin up a browser, we intercept every single network request and abort all images (`.png`, `.jpg`), web fonts, CSS stylesheets, and tracking pixels. This drops Chrome's memory usage from over 450 MB down to under 85 MB per tab.
-* **100-item batch streaming**: Data writes to the database happen in small 100-item chunks followed by explicit garbage collection (`gc.collect()`), keeping memory usage flat.
+We host the backend on Render under a 512 MB memory limit. If you launch standard Chrome or try to load thousands of product listings into Python memory at once, the server runs out of memory and crashes instantly.
 
----
-
-### 2. The 5 Cloudflare-protected scrapers (Direct backend APIs on Docker)
-Five of our platforms — **Amazon India, Tata CLiQ, Tata CLiQ Luxury, Columbia Sportswear India, and Adventuras** — run behind Cloudflare or basic bot protection.
-
-If you try to scrape them like a traditional scraper (opening web pages and parsing HTML with Beautiful Soup), you get slow speeds, high CPU usage, and Cloudflare challenge blocks.
-
-Instead, we reverse-engineered their internal Backend-For-Frontend (BFF) endpoints and native mobile APIs. We don't load the website HTML at all — we fetch the raw JSON directly using lightweight requests and injected JS. This is 10 times faster, requires virtually zero CPU or memory, and runs cleanly inside our Docker container on Render.
+We kept our total memory footprint under 250 MB using three decisions:
+* Disk-backed SQLite indexing instead of RAM: We avoid keeping thousands of products in application memory. Instead, we write to an on-disk SQLite database with compound B-Tree indexes. Searches by SKU, barcode, or style code read directly from disk in microseconds.
+* Blocking heavy browser assets: When a scraper needs a browser, we intercept network requests and block all images, web fonts, CSS stylesheets, and tracking scripts before they download. That drops Chrome memory consumption from 450 MB down to under 85 MB per tab.
+* Streaming in 100-item chunks: We write data to the database in batches of 100 items and call Python garbage collection immediately after, keeping memory flat throughout the entire run.
 
 ---
 
-### 3. The Akamai wall on AJIO and Myntra (Our local scraper solution)
-AJIO and Myntra are protected by **Akamai Bot Manager**, which is significantly tougher:
-* If you run scrapers from cloud datacenters (like AWS, Render, or DigitalOcean), Akamai flags the IP immediately and returns `HTTP 403 Forbidden`.
-* Even if you use a browser, if you try to click into every single size on 2,000 product pages, Akamai detects the automated pattern and throws up a CAPTCHA.
+### 2. Five Cloudflare-protected scrapers using direct backend APIs on Docker
 
-To bypass this without spending thousands of dollars on proxy networks:
-* **We built a standalone local runner (`Vantis_Local_Scraper.exe`)**: It runs right on your local PC using your normal home residential internet connection.
-* **Persistent Chrome profile with real session cookies**: The runner opens a real browser with a persistent user profile. Because it uses your real IP and real browser fingerprint, Akamai lets the session through without any bot challenges.
-* **In-session JS injection**: Once inside, the scraper injects JavaScript directly into the browser tab (`page.evaluate`), calling internal catalog APIs using the browser's own active session cookies.
-* **Master Catalog Sibling Mapping**: Instead of clicking through 2,000 separate product pages to find what sizes are in stock (which triggers Akamai's rate limiter), we grab the base product and map it against our pre-compiled Master Catalog Mapping. In 0 milliseconds, we synthesize the entire size run (S, M, L, XL, XXL) along with legitimate EAN barcodes and style codes.
-* Once the scrape is done, it pushes the clean data straight to our central Supabase cloud database.
+Five of our sources run behind Cloudflare or basic bot protection: Amazon India, Tata CLiQ, Tata CLiQ Luxury, Columbia Sportswear India, and Adventuras.
+
+Typical scrapers open web pages, wait for JavaScript to render, and parse the HTML. That approach is slow, burns through CPU, and triggers Cloudflare verification screens.
+
+Instead, we reverse-engineered the internal APIs that power their mobile apps and web frontends. We skip the HTML entirely and pull structured JSON directly through lightweight HTTP requests and injected JavaScript. It runs ten times faster, uses almost no CPU or memory, avoids bot screens, and deploys cleanly in our Docker container.
+
+---
+
+### 3. The Akamai wall on AJIO and Myntra
+
+AJIO and Myntra rely on Akamai Bot Manager, which is much more aggressive:
+* Requests coming from cloud datacenters like AWS, Render, or DigitalOcean get blocked on arrival with 403 Forbidden errors.
+* Clicking into every individual size option on thousands of product pages triggers Akamai rate limits and CAPTCHAs.
+
+Here is how we bypassed it without paying for expensive rotating proxies:
+* Standalone local executable: We packaged our scraper into Vantis_Local_Scraper.exe, which runs on a local machine using a standard home residential internet connection.
+* Persistent Chrome profile: The runner uses an existing Chrome profile with valid login cookies. Because the connection uses a residential IP and authentic browser fingerprints, Akamai treats it like a real human browsing the site.
+* In-session JavaScript injection: Once the tab is open, the runner injects JavaScript into the active session to query catalog endpoints directly using existing cookies.
+* Master catalog sibling mapping: Instead of loading thousands of product detail pages to check sizes, we take the base product and map it against our master catalog rules. We generate the full size range from small to double extra large, complete with style codes and barcodes, in zero milliseconds. Clean data then uploads straight to our cloud database on Supabase.
 
 ---
 
 ## App Walkthrough & Screenshots
 
 ### 1. Master Product Catalogue
-Browse through all 5,712 products from our master catalog. You can search by SKU, EAN, ASIN, or style code, filter by category or gender, and see prices across all 7 platforms side by side.
+
+Browse all 5,712 products from our master catalog. You can search by SKU, barcode, Amazon ASIN, or style code, filter by category or gender, and inspect side by side prices across all seven platforms.
 
 ![Master Product Catalogue](image/image2.png)
 
 ---
 
 ### 2. Size-Level Stock & Bank Offer Breakdown
-Clicking into any product shows the exact warehouse inventory for each size (S, M, L, XL, XXL), which platform has stock, and active bank offers (e.g. Kotak 12.5%, Axis 12%, Tata CLiQ Luxury Birthday promo) to calculate the real selling price.
+
+Selecting a product reveals real-time warehouse stock counts for every size from S to XXL, shows which stores have inventory, and factors in live bank promotions like 12.5% off on Kotak or 12% on Axis to calculate what buyers actually pay.
 
 ![Variant Inventory & Stock Intelligence](image/image.png)
 
 ---
 
 ### 3. Live Scraper Telemetry & Monitoring
-A live status dashboard showing the health of the FastAPI backend, round-trip database latency (85ms), and a log of every scraper execution with product counts and run times.
+
+A dedicated monitoring view displaying the status of the FastAPI service, database round-trip response time, and a full history of recent scraper runs with item counts and durations.
 
 ![Platform Scraper Monitoring](image/image3.png)
 
@@ -140,28 +122,23 @@ A live status dashboard showing the health of the FastAPI backend, round-trip da
 
 ## Previous Build Work
 
-The previous iteration of this project laid the analytical and computer-vision groundwork:
-
-> • Built an automated product intelligence pipeline to scrape, normalize, match, and consolidate 5,400+ products across 25,000+ SKUs from 8 e-commerce platforms for cross-platform comparison.  
-> • Re-engineered scraping workflows using backend API extraction and optimized browser automation, reducing scraping time from 6 hours to under 30 minutes while preventing Akamai and Cloudflare protection from being triggered.  
-> • Developed a custom product-matching pipeline combining CLIP, DINOv2, price signals, and a title-matching model trained on a 1,000-product golden dataset, achieving 85% matching accuracy.  
-> • Built a CI pipeline with automated test cases and validation checks to continuously verify scraper, data-processing, and product-matching workflows.
+In earlier versions of this project, we focused on image recognition and multi-platform product matching. We built a system to scan product photos across all marketplaces and trained a custom computer vision model using CLIP, DINOv2, and price signals on a 1,000-product golden dataset. The model matched duplicate products across stores and could predict which platform an image came from with an 85% test accuracy score.
 
 ---
 
 ## Tech Stack
 
-* **Backend**: Python 3.11, FastAPI, Uvicorn, Pydantic v2
-* **Database & Auth**: PostgreSQL on Supabase, PostgREST Async Client (`httpx`), SQLite B-Tree for local indexing
-* **Scraper Automation**: Playwright, Patchright, PyInstaller
-* **Frontend**: React 18, TypeScript, Vite, Tailwind CSS, Lucide Icons
-* **Deployment**: Docker, Render
+* Backend: Python 3.11, FastAPI, Uvicorn, Pydantic v2
+* Database: PostgreSQL on Supabase, SQLite B-Tree for local indexing
+* Automation: Playwright, Patchright, PyInstaller
+* Frontend: React 18, TypeScript, Vite, Tailwind CSS, Lucide Icons
+* Deployment: Docker, Render
 
 ---
 
 ## Getting Started Locally
 
-### 1. Clone & Configure
+### 1. Clone and Configure
 ```bash
 git clone https://github.com/Kartikey5853/Columbia_4.0.git
 cd Columbia_4.0
@@ -192,4 +169,4 @@ npm run dev
 
 ## Contributors
 
-* **Raj** ([@Raj-dev18](https://github.com/Raj-dev18)) — Responsible for half of the scraper development, frontend, the local build, packaging, and development.
+* Raj ([@Raj-dev18](https://github.com/Raj-dev18)): Built the local scraper runner, packaging, and half of the frontend and scraper development.
