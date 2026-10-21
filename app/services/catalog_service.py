@@ -5,6 +5,9 @@ import time
 import math
 import hashlib
 import sqlite3
+import threading
+
+_CATALOG_LOAD_LOCK = threading.Lock()
 import gc
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1342,7 +1345,8 @@ class CatalogService:
             else:
                 self.raw_records_count = self.total_count
             return True
-        except Exception:
+        except Exception as e:
+            print(f"[CATALOG_SERVICE] ⚠️ _load_from_sqlite error: {e}", flush=True)
             return False
         finally:
             conn.close()
@@ -2234,35 +2238,50 @@ class CatalogService:
             print("[CATALOG_SERVICE] 🛑 Catalog reload BLOCKED because scrapers are actively running (saving RAM).", flush=True)
             return
 
-        if self.is_loaded and not force and self.total_count > 0:
-            return
+        with _CATALOG_LOAD_LOCK:
+            if self.is_loaded and not force and self.total_count > 0:
+                return
 
-        start_time = time.time()
-        self.db_path = DATA_DIR / "catalog_cache.db"
-        cache_file = DATA_DIR / "supabase_catalog_cache.json"
+            start_time = time.time()
+            self.db_path = DATA_DIR / "catalog_cache.db"
+            cache_file = DATA_DIR / "supabase_catalog_cache.json"
+            zip_path = DATA_DIR / "catalog_cache.zip"
 
-        # 0. Fast path: Extract pre-built catalog_cache.db from zip if db not found on disk
-        zip_path = DATA_DIR / "catalog_cache.zip"
-        if not force and not self.db_path.exists() and zip_path.exists():
-            try:
-                import zipfile
-                print(f"[CATALOG_SERVICE] Extracting bundled {zip_path.name} to {self.db_path.name}...", flush=True)
-                with zipfile.ZipFile(zip_path, "r") as zf:
-                    zf.extractall(DATA_DIR)
-                print(f"[CATALOG_SERVICE] Successfully extracted {self.db_path.name}.", flush=True)
-            except Exception as ze:
-                print(f"[CATALOG_SERVICE] ⚠️ Could not extract {zip_path.name}: {ze}", flush=True)
+            # Check if database is already present and valid on disk
+            is_db_valid = False
+            if self.db_path.exists() and self.db_path.stat().st_size > 1000000:
+                try:
+                    conn_check = sqlite3.connect(str(self.db_path), timeout=5.0)
+                    cur_check = conn_check.cursor()
+                    cur_check.execute("SELECT COUNT(*) FROM product_families")
+                    row = cur_check.fetchone()
+                    if row and row[0] > 0:
+                        is_db_valid = True
+                    conn_check.close()
+                except Exception:
+                    is_db_valid = False
 
-        # 1. Fast path: SQLite database already exists and has records
-        if not force and self.db_path.exists():
-            try:
-                if self._load_from_sqlite():
-                    self.is_loaded = True
-                    self.load_time_seconds = round(time.time() - start_time, 2)
-                    print(f"[CATALOG_SERVICE] Initialized disk-backed catalog ({self.total_count} families) from SQLite in {self.load_time_seconds}s (RAM: minimal single-page).", flush=True)
-                    return
-            except Exception as e:
-                print(f"[CATALOG_SERVICE] SQLite cache read error: {e}, will rebuild", flush=True)
+            # 0. Fast path: Extract pre-built catalog_cache.db from zip if missing or invalid
+            if not force and not is_db_valid and zip_path.exists():
+                try:
+                    import zipfile
+                    print(f"[CATALOG_SERVICE] Extracting bundled {zip_path.name} to {self.db_path.name}...", flush=True)
+                    with zipfile.ZipFile(zip_path, "r") as zf:
+                        zf.extractall(DATA_DIR)
+                    print(f"[CATALOG_SERVICE] Successfully extracted {self.db_path.name}.", flush=True)
+                except Exception as ze:
+                    print(f"[CATALOG_SERVICE] ⚠️ Could not extract {zip_path.name}: {ze}", flush=True)
+
+            # 1. Fast path: SQLite database already exists and has records
+            if not force and self.db_path.exists():
+                try:
+                    if self._load_from_sqlite():
+                        self.is_loaded = True
+                        self.load_time_seconds = round(time.time() - start_time, 2)
+                        print(f"[CATALOG_SERVICE] Initialized disk-backed catalog ({self.total_count} families) from SQLite in {self.load_time_seconds}s (RAM: minimal single-page).", flush=True)
+                        return
+                except Exception as e:
+                    print(f"[CATALOG_SERVICE] SQLite cache read error: {e}, will rebuild", flush=True)
 
         # 2. Fast path: Build SQLite from JSON cache if present
         if not force and cache_file.exists():
@@ -2621,6 +2640,14 @@ class CatalogService:
     def _init_price_telemetry_tables(self, conn):
         """Ensures SQLite tables for synced Supabase products and daily price history exist."""
         cur = conn.cursor()
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS lookup_index (
+            term TEXT,
+            kind TEXT,
+            family_id TEXT
+        );
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_li_term ON lookup_index(term);")
         cur.execute("""
         CREATE TABLE IF NOT EXISTS supabase_products (
             id TEXT PRIMARY KEY,

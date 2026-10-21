@@ -390,22 +390,19 @@ async def on_startup():
     if keepalive_task is None or keepalive_task.done():
         keepalive_task = asyncio.create_task(_render_keepalive_loop())
 
-    async def _safe_catalog_warmup():
+    async def _safe_startup_sequence():
         try:
+            # Step 1: Initialize/extract catalog SQLite first (thread-safe, disk-backed)
             await asyncio.to_thread(catalog_service.load_catalog)
             print(f"[STARTUP] ✅ Catalog pre-warmed successfully ({catalog_service.total_count} families ready).", flush=True)
-        except Exception as e:
-            print(f"[STARTUP] ⚠️ Catalog warmup notice: {e}", flush=True)
 
-    asyncio.create_task(_safe_catalog_warmup())
-
-    async def _safe_price_sync():
-        try:
+            # Step 2: Now that catalog tables are ready, sync incremental price telemetry
             await asyncio.to_thread(catalog_service.sync_price_telemetry)
+            print("[STARTUP] ✅ Price telemetry synced successfully.", flush=True)
         except Exception as e:
-            print(f"[STARTUP] Background price telemetry sync warning: {e}", flush=True)
+            print(f"[STARTUP] ⚠️ Startup background init notice: {e}", flush=True)
 
-    asyncio.create_task(_safe_price_sync())
+    asyncio.create_task(_safe_startup_sequence())
 
 
 @app.on_event("shutdown")
@@ -419,8 +416,10 @@ async def on_shutdown():
 # /health handled by unified api_health_check above
 
 
-@app.get("/")
-async def root():
+@app.api_route("/", methods=["GET", "HEAD"])
+async def root(request: Request):
+    if request.method == "HEAD":
+        return Response(status_code=200, headers={"Content-Type": "application/json"})
     active = await get_active_job()
     b_date = get_business_date()
     return {
