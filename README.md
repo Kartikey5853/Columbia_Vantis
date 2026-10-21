@@ -140,8 +140,8 @@ In earlier versions of this project, we focused on image recognition and multi-p
 
 ### 1. Clone and Configure
 ```bash
-git clone https://github.com/Kartikey5853/Columbia_4.0.git
-cd Columbia_4.0
+git clone https://github.com/Kartikey5853/Columbia_Vantis.git
+cd Columbia_Vantis
 ```
 
 Create a `.env` file in the root folder:
