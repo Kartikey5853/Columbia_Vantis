@@ -186,7 +186,7 @@ EXTRACT_CARDS_JS = """
             }
         }
 
-        // Genuine Coupons & Promotional Deals
+        // Genuine Coupons & Promotional Deals & EMI
         let offers = [];
         const couponEl = card.querySelector('span[class*="coupon"], span.s-coupon-unclipped, span[data-action="coupon"]');
         if (couponEl) {
@@ -200,6 +200,35 @@ EXTRACT_CARDS_JS = """
                     issuer: 'Amazon'
                 });
             }
+        }
+
+        // Text-based EMI & Bank / Cashback offers from card text
+        const cardText = (card.innerText || card.textContent || '');
+        if (cardText.includes('No Cost EMI')) {
+            offers.push({
+                kind: 'emi',
+                title: 'No Cost EMI Available',
+                description: 'No Cost EMI available on select bank cards.',
+                issuer: 'Amazon Partner Banks'
+            });
+        }
+        const emiMatch = cardText.match(/EMI starts at ₹\s*([0-9,]+)/i);
+        if (emiMatch) {
+            offers.push({
+                kind: 'emi',
+                title: `EMI starts at ₹${emiMatch[1]}/mo`,
+                description: `Standard EMI options starting from ₹${emiMatch[1]} per month.`,
+                issuer: 'All Major Banks'
+            });
+        }
+        if (cardText.includes('cashback') || cardText.includes('Cashback')) {
+            const cbMatch = cardText.match(/([0-9]+%?\s*cashback[^\.\n]+)/i);
+            offers.push({
+                kind: 'card',
+                title: cbMatch ? cbMatch[1].trim() : 'Amazon Card Cashback',
+                description: cbMatch ? cbMatch[1].trim() : 'Cashback on select bank cards.',
+                issuer: 'Amazon Pay'
+            });
         }
         
         items.push({

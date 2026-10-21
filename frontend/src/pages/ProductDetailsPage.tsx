@@ -15,6 +15,7 @@ import {
   LayoutGrid,
   List,
   Info,
+  ChevronDown,
 } from "lucide-react";
 import productService from "../services/productService";
 import { ProductFamily, PlatformListing, ProductVariant, ProductOffer } from "../types";
@@ -35,6 +36,7 @@ export const ProductDetailsPage: React.FC = () => {
   const [selectedColor, setSelectedColor] = useState<string | null>(null);
   const [selectedVariantSku, setSelectedVariantSku] = useState<string | null>(null);
   const [selectedOfferModal, setSelectedOfferModal] = useState<ProductOffer | null>(null);
+  const [isOffersOpen, setIsOffersOpen] = useState<boolean>(false);
 
   useEffect(() => {
     if (familyId) {
@@ -689,17 +691,42 @@ export const ProductDetailsPage: React.FC = () => {
           </div>
         ) : (
           <>
-            {/* OFFERS SECTION (Promo codes, bank discounts, EMI options from JSON) */}
+            {/* OFFERS DROPDOWN SECTION (Promo codes, bank discounts, EMI options from JSON) */}
             {activeListing.offers && activeListing.offers.length > 0 && (
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <Tag className="w-4 h-4 text-sky-500" />
-                  <h3 className="font-extrabold text-sm text-slate-900 uppercase tracking-wider text-[11px]">
-                    Available Platform Offers &amp; Discounts ({activeListing.offers.length})
-                  </h3>
-                </div>
+              <div className="bg-slate-50/70 border border-slate-200/90 rounded-2xl overflow-hidden transition-all">
+                <button
+                  type="button"
+                  onClick={() => setIsOffersOpen(!isOffersOpen)}
+                  className="w-full p-3.5 sm:p-4 flex items-center justify-between text-left hover:bg-slate-100/70 transition-colors cursor-pointer select-none"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-7 h-7 rounded-lg bg-sky-50 border border-sky-200 flex items-center justify-center text-sky-600 shrink-0">
+                      <Tag className="w-3.5 h-3.5" />
+                    </div>
+                    <div>
+                      <h3 className="font-extrabold text-xs text-slate-900 uppercase tracking-wider">
+                        Available Platform Offers &amp; Discounts ({activeListing.offers.length})
+                      </h3>
+                      <p className="text-[11px] text-slate-500 font-normal">
+                        Click to {isOffersOpen ? "collapse" : "view"} promotional coupons, bank discounts &amp; EMI plans
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-sky-600 hidden sm:inline">
+                      {isOffersOpen ? "Hide" : "Show"}
+                    </span>
+                    <ChevronDown
+                      className={`w-4 h-4 text-slate-500 transition-transform duration-200 ${
+                        isOffersOpen ? "rotate-180" : ""
+                      }`}
+                    />
+                  </div>
+                </button>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {isOffersOpen && (
+                  <div className="p-4 pt-1 border-t border-slate-200/80">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
               {activeListing.offers.map((off, oidx) => {
                 const k = (off.kind || "").toLowerCase();
                 const t = (off.title || "").toLowerCase();
@@ -779,9 +806,11 @@ export const ProductDetailsPage: React.FC = () => {
                   </div>
                 );
               })}
-            </div>
-          </div>
-        )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
         {/* VARIANTS & SIZES STOCK SECTION */}
         <div className="space-y-4">

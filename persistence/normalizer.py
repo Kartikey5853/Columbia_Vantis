@@ -65,34 +65,59 @@ def normalize_sku_and_style(sku: Optional[str], fallback_title: str = "", fallba
     return (style, norm_sku if norm_sku else (clean_raw if clean_raw else None))
 
 
-def normalize_size(raw_size: Optional[str]) -> str:
+def extract_columbia_size_from_sku(sku: Optional[str]) -> str:
+    """
+    Extracts size encoded in Columbia standard SKU formats (e.g. 'AR7872-554-L' -> 'L', 'BM7922-012-11' -> '11').
+    """
+    if not sku:
+        return ""
+    parts = str(sku).strip().split("-")
+    if len(parts) >= 3:
+        cand = parts[-1].strip().upper()
+        if cand == "N" and len(parts) >= 4:
+            cand = parts[-2].strip().upper()
+        if cand.endswith("N") and (cand[:-1] in ("XS", "S", "M", "L", "XL", "XXL", "XXXL", "2XL", "3XL") or cand[:-1].replace(".", "").isdigit()):
+            cand = cand[:-1]
+        if cand in ("OS", "O/S", "ONESIZE", "ONE SIZE", "ALL"):
+            return "One Size"
+        if cand and cand not in ("STANDARD", "DEFAULT", "NA", "N/A", "NONE"):
+            return cand
+    return ""
+
+
+def normalize_size(raw_size: Optional[str], sku: Optional[str] = None) -> str:
     """
     Normalizes size across all platforms into a unified standard system.
     Strips 'UK ', 'US ', 'EU ', 'Size: ', 'IND ' and normalizes apparel & footwear.
     Returns empty string "" if the size is missing, None, or a placeholder (e.g. Default Title, OS, OneSize, Standard).
     """
-    if not raw_size:
-        return ""
-
-    s = str(raw_size).strip()
-    if not s:
-        return ""
+    s = str(raw_size or "").strip()
 
     # Legitimate single-size markers
     ONESIZE_MARKERS = {"ONESIZE", "ONE SIZE", "ONE-SIZE", "OS", "O/S"}
     FREESIZE_MARKERS = {"FREE SIZE", "FREESIZE"}
-
-    s_upper = s.upper()
-    if s_upper in ONESIZE_MARKERS:
-        return "One Size"
-    if s_upper in FREESIZE_MARKERS:
-        return "Free Size"
 
     # Check for placeholder / fake non-sizes
     FAKE_SIZE_MARKERS = {
         "DEFAULT TITLE", "DEFAULT", "STANDARD", "REGULAR", "NA", "N/A", "NONE",
         "NO SIZE", "NOSIZE", "ALL", "UNIVERSAL", "0", "0.0"
     }
+
+    if not s or s.upper() in FAKE_SIZE_MARKERS:
+        if sku:
+            cand_sz = extract_columbia_size_from_sku(sku)
+            if cand_sz:
+                s = cand_sz
+            else:
+                return ""
+        else:
+            return ""
+
+    s_upper = s.upper()
+    if s_upper in ONESIZE_MARKERS:
+        return "One Size"
+    if s_upper in FREESIZE_MARKERS:
+        return "Free Size"
     if s_upper in FAKE_SIZE_MARKERS:
         return ""
 

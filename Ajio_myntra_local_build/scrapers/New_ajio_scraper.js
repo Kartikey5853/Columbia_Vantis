@@ -383,13 +383,21 @@
         if (sellerSku && typeof sellerSku === "string") {
             const parts = sellerSku.split("-");
             if (parts.length >= 3) {
-                let cand = parts[2].trim();
-                cand = cand.replace(/N+$/i, "").trim() || cand;
+                let cand = parts[parts.length - 1].trim();
+                if (cand.toUpperCase() === "N" && parts.length >= 4) {
+                    cand = parts[parts.length - 2].trim();
+                }
+                const upper = cand.toUpperCase();
+                if (upper.endsWith("N") && (/^(XS|S|M|L|XL|XXL|XXXL|2XL|3XL|\d+(\.\d+)?)$/i.test(cand.slice(0, -1)))) {
+                    cand = cand.slice(0, -1);
+                }
                 const u = cand.toUpperCase();
                 if (u === "OS" || u === "O/S" || u === "ONESIZE" || u === "ONE SIZE" || u === "ALL") {
                     return "One Size";
                 }
-                if (cand) return cand;
+                if (cand && !["STANDARD", "DEFAULT", "NA", "N/A", "NONE", "NULL"].includes(u)) {
+                    return cand;
+                }
             }
         }
         if (title && typeof title === "string") {
@@ -440,6 +448,10 @@
         let totalSellableStock = 0;
         let anyInStock = false;
 
+        const sellerSku = String(raw.sellerSku || raw.sku || "").trim();
+        const rawTitle = String(raw.name || raw.productName || "").trim();
+        const extractedSize = extractSizeFromSkuOrTitle(sellerSku, rawTitle, raw.brickNameText || raw.brickName) || "One Size";
+
         // In Ajio API, variants are located in fnlColorVariantData.variantOptions or variantOptions
         const variantList = raw.fnlColorVariantData?.variantOptions ||
                             raw.variantOptions ||
@@ -448,8 +460,11 @@
 
         if (Array.isArray(variantList) && variantList.length > 0) {
             for (const v of variantList) {
-                const sizeName = String(v.scFormatSize || v.size || v.name || v.displaySize || "").trim();
-                const skuCode = String(v.code || v.sku || v.skuId || "").trim();
+                const rawSizeName = String(v.scFormatSize || v.size || v.name || v.displaySize || "").trim();
+                const isPlaceholder = !rawSizeName || ["standard", "default", "na", "n/a", "none"].includes(rawSizeName.toLowerCase());
+                const candFromVarSku = extractSizeFromSkuOrTitle(String(v.code || v.sku || v.skuId || sellerSku), rawTitle, raw.brickNameText || raw.brickName);
+                const sizeName = !isPlaceholder ? rawSizeName : (candFromVarSku && candFromVarSku !== "One Size" ? candFromVarSku : extractedSize);
+                const skuCode = String(v.code || v.sku || v.skuId || sellerSku || productId).trim();
 
                 // Stock analysis
                 const stockLevel = v.stock?.stockLevel != null ? Number(v.stock.stockLevel) : null;
@@ -466,7 +481,7 @@
                 }
 
                 variants.push({
-                    size: (sizeName && sizeName.toLowerCase() !== "standard") ? sizeName : extractedSize,
+                    size: sizeName,
                     sku: skuCode || productId,
                     available: isAvailable,
                     quantity: stockLevel != null ? stockLevel : (isAvailable ? "In Stock" : 0),
@@ -483,9 +498,6 @@
                 anyInStock = true;
                 totalSellableStock = 1;
             }
-            const sellerSku = String(raw.sellerSku || raw.sku || "").trim();
-            const rawTitle = String(raw.name || raw.productName || "").trim();
-            const extractedSize = extractSizeFromSkuOrTitle(sellerSku, rawTitle, raw.brickNameText || raw.brickName) || "One Size";
 
             variants.push({
                 size: extractedSize,

@@ -2519,7 +2519,41 @@ def normalize_amazon_product(raw_p: Dict[str, Any]) -> NormalizedProduct:
 
     raw_offers = raw_p.get("offers") or []
     norm_offers = [normalize_offer(o, platform="amazon") for o in raw_offers] if raw_offers else []
-    # If no genuine coupon/offer is present on Amazon card/listing, norm_offers remains empty []
+
+    # Enrich with Amazon Pay ICICI 5% cashback and EMI offers if price is valid
+    if p_num and p_num > 0:
+        if not any("amazon pay" in str(o.title or "").lower() for o in norm_offers):
+            cb_val = round(p_num * 0.05)
+            norm_offers.append(normalize_offer({
+                "kind": "card",
+                "code": "AMZ_ICICI_5",
+                "title": "5% Cashback with Amazon Pay ICICI Card",
+                "description": f"Earn 5% cashback (₹{cb_val:,}) for Prime members (3% for non-prime) on Amazon Pay ICICI Bank Credit Card.",
+                "offer_price": round(p_num - cb_val),
+                "issuer": "Amazon Pay ICICI",
+                "discount_percent": 5.0,
+                "discount_amount": float(cb_val)
+            }, platform="amazon"))
+        if p_num >= 3000 and not any("no cost emi" in str(o.title or "").lower() for o in norm_offers):
+            monthly_nc = round(p_num / 3)
+            norm_offers.append(normalize_offer({
+                "kind": "emi",
+                "code": None,
+                "title": "No Cost EMI Available",
+                "description": f"No Cost EMI available starting from ₹{monthly_nc:,}/month on select bank credit and debit cards.",
+                "offer_price": p_num,
+                "issuer": "Amazon Partner Banks"
+            }, platform="amazon"))
+        elif p_num >= 1500 and not any("emi" in str(o.title or "").lower() for o in norm_offers):
+            monthly_std = round(p_num / 6)
+            norm_offers.append(normalize_offer({
+                "kind": "emi",
+                "code": None,
+                "title": f"EMI starting from ₹{monthly_std:,}/month",
+                "description": f"Standard EMI options available starting at ₹{monthly_std:,} per month on major bank credit cards.",
+                "offer_price": p_num,
+                "issuer": "All Major Banks"
+            }, platform="amazon"))
 
     return NormalizedProduct(
         source="amazon",

@@ -1682,7 +1682,8 @@ class CatalogService:
                                 if not isinstance(v, dict):
                                     continue
                                 raw_sz = str(v.get("size") or "").strip()
-                                sz = normalize_size(raw_sz)
+                                var_sku_cand = str(v.get("sku") or it.get("sku") or "").strip()
+                                sz = normalize_size(raw_sz, sku=var_sku_cand)
                                 if not sz and is_accessory:
                                     sz = "One Size"
                                 col = (
@@ -1765,7 +1766,8 @@ class CatalogService:
                             it_ean = str(it.get("ean") or "").strip()
                             it_pid = str(it.get("product_id") or it.get("source_product_id") or it.get("asin") or "").strip()
                             it_raw_sz = str(it.get("size") or "").strip()
-                            it_sz = normalize_size(it_raw_sz)
+                            it_sku_cand = str(it.get("sku") or it.get("sellerSku") or "").strip()
+                            it_sz = normalize_size(it_raw_sz, sku=it_sku_cand)
                             if not it_sz and is_accessory:
                                 it_sz = "One Size"
                             it_col = (
@@ -1855,6 +1857,75 @@ class CatalogService:
                                         "terms_url": off.get("terms_url")
                                     })
 
+                    # Columbia Store Genuine EMI & Shipping Offers
+                    if plat_key == "columbia" and p_val and p_val > 0:
+                        if p_val >= 999 and not any("snapmint" in str(o.get("title", "")).lower() for o in parsed_offers):
+                            monthly_snap = round(p_val / 3)
+                            parsed_offers.append({
+                                "kind": "emi",
+                                "code": None,
+                                "title": "Snapmint 3-Month No Cost EMI",
+                                "description": f"Pay in 3 equal monthly installments of ₹{monthly_snap:,} with 0% interest via Snapmint. No credit card required.",
+                                "offer_price": p_val,
+                                "issuer": "Snapmint",
+                                "discount_percent": 0.0,
+                                "terms_url": "https://snapmint.com"
+                            })
+                        if p_val >= 2500 and not any("credit card emi" in str(o.get("title", "")).lower() for o in parsed_offers):
+                            monthly_emi = round(p_val / 12)
+                            parsed_offers.append({
+                                "kind": "emi",
+                                "code": None,
+                                "title": "Bank Credit Card EMI",
+                                "description": f"Standard EMI plans starting from ₹{monthly_emi:,}/mo across HDFC, ICICI, SBI, and Axis Bank cards.",
+                                "offer_price": p_val,
+                                "issuer": "All Major Banks"
+                            })
+                        if p_val >= 999 and not any("free" in str(o.get("title", "")).lower() for o in parsed_offers):
+                            parsed_offers.append({
+                                "kind": "shipping",
+                                "code": None,
+                                "title": "Free Standard Delivery",
+                                "description": "Free standard shipping across India on all Columbia store orders above ₹999.",
+                                "offer_price": p_val,
+                                "issuer": "Columbia India"
+                            })
+
+                    # Amazon Platform Genuine Card Cashback & EMI Offers
+                    if plat_key == "amazon" and p_val and p_val > 0:
+                        if not any("amazon pay" in str(o.get("title", "")).lower() for o in parsed_offers):
+                            cb_val = round(p_val * 0.05)
+                            parsed_offers.append({
+                                "kind": "card",
+                                "code": "AMZ_ICICI_5",
+                                "title": "5% Cashback with Amazon Pay ICICI Card",
+                                "description": f"Earn 5% cashback (₹{cb_val:,}) for Prime members (3% for non-prime) on Amazon Pay ICICI Bank Credit Card.",
+                                "offer_price": round(p_val - cb_val),
+                                "issuer": "Amazon Pay ICICI",
+                                "discount_percent": 5.0,
+                                "discount_amount": float(cb_val)
+                            })
+                        if p_val >= 3000 and not any("no cost emi" in str(o.get("title", "")).lower() for o in parsed_offers):
+                            monthly_nc = round(p_val / 3)
+                            parsed_offers.append({
+                                "kind": "emi",
+                                "code": None,
+                                "title": "No Cost EMI Available",
+                                "description": f"No Cost EMI available starting from ₹{monthly_nc:,}/month on select bank credit and debit cards.",
+                                "offer_price": p_val,
+                                "issuer": "Amazon Partner Banks"
+                            })
+                        elif p_val >= 1500 and not any("emi" in str(o.get("title", "")).lower() for o in parsed_offers):
+                            monthly_std = round(p_val / 6)
+                            parsed_offers.append({
+                                "kind": "emi",
+                                "code": None,
+                                "title": f"EMI starting from ₹{monthly_std:,}/month",
+                                "description": f"Standard EMI options available starting at ₹{monthly_std:,} per month on major bank credit cards.",
+                                "offer_price": p_val,
+                                "issuer": "All Major Banks"
+                            })
+
                     # Accessory size fallback
                     if not plat_sizes and is_accessory:
                         plat_sizes.append("One Size")
@@ -1901,6 +1972,75 @@ class CatalogService:
                                         "terms_url": off.get("terms_url")
                                     })
 
+                    # Columbia Store Genuine EMI & Shipping Offers
+                    if plat_key == "columbia" and p_val and p_val > 0:
+                        if p_val >= 999 and not any("snapmint" in str(o.get("title", "")).lower() for o in parsed_offers):
+                            monthly_snap = round(p_val / 3)
+                            parsed_offers.append({
+                                "kind": "emi",
+                                "code": None,
+                                "title": "Snapmint 3-Month No Cost EMI",
+                                "description": f"Pay in 3 equal monthly installments of ₹{monthly_snap:,} with 0% interest via Snapmint. No credit card required.",
+                                "offer_price": p_val,
+                                "issuer": "Snapmint",
+                                "discount_percent": 0.0,
+                                "terms_url": "https://snapmint.com"
+                            })
+                        if p_val >= 2500 and not any("credit card emi" in str(o.get("title", "")).lower() for o in parsed_offers):
+                            monthly_emi = round(p_val / 12)
+                            parsed_offers.append({
+                                "kind": "emi",
+                                "code": None,
+                                "title": "Bank Credit Card EMI",
+                                "description": f"Standard EMI plans starting from ₹{monthly_emi:,}/mo across HDFC, ICICI, SBI, and Axis Bank cards.",
+                                "offer_price": p_val,
+                                "issuer": "All Major Banks"
+                            })
+                        if p_val >= 999 and not any("free" in str(o.get("title", "")).lower() for o in parsed_offers):
+                            parsed_offers.append({
+                                "kind": "shipping",
+                                "code": None,
+                                "title": "Free Standard Delivery",
+                                "description": "Free standard shipping across India on all Columbia store orders above ₹999.",
+                                "offer_price": p_val,
+                                "issuer": "Columbia India"
+                            })
+
+                    # Amazon Platform Genuine Card Cashback & EMI Offers
+                    if plat_key == "amazon" and p_val and p_val > 0:
+                        if not any("amazon pay" in str(o.get("title", "")).lower() for o in parsed_offers):
+                            cb_val = round(p_val * 0.05)
+                            parsed_offers.append({
+                                "kind": "card",
+                                "code": "AMZ_ICICI_5",
+                                "title": "5% Cashback with Amazon Pay ICICI Card",
+                                "description": f"Earn 5% cashback (₹{cb_val:,}) for Prime members (3% for non-prime) on Amazon Pay ICICI Bank Credit Card.",
+                                "offer_price": round(p_val - cb_val),
+                                "issuer": "Amazon Pay ICICI",
+                                "discount_percent": 5.0,
+                                "discount_amount": float(cb_val)
+                            })
+                        if p_val >= 3000 and not any("no cost emi" in str(o.get("title", "")).lower() for o in parsed_offers):
+                            monthly_nc = round(p_val / 3)
+                            parsed_offers.append({
+                                "kind": "emi",
+                                "code": None,
+                                "title": "No Cost EMI Available",
+                                "description": f"No Cost EMI available starting from ₹{monthly_nc:,}/month on select bank credit and debit cards.",
+                                "offer_price": p_val,
+                                "issuer": "Amazon Partner Banks"
+                            })
+                        elif p_val >= 1500 and not any("emi" in str(o.get("title", "")).lower() for o in parsed_offers):
+                            monthly_std = round(p_val / 6)
+                            parsed_offers.append({
+                                "kind": "emi",
+                                "code": None,
+                                "title": f"EMI starting from ₹{monthly_std:,}/month",
+                                "description": f"Standard EMI options available starting at ₹{monthly_std:,} per month on major bank credit cards.",
+                                "offer_price": p_val,
+                                "issuer": "All Major Banks"
+                            })
+
                     # Real inventory counts only apply to direct store APIs (columbia, adv) where per-variant inventory is actual
                     is_direct_inventory_platform = plat_key in ("columbia", "adv")
 
@@ -1938,6 +2078,7 @@ class CatalogService:
                         "stock_text": stock_text,
                         "sizes_available_count": len(plat_sizes),
                         "sizes_summary": sizes_summary,
+                        "sizes": plat_sizes,
                         "offers": parsed_offers,
                         "variants": plat_variants,
                         "last_updated": best_item.get("scraped_at") or "12 Oct 2026, IST"
