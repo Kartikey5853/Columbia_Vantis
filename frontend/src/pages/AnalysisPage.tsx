@@ -369,7 +369,7 @@ export const AnalysisPage: React.FC = () => {
           </span>
         </div>
         <p className="text-xs sm:text-sm text-slate-500 font-medium">
-          Identify real price shifts in the latest scraped database runs. Compare price movements against any previous date.
+          Identify real selling price shifts across all platforms and checkpoints. Calculated strictly against previous selling prices (not MRP).
         </p>
       </div>
 
@@ -420,6 +420,7 @@ export const AnalysisPage: React.FC = () => {
                 onChange={(e) => setPreviousDate(e.target.value)}
                 className="appearance-none bg-white border border-slate-200 text-slate-800 rounded-xl px-3 py-1.5 pr-7 text-xs font-bold shadow-2xs focus:outline-none focus:ring-2 focus:ring-[#079FE0]/20 cursor-pointer"
               >
+                <option value="all_time">All Time (Lifetime History)</option>
                 {availableDates
                   .filter((d) => d !== targetDate)
                   .map((d) => (
@@ -598,12 +599,12 @@ export const AnalysisPage: React.FC = () => {
         <div className="shrink-0 p-3.5 sm:px-6 bg-slate-50/80 border-b border-slate-200/80 flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-wider">
           <div className="flex-1">Product &amp; Style Code</div>
           <div className="w-32 text-right">
-            Price on {formatShortDate(previousDate) || "Previous"}
+            Price on {previousDate === "all_time" ? "Initial Date" : (formatShortDate(previousDate) || "Previous")}
           </div>
           <div className="w-32 text-right">
             Price on {formatShortDate(targetDate) || "Today"}
           </div>
-          <div className="w-32 text-right">Price Movement</div>
+          <div className="w-32 text-right">Price Shift (% vs Prior)</div>
         </div>
 
         {/* Scrollable Component Body (flex-1 overflow-y-auto) */}
@@ -676,7 +677,7 @@ export const AnalysisPage: React.FC = () => {
                         : "—"}
                     </span>
                     <span className="text-[10px] text-slate-400 font-medium block">
-                      {prod.change_platform ? `${prod.change_platform.toUpperCase()} Before` : "Previous"}
+                      {previousDate === "all_time" ? "Initial Sale Price" : (prod.change_platform ? `${prod.change_platform.toUpperCase()} Before` : "Previous")}
                     </span>
                   </div>
 

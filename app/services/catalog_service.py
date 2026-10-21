@@ -2111,6 +2111,8 @@ class CatalogService:
                 primary_image = "https://cdn.shopify.com/s/files/1/0922/4237/9031/files/BL0828-011_1.jpg?v=1743237053"
 
             active_platforms_count = len([p for p in platform_listings if p["price"] is not None])
+            if active_platforms_count == 0:
+                continue
             unique_sizes = sorted(list(sizes_set))
             unique_colors = sorted(list(colors_set))
 
@@ -2995,23 +2997,40 @@ class CatalogService:
         # Resolve target_date
         t_date = target_date if (target_date and target_date in avail_dates) else dates_info.get("latest_date", avail_dates[0])
 
-        # Resolve previous_date
+        # Resolve previous_date & All-Time / Lifetime mode
+        is_all_time = (str(previous_date or "").lower() in ("all_time", "lifetime", "all"))
         p_date = previous_date
-        if not p_date or p_date not in avail_dates or p_date == t_date:
-            t_idx = avail_dates.index(t_date) if t_date in avail_dates else 0
-            if t_idx + 1 < len(avail_dates):
-                p_date = avail_dates[t_idx + 1]
-            else:
-                p_date = avail_dates[-1]
+        if not is_all_time:
+            if not p_date or p_date not in avail_dates or p_date == t_date:
+                t_idx = avail_dates.index(t_date) if t_date in avail_dates else 0
+                if t_idx + 1 < len(avail_dates):
+                    p_date = avail_dates[t_idx + 1]
+                else:
+                    p_date = avail_dates[-1]
 
         conn = self._get_connection()
         self._init_price_telemetry_tables(conn)
         cur = conn.cursor()
 
         try:
-            # Base query joining target_date prices with previous_date prices
+            # Base query joining target_date prices with previous/earliest prices
             where_conditions = ["curr.scrape_date = ?"]
-            params: List[Any] = [p_date, t_date, t_date]
+            if is_all_time:
+                prev_subquery = """(
+                    SELECT product_id, price, mrp, scrape_date,
+                           ROW_NUMBER() OVER (PARTITION BY product_id ORDER BY scrape_date ASC) as sub_rn
+                    FROM daily_price_history
+                    WHERE scrape_date < ?
+                )"""
+                params: List[Any] = [t_date, t_date]
+            else:
+                prev_subquery = """(
+                    SELECT product_id, price, mrp, scrape_date,
+                           ROW_NUMBER() OVER (PARTITION BY product_id ORDER BY scrape_date DESC) as sub_rn
+                    FROM daily_price_history
+                    WHERE scrape_date <= ? AND scrape_date < ?
+                )"""
+                params: List[Any] = [p_date, t_date, t_date]
 
             if changes_only:
                 where_conditions.append("curr.price != prev.price")
@@ -3056,12 +3075,7 @@ class CatalogService:
                         ORDER BY ABS(((curr.price - prev.price) / prev.price)) DESC
                     ) as rn
                 FROM daily_price_history curr
-                JOIN (
-                    SELECT product_id, price, mrp, scrape_date,
-                           ROW_NUMBER() OVER (PARTITION BY product_id ORDER BY scrape_date DESC) as sub_rn
-                    FROM daily_price_history
-                    WHERE scrape_date <= ? AND scrape_date < ?
-                ) prev 
+                JOIN {prev_subquery} prev 
                     ON curr.product_id = prev.product_id AND prev.sub_rn = 1
                 JOIN supabase_products sp 
                     ON curr.product_id = sp.id
