@@ -382,7 +382,7 @@ async def get_daily_scrapers_summary(
     cli = client or get_supabase_client()
     b_date = business_date or get_business_date()
 
-    canonical_names = ["columbia", "adv", "tata", "tata_lux", "amazon"]
+    canonical_names = ["columbia", "adv", "tata", "tata_lux", "amazon", "myntra", "ajio"]
     id_to_name = {}
     for name in canonical_names:
         s_id = await get_scraper_id(name, cli)
@@ -590,7 +590,7 @@ async def get_all_daily_reports(
     """Retrieves JSON reports for all canonical scrapers for today from Supabase scrape_runs."""
     cli = client or get_supabase_client()
     b_date = business_date or get_business_date()
-    canonical_names = ["columbia", "adv", "tata", "tata_lux", "amazon"]
+    canonical_names = ["columbia", "adv", "tata", "tata_lux", "amazon", "myntra", "ajio"]
 
     reports = {}
     total_prods = 0

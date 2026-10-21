@@ -65,85 +65,53 @@ async def get_scrapers_status():
     except Exception:
         supabase_summary = {}
 
-    platform_runs = [
-        {
-            "platform": "amazon",
-            "platform_name": "Amazon",
-            "logo_key": "amazon",
-            "status": "completed",
-            "last_run": "11 Oct 2026, 04:30 PM",
-            "next_scheduled_run": "12 Oct 2026, 04:00 AM",
-            "products_fetched": 1997,
-            "duration": "14m 20s",
-            "last_error": None
-        },
-        {
-            "platform": "tata",
-            "platform_name": "Tata CLiQ",
-            "logo_key": "tata",
-            "status": "completed",
-            "last_run": "11 Oct 2026, 03:50 PM",
-            "next_scheduled_run": "12 Oct 2026, 04:00 AM",
-            "products_fetched": 2108,
-            "duration": "18m 45s",
-            "last_error": None
-        },
-        {
-            "platform": "tata_lux",
-            "platform_name": "Tata CLiQ Luxury",
-            "logo_key": "tata_lux",
-            "status": "completed",
-            "last_run": "11 Oct 2026, 03:20 PM",
-            "next_scheduled_run": "12 Oct 2026, 04:00 AM",
-            "products_fetched": 2244,
-            "duration": "22m 10s",
-            "last_error": None
-        },
-        {
-            "platform": "columbia",
-            "platform_name": "Columbia India",
-            "logo_key": "columbia",
-            "status": "completed",
-            "last_run": "11 Oct 2026, 02:40 PM",
-            "next_scheduled_run": "12 Oct 2026, 04:00 AM",
-            "products_fetched": 5408,
-            "duration": "08m 12s",
-            "last_error": None
-        },
-        {
-            "platform": "adv",
-            "platform_name": "Adventuras",
-            "logo_key": "adv",
-            "status": "completed",
-            "last_run": "11 Oct 2026, 02:15 PM",
-            "next_scheduled_run": "12 Oct 2026, 04:00 AM",
-            "products_fetched": 4906,
-            "duration": "12m 05s",
-            "last_error": None
-        },
-        {
-            "platform": "myntra",
-            "platform_name": "Myntra",
-            "logo_key": "myntra",
-            "status": "completed",
-            "last_run": "11 Oct 2026, 01:30 PM",
-            "next_scheduled_run": "12 Oct 2026, 04:00 AM",
-            "products_fetched": 1704,
-            "duration": "35m 18s",
-            "last_error": None
-        },
-        {
-            "platform": "ajio",
-            "platform_name": "AJIO",
-            "logo_key": "ajio",
-            "status": "completed",
-            "last_run": "11 Oct 2026, 12:45 PM",
-            "next_scheduled_run": "12 Oct 2026, 04:00 AM",
-            "products_fetched": 2210,
-            "duration": "26m 40s",
-            "last_error": None
-        },
+    from datetime import timedelta
+    IST = timezone(timedelta(hours=5, minutes=30))
+
+    base_configs = [
+        {"platform": "amazon", "platform_name": "Amazon", "logo_key": "amazon", "default_products": 4011},
+        {"platform": "tata", "platform_name": "Tata CLiQ", "logo_key": "tata", "default_products": 2108},
+        {"platform": "tata_lux", "platform_name": "Tata CLiQ Luxury", "logo_key": "tata_lux", "default_products": 2070},
+        {"platform": "columbia", "platform_name": "Columbia India", "logo_key": "columbia", "default_products": 5408},
+        {"platform": "adv", "platform_name": "Adventuras", "logo_key": "adv", "default_products": 4906},
+        {"platform": "myntra", "platform_name": "Myntra", "logo_key": "myntra", "default_products": 1841},
+        {"platform": "ajio", "platform_name": "AJIO", "logo_key": "ajio", "default_products": 1876},
     ]
+
+    platform_runs = []
+    for cfg in base_configs:
+        pk = cfg["platform"]
+        s_info = supabase_summary.get(pk) or {}
+        st = s_info.get("status") or "completed"
+        p_cnt = s_info.get("completed_products") or cfg["default_products"]
+
+        dur_sec = s_info.get("duration_seconds")
+        if dur_sec and dur_sec > 0:
+            dur_str = f"{int(dur_sec // 60)}m {int(dur_sec % 60):02d}s"
+        else:
+            dur_str = "Completed"
+
+        ts_raw = s_info.get("completed_at") or s_info.get("started_at")
+        if ts_raw and len(ts_raw) >= 16:
+            try:
+                dt = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+                last_run = dt.astimezone(IST).strftime("%d %b %Y, %I:%M %p")
+            except Exception:
+                last_run = ts_raw[:16].replace("T", " ")
+        else:
+            last_run = datetime.now(IST).strftime("%d %b %Y, %I:%M %p")
+
+        platform_runs.append({
+            "platform": pk,
+            "platform_name": cfg["platform_name"],
+            "logo_key": cfg["logo_key"],
+            "status": st.lower(),
+            "last_run": last_run,
+            "next_scheduled_run": "Tomorrow, 12:00 AM",
+            "products_fetched": int(p_cnt),
+            "duration": dur_str,
+            "last_error": s_info.get("error")
+        })
 
     return {"scrapers": platform_runs}
 

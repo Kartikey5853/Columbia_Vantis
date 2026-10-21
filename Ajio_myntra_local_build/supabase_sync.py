@@ -181,26 +181,41 @@ async def sync_products_to_supabase(
 
 
 async def record_scrape_run(source: str, product_count: int, duration_seconds: float, status: str = "completed"):
-    """Records scrape run status into scrape_runs table."""
+    """Records scrape run status into scrape_runs table with schema-compliant payload."""
     scraper_id = SCRAPER_IDS.get(source.lower())
     if not scraper_id:
         return
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "Prefer": "return=representation"
     }
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    now_iso = datetime.now(timezone.utc).isoformat()
     payload = {
         "scraper_id": scraper_id,
         "business_date": today,
         "status": status,
+        "stage": "finalizing",
+        "total_products": product_count,
         "completed_products": product_count,
-        "duration_seconds": duration_seconds,
-        "created_at": datetime.now(timezone.utc).isoformat()
+        "failed_products": 0,
+        "report": {
+            "scraper": source.lower(),
+            "duration_seconds": round(duration_seconds, 1),
+            "completed_products": product_count
+        },
+        "started_at": now_iso,
+        "updated_at": now_iso,
+        "completed_at": now_iso
     }
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            await client.post(f"{SUPABASE_URL}/rest/v1/scrape_runs", headers=headers, json=payload)
+            resp = await client.post(f"{SUPABASE_URL}/rest/v1/scrape_runs", headers=headers, json=payload)
+            if resp.status_code in (200, 201):
+                print(f"[Supabase] Recorded scrape run for {source.upper()} in scrape_runs (status: {status}).")
+            else:
+                print(f"[Supabase] Warning recording scrape_runs ({resp.status_code}): {resp.text}")
     except Exception as e:
         print(f"[Supabase] Note: scrape_runs record error: {e}")
