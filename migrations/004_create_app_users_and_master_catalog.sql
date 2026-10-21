@@ -90,9 +90,9 @@ VALUES
         3513
     ),
     (
-        'krishana',
-        'e94e3e8e234ee80ad22b3681c24906dd3cf9bb03e7a2952bde9c844db230f86c',
-        'Krishana',
+        'krishna',
+        '37cedfb22cbc8a75e332851cf5b0c79f323a675e927c3bc41e72e1c9811f92e9',
+        'Krishna',
         '',
         NULL,
         true,
