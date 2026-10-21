@@ -253,7 +253,7 @@ async def run_ajio_local(context, limit_pages: Optional[int] = None):
         await page.evaluate(f"() => {{ {scraper_code} }}")
 
         print("[AJIO] Scraper running. Monitoring real-time progress...")
-        last_page = 0
+        last_progress_marker = ""
         while True:
             await asyncio.sleep(3)
             status = await page.evaluate("""() => ({
@@ -271,9 +271,12 @@ async def run_ajio_local(context, limit_pages: Optional[int] = None):
             curr = prog.get("current", 0)
             tot = prog.get("total", 0)
             stg = prog.get("stage", "Scraping")
-            if curr != last_page and tot > 0:
-                print(f"[AJIO:Progress] {stg} - Page {curr}/{tot} | Products collected: {status.get('count', 0)}")
-                last_page = curr
+            progress_marker = f"{stg}:{curr}"
+            if progress_marker != last_progress_marker and tot > 0:
+                v_count = prog.get("variants_count")
+                v_info = f" | Total Variants: {v_count}" if v_count is not None else ""
+                print(f"[AJIO:Progress] [{stg}] {curr}/{tot} | Products: {status.get('count', 0)}{v_info}")
+                last_progress_marker = progress_marker
 
             if status.get("done"):
                 break
