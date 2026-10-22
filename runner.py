@@ -2522,7 +2522,7 @@ def normalize_amazon_product(raw_p: Dict[str, Any]) -> NormalizedProduct:
 
     # Enrich with Amazon Pay ICICI 5% cashback and EMI offers if price is valid
     if p_num and p_num > 0:
-        if not any("amazon pay" in str(o.title or "").lower() for o in norm_offers):
+        if not any("amazon pay" in str(o.get("title") or "").lower() for o in norm_offers):
             cb_val = round(p_num * 0.05)
             norm_offers.append(normalize_offer({
                 "kind": "card",
@@ -2534,7 +2534,7 @@ def normalize_amazon_product(raw_p: Dict[str, Any]) -> NormalizedProduct:
                 "discount_percent": 5.0,
                 "discount_amount": float(cb_val)
             }, platform="amazon"))
-        if p_num >= 3000 and not any("no cost emi" in str(o.title or "").lower() for o in norm_offers):
+        if p_num >= 3000 and not any("no cost emi" in str(o.get("title") or "").lower() for o in norm_offers):
             monthly_nc = round(p_num / 3)
             norm_offers.append(normalize_offer({
                 "kind": "emi",
@@ -2544,7 +2544,7 @@ def normalize_amazon_product(raw_p: Dict[str, Any]) -> NormalizedProduct:
                 "offer_price": p_num,
                 "issuer": "Amazon Partner Banks"
             }, platform="amazon"))
-        elif p_num >= 1500 and not any("emi" in str(o.title or "").lower() for o in norm_offers):
+        elif p_num >= 1500 and not any("emi" in str(o.get("title") or "").lower() for o in norm_offers):
             monthly_std = round(p_num / 6)
             norm_offers.append(normalize_offer({
                 "kind": "emi",
