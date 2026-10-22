@@ -176,7 +176,7 @@ def compute_amazon_payment_offers(price: Optional[float], mrp: Optional[float] =
 
 
 # Zero-overhead in-browser search card evaluation script with stock, prices, and variation extraction
-EXTRACT_CARDS_JS = """
+EXTRACT_CARDS_JS = r"""
 () => {
     const cards = document.querySelectorAll('div[data-component-type="s-search-result"]');
     const items = [];

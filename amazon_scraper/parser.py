@@ -115,7 +115,7 @@ def load_sellers_from_file(file_path: Path) -> List[SellerTarget]:
 
 
 # Ultra-fast, zero-overhead browser evaluation script
-EXTRACT_CARDS_JS = """
+EXTRACT_CARDS_JS = r"""
 () => {
     const cards = document.querySelectorAll('div[data-component-type="s-search-result"]');
     const items = [];
@@ -222,7 +222,7 @@ EXTRACT_CARDS_JS = """
             });
         }
         if (cardText.includes('cashback') || cardText.includes('Cashback')) {
-            const cbMatch = cardText.match(/([0-9]+%?\s*cashback[^\.\n]+)/i);
+            const cbMatch = cardText.match(/([0-9]+%?\s*cashback[^\r\n.]+)/i);
             offers.push({
                 kind: 'card',
                 title: cbMatch ? cbMatch[1].trim() : 'Amazon Card Cashback',
