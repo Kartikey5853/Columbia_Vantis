@@ -361,8 +361,8 @@ export const AnalysisPage: React.FC = () => {
                 <div key={prod.family_id} className="transition-colors hover:bg-slate-50/60">
                   {/* Main Product Row */}
                   <div
-                    onClick={() => setExpandedRowId(isExpanded ? null : prod.family_id)}
-                    className="p-3.5 sm:px-6 flex items-center justify-between gap-4 cursor-pointer"
+                    onClick={() => navigate(`/analysis/${encodeURIComponent(prod.family_id)}`)}
+                    className="p-3.5 sm:px-6 flex items-center justify-between gap-4 cursor-pointer group hover:bg-sky-50/50"
                   >
                     {/* Left: Product Thumbnail & Identifiers */}
                     <div className="flex items-center gap-3.5 flex-1 min-w-0">
@@ -441,28 +441,15 @@ export const AnalysisPage: React.FC = () => {
                       </span>
                     </div>
 
-                    {/* Actions: Open Link from here only + View Details */}
+                    {/* Actions: View History & Graph on dedicated page */}
                     <div className="w-36 text-right shrink-0 flex items-center justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
-                      {firstUrl && (
-                        <a
-                          href={firstUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title="Open product listing on platform"
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-all shadow-2xs"
-                        >
-                          <span>Link</span>
-                          <ExternalLink className="w-3 h-3 text-slate-500" />
-                        </a>
-                      )}
-
                       <button
                         type="button"
-                        onClick={() => navigate(`/products/${encodeURIComponent(prod.family_id)}`)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-[#079FE0] hover:bg-[#068ec8] text-white text-xs font-bold rounded-xl transition-all shadow-2xs cursor-pointer"
-                        title="View product details page"
+                        onClick={() => navigate(`/analysis/${encodeURIComponent(prod.family_id)}`)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#079FE0] hover:bg-[#068ec8] text-white text-xs font-bold rounded-xl transition-all shadow-2xs cursor-pointer"
+                        title="Open full price trajectory and history graph"
                       >
-                        <span>View</span>
+                        <span>View Graph</span>
                         <ArrowRight className="w-3 h-3" />
                       </button>
 
@@ -470,7 +457,7 @@ export const AnalysisPage: React.FC = () => {
                         type="button"
                         onClick={(e) => toggleExpand(prod.family_id, e)}
                         className="p-1 text-slate-400 hover:text-sky-600 transition-colors"
-                        title={isExpanded ? "Collapse platforms" : "Show all platforms"}
+                        title={isExpanded ? "Collapse platform preview" : "Quick preview platforms"}
                       >
                         {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                       </button>

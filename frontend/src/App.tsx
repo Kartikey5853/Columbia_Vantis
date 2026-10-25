@@ -5,6 +5,7 @@ import HomePage from "./pages/HomePage";
 import ProductDetailsPage from "./pages/ProductDetailsPage";
 import CataloguePage from "./pages/CataloguePage";
 import AnalysisPage from "./pages/AnalysisPage";
+import AnalysisProductDetailsPage from "./pages/AnalysisProductDetailsPage";
 import SystemStatusPage from "./pages/SystemStatusPage";
 import ProfilePage from "./pages/ProfilePage";
 import ProtectedRoute from "./components/layout/ProtectedRoute";
@@ -52,6 +53,14 @@ export const App: React.FC = () => {
           element={
             <ProtectedRoute>
               <AnalysisPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/analysis/:familyId"
+          element={
+            <ProtectedRoute>
+              <AnalysisProductDetailsPage />
             </ProtectedRoute>
           }
         />

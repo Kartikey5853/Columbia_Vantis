@@ -3538,18 +3538,28 @@ class CatalogService:
             platform_stats = []
             all_prices = []
             canonical_platforms = ["amazon", "columbia", "tata", "tata_lux", "adv", "myntra", "ajio"]
+            fam_platforms = fam.get("platforms", []) if fam else []
             for pk in canonical_platforms:
                 if pk in plat_prices_map and plat_prices_map[pk]:
                     p_list = plat_prices_map[pk]
                     all_prices.extend(p_list)
                     plat_meta = PLATFORM_METADATA.get(pk, {})
+                    p_url = None
+                    for fp in fam_platforms:
+                        if fp.get("platform") == pk and fp.get("url"):
+                            p_url = fp["url"]
+                            break
+                    if not p_url:
+                        p_url = plat_meta.get("base_url")
+
                     platform_stats.append({
                         "platform": pk,
                         "platform_name": plat_meta.get("name") or pk.title(),
                         "current_price": p_list[-1],
                         "lowest_price": min(p_list),
                         "highest_price": max(p_list),
-                        "trend": p_list
+                        "trend": p_list,
+                        "url": p_url
                     })
 
             curr_p = all_prices[-1] if all_prices else ((fam.get("lowest_price") if fam else 0.0) or 0.0)

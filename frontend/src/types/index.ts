@@ -196,6 +196,7 @@ export interface PlatformPriceStat {
   lowest_price?: number | null;
   highest_price?: number | null;
   trend: number[];
+  url?: string | null;
 }
 
 export interface ProductPriceHistoryResponse {
