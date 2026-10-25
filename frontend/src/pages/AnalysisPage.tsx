@@ -1,40 +1,27 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  CartesianGrid,
-  Legend,
-} from "recharts";
-import {
   Search,
   ChevronDown,
+  ChevronUp,
   ChevronLeft,
   ChevronRight,
   TrendingUp,
   TrendingDown,
   Sparkles,
   ExternalLink,
-  X,
-  LineChart as LineChartIcon,
-  Database,
   ArrowRight,
   Maximize2,
   Minimize2,
-  Calendar,
-  Clock,
   RefreshCw,
   SlidersHorizontal,
+  RotateCw,
 } from "lucide-react";
 import analyticsService from "../services/analyticsService";
 import bundleService from "../services/bundleService";
 import {
   AnalyticsProductRow,
-  ProductPriceHistoryResponse,
+  AnalyticsPlatformPrice,
 } from "../types";
 import PlatformLogo from "../components/brand/PlatformLogo";
 
@@ -49,57 +36,28 @@ export const AnalysisPage: React.FC = () => {
   const [pageSize, setPageSize] = useState<number>(10);
   const [isLoadingList, setIsLoadingList] = useState<boolean>(true);
 
-  // Date comparison state
-  const [availableDates, setAvailableDates] = useState<string[]>([]);
+  // Scrape comparison state
   const [targetDate, setTargetDate] = useState<string>("");
   const [previousDate, setPreviousDate] = useState<string>("");
   const [changesOnly, setChangesOnly] = useState<boolean>(true);
   const [totalDrops, setTotalDrops] = useState<number>(0);
   const [totalRises, setTotalRises] = useState<number>(0);
-  const [totalStable, setTotalStable] = useState<number>(0);
   const [isSyncingTelemetry, setIsSyncingTelemetry] = useState<boolean>(false);
 
+  // Filters & Search
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [category, setCategory] = useState<string>("All");
   const [platform, setPlatform] = useState<string>("All");
   const [sortBy, setSortBy] = useState<string>("price_change");
 
+  // Expandable row state (similar to View Data)
+  const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
+
   // Fullscreen table toggle
   const [isFullscreenTable, setIsFullscreenTable] = useState<boolean>(false);
 
-  // Active on-screen graph product & history
-  const [activeInlineProduct, setActiveInlineProduct] = useState<AnalyticsProductRow | null>(null);
-  const [inlineHistoryData, setInlineHistoryData] = useState<ProductPriceHistoryResponse | null>(null);
-  const [isLoadingInlineHistory, setIsLoadingInlineHistory] = useState<boolean>(false);
-
-  // Pop-up modal state
-  const [modalProduct, setModalProduct] = useState<AnalyticsProductRow | null>(null);
-  const [historyData, setHistoryData] = useState<ProductPriceHistoryResponse | null>(null);
-  const [isLoadingHistory, setIsLoadingHistory] = useState<boolean>(false);
-  const [selectedRange, setSelectedRange] = useState<string>("ALL");
-
-  const formatDateLabel = (dateStr?: string | null, isLatest: boolean = false) => {
-    if (!dateStr) return "—";
-    try {
-      const parts = dateStr.split("-");
-      if (parts.length === 3) {
-        const year = parseInt(parts[0], 10);
-        const monthIndex = parseInt(parts[1], 10) - 1;
-        const day = parseInt(parts[2], 10);
-        const d = new Date(year, monthIndex, day);
-        const formatted = d.toLocaleDateString("en-IN", {
-          day: "numeric",
-          month: "short",
-          year: "numeric",
-        });
-        return isLatest ? `${formatted} (Latest Scrape)` : formatted;
-      }
-    } catch {}
-    return dateStr;
-  };
-
-  const formatShortDate = (dateStr?: string | null) => {
-    if (!dateStr) return "";
+  const formatDateLabel = (dateStr?: string | null) => {
+    if (!dateStr) return "Latest Scrape";
     try {
       const parts = dateStr.split("-");
       if (parts.length === 3) {
@@ -110,171 +68,51 @@ export const AnalysisPage: React.FC = () => {
         return d.toLocaleDateString("en-IN", {
           day: "numeric",
           month: "short",
+          year: "numeric",
         });
       }
     } catch {}
     return dateStr;
   };
 
-  const flattenedHistoryRows = React.useMemo(() => {
-    if (!historyData || !historyData.history_points) return [];
-    const rows: Array<{
-      date: string;
-      platform: string;
-      platformName: string;
-      price: number;
-      currentPrice: number;
-      diff: number;
-      diffPct: number;
-    }> = [];
+  const formatCurrency = (val?: number | null) => {
+    if (val === null || val === undefined) return "—";
+    return `₹${Math.round(val).toLocaleString("en-IN")}`;
+  };
 
-    const statsMap: Record<string, any> = {};
-    (historyData.platform_stats || []).forEach((ps) => {
-      statsMap[ps.platform] = ps;
-    });
-
-    historyData.history_points.forEach((pt) => {
-      const d = pt.date;
-      Object.keys(pt).forEach((k) => {
-        if (k !== "date" && k !== "raw_date" && pt[k] !== null && pt[k] !== undefined) {
-          const price = Number(pt[k]);
-          const ps = statsMap[k];
-          const curr = ps?.current_price || price;
-          const diff = curr - price;
-          const diffPct = price > 0 ? Math.round(((curr - price) / price) * 100) : 0;
-          rows.push({
-            date: d,
-            platform: k,
-            platformName: ps?.platform_name || k.toUpperCase(),
-            price,
-            currentPrice: curr,
-            diff,
-            diffPct,
-          });
-        }
-      });
-    });
-
-    return rows.reverse();
-  }, [historyData]);
-
-  // Initial mount: check pre-warmed bundle and available dates
-  useEffect(() => {
-    const cached = bundleService.getCachedBundle();
-    if (cached?.analytics) {
-      if (cached.analytics.available_dates?.length) {
-        setAvailableDates(cached.analytics.available_dates);
-      }
-      if (cached.analytics.target_date) setTargetDate(cached.analytics.target_date);
-      if (cached.analytics.previous_date) setPreviousDate(cached.analytics.previous_date);
-      if (cached.analytics.total_price_drops !== undefined) setTotalDrops(cached.analytics.total_price_drops);
-      if (cached.analytics.total_price_rises !== undefined) setTotalRises(cached.analytics.total_price_rises);
-      if (cached.analytics.total_stable !== undefined) setTotalStable(cached.analytics.total_stable);
-    }
-
-    analyticsService
-      .getAvailableDates()
-      .then((datesData) => {
-        if (datesData.available_dates?.length) {
-          setAvailableDates(datesData.available_dates);
-          setTargetDate((prev) => prev || datesData.latest_date);
-          setPreviousDate((prev) => prev || datesData.default_previous_date);
-        }
-      })
-      .catch(() => {});
-  }, []);
-
-  // Fetch when filters change
+  // Initial load
   useEffect(() => {
     loadProductList(1);
-  }, [category, platform, sortBy, targetDate, previousDate, changesOnly]);
-
-  const selectInlineProduct = async (prod: AnalyticsProductRow, range: string = selectedRange) => {
-    setActiveInlineProduct(prod);
-    setIsLoadingInlineHistory(true);
-    try {
-      const hist = await analyticsService.getPriceHistory(prod.family_id, range);
-      setInlineHistoryData(hist);
-    } catch {
-      // Keep existing
-    } finally {
-      setIsLoadingInlineHistory(false);
-    }
-  };
+  }, [category, platform, sortBy, changesOnly]);
 
   const loadProductList = async (
     pageToLoad: number = 1,
-    overrideTarget?: string,
-    overridePrev?: string,
     overrideChangesOnly?: boolean
   ) => {
     setIsLoadingList(true);
-
-    const activeTarget = overrideTarget !== undefined ? overrideTarget : targetDate;
-    const activePrev = overridePrev !== undefined ? overridePrev : previousDate;
     const activeChangesOnly = overrideChangesOnly !== undefined ? overrideChangesOnly : changesOnly;
-
-    const isDefault =
-      pageToLoad === 1 &&
-      !searchTerm.trim() &&
-      category === "All" &&
-      platform === "All" &&
-      sortBy === "price_change" &&
-      activeChangesOnly === true &&
-      (!activeTarget || activeTarget === availableDates[0]) &&
-      (!activePrev || activePrev === availableDates[1]);
-
-    // Instant bootstrap via pre-warmed bundle
-    if (isDefault) {
-      const cached = bundleService.getCachedBundle();
-      if (cached && cached.analytics && cached.analytics.products?.length > 0) {
-        const items = cached.analytics.products;
-        setProducts(items);
-        setTotalRecords(cached.analytics.total_records);
-        setTotalPages(cached.analytics.total_pages);
-        setCurrentPage(cached.analytics.page || 1);
-        if (cached.analytics.target_date) setTargetDate(cached.analytics.target_date);
-        if (cached.analytics.previous_date) setPreviousDate(cached.analytics.previous_date);
-        if (cached.analytics.available_dates?.length) setAvailableDates(cached.analytics.available_dates);
-        if (cached.analytics.total_price_drops !== undefined) setTotalDrops(cached.analytics.total_price_drops);
-        if (cached.analytics.total_price_rises !== undefined) setTotalRises(cached.analytics.total_price_rises);
-        if (cached.analytics.total_stable !== undefined) setTotalStable(cached.analytics.total_stable);
-        setIsLoadingList(false);
-        selectInlineProduct(items[0], selectedRange);
-        return;
-      }
-    }
 
     try {
       const data = await analyticsService.getProducts({
-        target_date: activeTarget || undefined,
-        previous_date: activePrev || undefined,
         changes_only: activeChangesOnly,
-        search: searchTerm.trim() || undefined,
         category: category !== "All" ? category : undefined,
         platform: platform !== "All" ? platform : undefined,
         sort_by: sortBy,
+        search: searchTerm.trim() || undefined,
         page: pageToLoad,
         page_size: pageSize,
       });
 
-      const items = data.products || [];
-      setProducts(items);
-      setTotalRecords(data.total_records);
-      setTotalPages(data.total_pages);
-      setCurrentPage(data.page);
+      setProducts(data.products || []);
+      setTotalRecords(data.total_records || 0);
+      setTotalPages(data.total_pages || 1);
+      setCurrentPage(data.page || 1);
       if (data.target_date) setTargetDate(data.target_date);
       if (data.previous_date) setPreviousDate(data.previous_date);
-      if (data.available_dates?.length) setAvailableDates(data.available_dates);
       if (data.total_price_drops !== undefined) setTotalDrops(data.total_price_drops);
       if (data.total_price_rises !== undefined) setTotalRises(data.total_price_rises);
-      if (data.total_stable !== undefined) setTotalStable(data.total_stable);
-
-      if (items.length > 0) {
-        selectInlineProduct(items[0], selectedRange);
-      }
-    } catch {
-      // Keep existing list on failure
+    } catch (err) {
+      console.error("Failed to load analytics products", err);
     } finally {
       setIsLoadingList(false);
     }
@@ -289,76 +127,22 @@ export const AnalysisPage: React.FC = () => {
     setIsSyncingTelemetry(true);
     try {
       await analyticsService.syncTelemetry();
-      const datesRes = await analyticsService.getAvailableDates();
-      if (datesRes.available_dates?.length) {
-        setAvailableDates(datesRes.available_dates);
-        setTargetDate(datesRes.latest_date);
-        setPreviousDate(datesRes.default_previous_date);
-        await loadProductList(1, datesRes.latest_date, datesRes.default_previous_date);
-      }
-    } catch (e) {
-      console.error("Telemetry sync failed", e);
+      await loadProductList(1);
+    } catch (err) {
+      console.error("Telemetry sync failed", err);
     } finally {
       setIsSyncingTelemetry(false);
     }
   };
 
-  // Open Pop-up Graph Modal
-  const openGraphModal = async (prod: AnalyticsProductRow) => {
-    setModalProduct(prod);
-    setIsLoadingHistory(true);
-    try {
-      const hist = await analyticsService.getPriceHistory(prod.family_id, selectedRange);
-      setHistoryData(hist);
-    } catch {
-      // Fallback
-    } finally {
-      setIsLoadingHistory(false);
-    }
-  };
-
-  const closeGraphModal = () => {
-    setModalProduct(null);
-    setHistoryData(null);
-  };
-
-  const handleRangeChange = async (r: string) => {
-    setSelectedRange(r);
-    if (activeInlineProduct) {
-      selectInlineProduct(activeInlineProduct, r);
-    }
-    if (modalProduct) {
-      setIsLoadingHistory(true);
-      try {
-        const hist = await analyticsService.getPriceHistory(modalProduct.family_id, r);
-        setHistoryData(hist);
-      } catch {
-        // Fallback
-      } finally {
-        setIsLoadingHistory(false);
-      }
-    }
-  };
-
-  // Color mapping for 7 platforms
-  const platformColors: Record<string, string> = {
-    amazon: "#0b192c",
-    columbia: "#079FE0",
-    tata: "#b81f33",
-    tata_lux: "#8b5a2b",
-    myntra: "#e11d48",
-    adv: "#059669",
-    ajio: "#475569",
-  };
-
-  const formatCurrency = (val: number | null | undefined) => {
-    if (val === null || val === undefined) return "—";
-    return `₹${val.toLocaleString("en-IN")}`;
+  const toggleExpand = (familyId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setExpandedRowId((prev) => (prev === familyId ? null : familyId));
   };
 
   return (
     <div className="h-full flex flex-col overflow-hidden max-w-7xl w-full mx-auto px-4 sm:px-8 py-3 space-y-3">
-      {/* Page Title & Count (Structured identically to View Data) */}
+      {/* Page Title & Count */}
       <div className="shrink-0 space-y-1">
         <div className="flex items-center gap-3">
           <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
@@ -369,74 +153,33 @@ export const AnalysisPage: React.FC = () => {
           </span>
         </div>
         <p className="text-xs sm:text-sm text-slate-500 font-medium">
-          Identify real selling price shifts across all platforms and checkpoints. Calculated strictly against previous selling prices (not MRP).
+          Real selling price shifts compared strictly between current and previous scrapes across all platforms.
         </p>
       </div>
 
-      {/* DATE COMPARISON INTELLIGENCE BAR */}
+      {/* SCRAPE COMPARISON BAR (Simplified: Previous Scrape vs Current Changes) */}
       <div className="shrink-0 bg-gradient-to-r from-sky-50/80 via-white to-slate-50 border border-sky-100 rounded-2xl p-3 shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
-          {/* Target Date (Latest Scraped Data) */}
-          <div className="flex items-center gap-2">
-            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
-              <Calendar className="w-3.5 h-3.5 text-[#079FE0]" />
-              Data Date:
+          {/* Comparison Status Badge */}
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white border border-sky-200 shadow-2xs text-xs">
+            <RotateCw className="w-3.5 h-3.5 text-[#079FE0]" />
+            <span className="font-extrabold text-slate-900">
+              Current Scrape ({formatDateLabel(targetDate)})
             </span>
-            <div className="relative">
-              <select
-                value={targetDate}
-                onChange={(e) => {
-                  const newT = e.target.value;
-                  setTargetDate(newT);
-                  // Auto-adjust previous date if needed
-                  const tIdx = availableDates.indexOf(newT);
-                  if (tIdx >= 0 && tIdx + 1 < availableDates.length) {
-                    setPreviousDate(availableDates[tIdx + 1]);
-                  }
-                }}
-                className="appearance-none bg-white border border-sky-200 text-[#079FE0] rounded-xl px-3 py-1.5 pr-7 text-xs font-black shadow-2xs focus:outline-none focus:ring-2 focus:ring-[#079FE0]/20 cursor-pointer"
-              >
-                {availableDates.map((d, idx) => (
-                  <option key={d} value={d}>
-                    {formatDateLabel(d, idx === 0)}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown className="w-3.5 h-3.5 text-[#079FE0] absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
-            </div>
-          </div>
-
-          <span className="text-xs font-bold text-slate-400">vs</span>
-
-          {/* Previous Date to Compare Against */}
-          <div className="flex items-center gap-2">
-            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
-              <Clock className="w-3.5 h-3.5 text-slate-400" />
-              Compare With:
+            <span className="text-slate-400 font-bold">vs</span>
+            <span className="font-bold text-slate-600">
+              Previous Scrape ({formatDateLabel(previousDate)})
             </span>
-            <div className="relative">
-              <select
-                value={previousDate}
-                onChange={(e) => setPreviousDate(e.target.value)}
-                className="appearance-none bg-white border border-slate-200 text-slate-800 rounded-xl px-3 py-1.5 pr-7 text-xs font-bold shadow-2xs focus:outline-none focus:ring-2 focus:ring-[#079FE0]/20 cursor-pointer"
-              >
-                <option value="all_time">All Time (Lifetime History)</option>
-                {availableDates
-                  .filter((d) => d !== targetDate)
-                  .map((d) => (
-                    <option key={d} value={d}>
-                      {formatDateLabel(d)}
-                    </option>
-                  ))}
-              </select>
-              <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
-            </div>
           </div>
 
           {/* Changed Prices Only Toggle */}
           <button
             type="button"
-            onClick={() => setChangesOnly(!changesOnly)}
+            onClick={() => {
+              const nextState = !changesOnly;
+              setChangesOnly(nextState);
+              loadProductList(1, nextState);
+            }}
             className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border shadow-2xs ${
               changesOnly
                 ? "bg-[#079FE0] text-white border-[#079FE0]"
@@ -448,7 +191,7 @@ export const AnalysisPage: React.FC = () => {
           </button>
         </div>
 
-        {/* Telemetry Stats & Sync Button */}
+        {/* Drops & Rises Summary Counters + Sync */}
         <div className="flex items-center gap-2 shrink-0">
           <div className="flex items-center gap-1.5 text-[11px] font-bold">
             <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
@@ -466,31 +209,25 @@ export const AnalysisPage: React.FC = () => {
             onClick={handleSyncTelemetry}
             disabled={isSyncingTelemetry}
             className="p-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 transition-colors disabled:opacity-50 cursor-pointer shadow-2xs"
-            title="Sync latest scrape telemetry from Supabase"
+            title="Sync latest scrape telemetry"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isSyncingTelemetry ? "animate-spin text-[#079FE0]" : ""}`} />
           </button>
         </div>
       </div>
 
-      {/* Filter and Control Bar (Fixed shrink-0) */}
-      <div className="shrink-0 bg-white rounded-2xl border border-slate-200/90 shadow-2xs p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      {/* FILTER & SEARCH BAR */}
+      <div className="shrink-0 bg-white rounded-2xl border border-slate-200/90 p-3 shadow-2xs flex flex-wrap items-center justify-between gap-3">
         {/* Search */}
-        <form onSubmit={handleSearchSubmit} className="relative flex-1 max-w-md">
+        <form onSubmit={handleSearchSubmit} className="flex-1 min-w-[220px] max-w-md relative">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
             type="text"
+            placeholder="Search by title, style code, SKU..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Search by product, style code or SKU..."
-            className="w-full pl-9 pr-16 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-[#079FE0]/20 focus:border-[#079FE0] text-slate-900 placeholder:text-slate-400 font-semibold"
+            className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm font-semibold text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#079FE0]/20 focus:border-[#079FE0] transition-all"
           />
-          <button
-            type="submit"
-            className="absolute right-1 top-1/2 -translate-y-1/2 px-2.5 py-1 bg-[#079FE0] hover:bg-[#068ec8] text-white text-xs font-bold rounded-lg transition-colors cursor-pointer"
-          >
-            Filter
-          </button>
         </form>
 
         {/* Dropdowns */}
@@ -500,16 +237,13 @@ export const AnalysisPage: React.FC = () => {
             <select
               value={category}
               onChange={(e) => setCategory(e.target.value)}
-              className="appearance-none bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 pr-7 text-xs font-bold text-slate-700 hover:border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#079FE0]/20 cursor-pointer"
+              className="appearance-none bg-slate-50 border border-slate-200 text-slate-700 rounded-xl px-3 py-1.5 pr-7 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-[#079FE0]/20 cursor-pointer"
             >
               <option value="All">All Categories</option>
-              <option value="Jackets">Jackets</option>
-              <option value="Shoes & Boots">Shoes & Boots</option>
-              <option value="Fleece">Fleece</option>
-              <option value="Pants & Shorts">Pants & Shorts</option>
-              <option value="Shirts">Shirts</option>
-              <option value="Backpacks & Bags">Backpacks & Bags</option>
+              <option value="Apparel">Apparel</option>
+              <option value="Footwear">Footwear</option>
               <option value="Accessories">Accessories</option>
+              <option value="Equipment">Equipment</option>
             </select>
             <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
           </div>
@@ -519,16 +253,16 @@ export const AnalysisPage: React.FC = () => {
             <select
               value={platform}
               onChange={(e) => setPlatform(e.target.value)}
-              className="appearance-none bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 pr-7 text-xs font-bold text-slate-700 hover:border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#079FE0]/20 cursor-pointer"
+              className="appearance-none bg-slate-50 border border-slate-200 text-slate-700 rounded-xl px-3 py-1.5 pr-7 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-[#079FE0]/20 cursor-pointer"
             >
-              <option value="All">All Platforms (7)</option>
+              <option value="All">All Platforms</option>
               <option value="amazon">Amazon</option>
-              <option value="columbia">Columbia India</option>
+              <option value="myntra">Myntra</option>
+              <option value="ajio">AJIO</option>
+              <option value="columbia">Columbia</option>
+              <option value="adv">Adventuras</option>
               <option value="tata">Tata CLiQ</option>
               <option value="tata_lux">Tata CLiQ Luxury</option>
-              <option value="myntra">Myntra</option>
-              <option value="adv">Adventuras</option>
-              <option value="ajio">AJIO</option>
             </select>
             <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
           </div>
@@ -538,13 +272,11 @@ export const AnalysisPage: React.FC = () => {
             <select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value)}
-              className="appearance-none bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 pr-7 text-xs font-bold text-slate-700 hover:border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#079FE0]/20 cursor-pointer"
+              className="appearance-none bg-slate-50 border border-slate-200 text-slate-700 rounded-xl px-3 py-1.5 pr-7 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-[#079FE0]/20 cursor-pointer"
             >
               <option value="price_change">Price Movements</option>
-              <option value="price_drop">Biggest Price Drops</option>
-              <option value="price_rise">Biggest Price Rises</option>
-              <option value="price_asc">Lowest Current Price</option>
-              <option value="price_desc">Highest Current Price</option>
+              <option value="price_asc">Price: Low to High</option>
+              <option value="price_desc">Price: High to Low</option>
               <option value="name">Product Name</option>
             </select>
             <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -567,7 +299,7 @@ export const AnalysisPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Main Product Price Change List (Supports Fullscreen Table) */}
+      {/* MAIN PRODUCT PRICE ANALYSIS TABLE */}
       <div
         className={
           isFullscreenTable
@@ -595,127 +327,239 @@ export const AnalysisPage: React.FC = () => {
           </div>
         )}
 
-        {/* Table Header (Fixed shrink-0) */}
+        {/* Table Header (Price Shift % column removed) */}
         <div className="shrink-0 p-3.5 sm:px-6 bg-slate-50/80 border-b border-slate-200/80 flex items-center justify-between text-xs font-bold text-slate-500 uppercase tracking-wider">
           <div className="flex-1">Product &amp; Style Code</div>
-          <div className="w-32 text-right">
-            Price on {previousDate === "all_time" ? "Initial Date" : (formatShortDate(previousDate) || "Previous")}
-          </div>
-          <div className="w-32 text-right">
-            Price on {formatShortDate(targetDate) || "Today"}
-          </div>
-          <div className="w-32 text-right">Price Shift (% vs Prior)</div>
+          <div className="w-28 text-center hidden md:block">Platforms</div>
+          <div className="w-32 text-right">Previous Scrape Price</div>
+          <div className="w-32 text-right">Current Price</div>
+          <div className="w-36 text-right">Actions</div>
         </div>
 
-        {/* Scrollable Component Body (flex-1 overflow-y-auto) */}
+        {/* Scrollable Component Body */}
         <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
           {isLoadingList ? (
             <div className="py-24 text-center space-y-3">
               <div className="w-8 h-8 border-3 border-sky-200 border-t-[#079FE0] rounded-full animate-spin mx-auto" />
-              <p className="text-xs font-semibold text-slate-500">Querying verified price movements across dates...</p>
+              <p className="text-xs font-semibold text-slate-500">Querying verified price movements across scrapes...</p>
             </div>
           ) : products.length === 0 ? (
             <div className="py-20 text-center space-y-3 max-w-md mx-auto px-4">
               <Sparkles className="w-8 h-8 text-[#079FE0] mx-auto" />
-              <h3 className="font-bold text-slate-800 text-sm">No Price Changes Between Selected Dates</h3>
+              <h3 className="font-bold text-slate-800 text-sm">No Price Changes Found</h3>
               <p className="text-xs text-slate-500 leading-relaxed">
-                No price shifts were detected between {formatDateLabel(previousDate)} and {formatDateLabel(targetDate)} for the active filters. Try selecting a different prior date or unticking "Only Changed Prices" to view all recorded products.
+                No selling price shifts were detected between the current and previous scrape for active filters. Try un-ticking "Only Changed Prices" to view all catalogue listings.
               </p>
             </div>
           ) : (
             products.map((prod) => {
-              const isDrop = prod.price_change_percent < 0;
-              const isRise = prod.price_change_percent > 0;
-              const isSelectedRow = activeInlineProduct?.family_id === prod.family_id;
+              const isExpanded = expandedRowId === prod.family_id;
+              const hasMultiplePlatforms = prod.platforms && prod.platforms.length > 0;
+              const firstUrl = prod.platforms?.find((p) => p.url)?.url;
 
               return (
-                <div
-                  key={prod.family_id}
-                  onClick={() => openGraphModal(prod)}
-                  className={`p-3.5 sm:px-6 flex items-center justify-between gap-4 transition-colors cursor-pointer group hover:bg-sky-50/50 ${
-                    isSelectedRow ? "bg-sky-50/60 border-l-4 border-l-[#079FE0]" : ""
-                  }`}
-                >
-                  {/* Left: Product Thumbnail & Identifiers */}
-                  <div className="flex items-center gap-3.5 flex-1 min-w-0">
-                    <div className="w-12 h-12 rounded-xl bg-slate-50 border border-slate-100 shrink-0 overflow-hidden p-1 flex items-center justify-center">
-                      <img
-                        src={prod.image_url || "/vantis_logo.png"}
-                        alt={prod.title}
-                        className="w-full h-full object-contain"
-                        loading="lazy"
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).src = "/vantis_logo.png";
-                        }}
-                      />
-                    </div>
-                    <div className="min-w-0 space-y-0.5">
-                      <h3 className="text-xs sm:text-sm font-bold text-slate-900 group-hover:text-[#079FE0] transition-colors line-clamp-1">
-                        {prod.title}
-                      </h3>
-                      <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                        {prod.style && (
-                          <span className="font-mono font-bold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded text-[10px]">
-                            {prod.style}
+                <div key={prod.family_id} className="transition-colors hover:bg-slate-50/60">
+                  {/* Main Product Row */}
+                  <div
+                    onClick={() => setExpandedRowId(isExpanded ? null : prod.family_id)}
+                    className="p-3.5 sm:px-6 flex items-center justify-between gap-4 cursor-pointer"
+                  >
+                    {/* Left: Product Thumbnail & Identifiers */}
+                    <div className="flex items-center gap-3.5 flex-1 min-w-0">
+                      <div className="w-12 h-12 rounded-xl bg-slate-50 border border-slate-100 shrink-0 overflow-hidden p-1 flex items-center justify-center">
+                        <img
+                          src={prod.image_url || "/vantis_logo.png"}
+                          alt={prod.title}
+                          className="w-full h-full object-contain"
+                          loading="lazy"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).src = "/vantis_logo.png";
+                          }}
+                        />
+                      </div>
+                      <div className="min-w-0 space-y-0.5">
+                        <h3 className="text-xs sm:text-sm font-bold text-slate-900 hover:text-[#079FE0] transition-colors line-clamp-1">
+                          {prod.title}
+                        </h3>
+                        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                          {prod.style && (
+                            <span className="font-mono font-bold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded text-[10px]">
+                              {prod.style}
+                            </span>
+                          )}
+                          <span className="text-slate-400 font-medium text-[10px]">
+                            {prod.category} • {prod.gender}
                           </span>
-                        )}
-                        <span className="text-slate-400 font-medium text-[10px]">
-                          {prod.category} • {prod.gender}
-                        </span>
-                        <span className="text-[#079FE0] font-bold text-[10px] bg-sky-50 px-1.5 py-0.5 rounded">
-                          {prod.platforms_count} platforms
-                        </span>
+                          <span className="text-[#079FE0] font-bold text-[10px] bg-sky-50 px-1.5 py-0.5 rounded">
+                            {prod.platforms_count || prod.platforms?.length || 1} platforms
+                          </span>
+                        </div>
                       </div>
+                    </div>
+
+                    {/* Platforms Pill Preview (Direct links where available) */}
+                    <div className="w-28 text-center hidden md:flex items-center justify-center gap-1 shrink-0 flex-wrap">
+                      {(prod.platforms || []).slice(0, 4).map((plat) => (
+                        <span
+                          key={plat.platform}
+                          title={`${plat.platform_name}: ${formatCurrency(plat.price)}`}
+                          className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                            plat.is_changed
+                              ? "bg-amber-100 text-amber-800 border border-amber-300"
+                              : "bg-slate-100 text-slate-600"
+                          }`}
+                        >
+                          {plat.platform_name}
+                        </span>
+                      ))}
+                      {(prod.platforms?.length || 0) > 4 && (
+                        <span className="text-[9px] text-slate-400 font-bold">
+                          +{prod.platforms!.length - 4}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Previous Price */}
+                    <div className="w-32 text-right shrink-0">
+                      <span className="text-xs font-bold text-slate-700 block">
+                        {prod.previous_price && prod.previous_price > 0
+                          ? formatCurrency(prod.previous_price)
+                          : "—"}
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-medium block">
+                        {prod.change_platform ? `${prod.change_platform.toUpperCase()} Prior` : "Previous Scrape"}
+                      </span>
+                    </div>
+
+                    {/* Current Scrape Price */}
+                    <div className="w-32 text-right shrink-0">
+                      <span className="text-sm font-black text-slate-900 block">
+                        {formatCurrency(prod.lowest_price)}
+                      </span>
+                      <span className="text-[10px] font-bold text-[#079FE0] uppercase tracking-wider block">
+                        Current Scrape
+                      </span>
+                    </div>
+
+                    {/* Actions: Open Link from here only + View Details */}
+                    <div className="w-36 text-right shrink-0 flex items-center justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
+                      {firstUrl && (
+                        <a
+                          href={firstUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="Open product listing on platform"
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-all shadow-2xs"
+                        >
+                          <span>Link</span>
+                          <ExternalLink className="w-3 h-3 text-slate-500" />
+                        </a>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/products/${encodeURIComponent(prod.family_id)}`)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-[#079FE0] hover:bg-[#068ec8] text-white text-xs font-bold rounded-xl transition-all shadow-2xs cursor-pointer"
+                        title="View product details page"
+                      >
+                        <span>View</span>
+                        <ArrowRight className="w-3 h-3" />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={(e) => toggleExpand(prod.family_id, e)}
+                        className="p-1 text-slate-400 hover:text-sky-600 transition-colors"
+                        title={isExpanded ? "Collapse platforms" : "Show all platforms"}
+                      >
+                        {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                      </button>
                     </div>
                   </div>
 
-                  {/* Previous Price */}
-                  <div className="w-32 text-right shrink-0">
-                    <span className="text-xs font-bold text-slate-700 block">
-                      {prod.previous_price && prod.previous_price > 0
-                        ? formatCurrency(prod.previous_price)
-                        : "—"}
-                    </span>
-                    <span className="text-[10px] text-slate-400 font-medium block">
-                      {previousDate === "all_time" ? "Initial Sale Price" : (prod.change_platform ? `${prod.change_platform.toUpperCase()} Before` : "Previous")}
-                    </span>
-                  </div>
+                  {/* Expanded Platform Breakdown (Showing ALL Platforms even if price didn't change) */}
+                  {isExpanded && (
+                    <div className="px-4 sm:px-6 py-4 bg-sky-50/40 border-t border-sky-100 space-y-3 animate-in fade-in">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                          Platform Prices &amp; Direct Store Links ({prod.platforms?.length || 0} active stores)
+                        </span>
+                        <span className="text-[11px] text-slate-400">
+                          Showing all available platforms recorded for this style
+                        </span>
+                      </div>
 
-                  {/* Target Date Price */}
-                  <div className="w-32 text-right shrink-0">
-                    <span className="text-sm font-black text-slate-900 block">
-                      {formatCurrency(prod.lowest_price)}
-                    </span>
-                    <span className="text-[10px] font-bold text-[#079FE0] uppercase tracking-wider block">
-                      {formatShortDate(targetDate) || "Current"}
-                    </span>
-                  </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                        {(prod.platforms || []).map((plat) => {
+                          const hasChanged = plat.is_changed;
+                          return (
+                            <div
+                              key={plat.platform}
+                              className={`p-3 bg-white rounded-xl border space-y-2 shadow-2xs ${
+                                hasChanged ? "border-amber-300 ring-1 ring-amber-200" : "border-slate-200/80"
+                              }`}
+                            >
+                              <div className="flex items-center justify-between">
+                                <span className="font-extrabold text-xs text-slate-900">
+                                  {plat.platform_name}
+                                </span>
+                                {hasChanged && (
+                                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">
+                                    Price Shift
+                                  </span>
+                                )}
+                              </div>
 
-                  {/* Price Status % Badge */}
-                  <div className="w-32 text-right shrink-0 flex justify-end">
-                    {isDrop ? (
-                      <div className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                        <TrendingDown className="w-3.5 h-3.5 shrink-0" />
-                        <span>{Math.abs(prod.price_change_percent)}% Drop</span>
+                              {/* Current vs Previous Price */}
+                              <div className="flex items-baseline justify-between">
+                                <div>
+                                  <div className="text-[10px] text-slate-400 uppercase font-semibold">Current</div>
+                                  <div className="font-black text-sm text-slate-900">
+                                    {formatCurrency(plat.price)}
+                                  </div>
+                                </div>
+                                <div className="text-right">
+                                  <div className="text-[10px] text-slate-400 uppercase font-semibold">Previous</div>
+                                  <div className="font-bold text-xs text-slate-600">
+                                    {formatCurrency(plat.previous_price)}
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Status & Open Link */}
+                              <div className="pt-1 border-t border-slate-100 flex items-center justify-between text-[11px]">
+                                <span className="text-emerald-700 font-semibold text-[10px]">
+                                  {plat.availability_status || "In stock"}
+                                </span>
+
+                                {plat.url ? (
+                                  <a
+                                    href={plat.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="inline-flex items-center gap-1 text-[#079FE0] hover:text-[#068ec8] font-bold text-[11px] hover:underline"
+                                  >
+                                    <span>Open Store</span>
+                                    <ExternalLink className="w-3 h-3" />
+                                  </a>
+                                ) : (
+                                  <span className="text-slate-300 italic text-[10px]">No direct link</span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
-                    ) : isRise ? (
-                      <div className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200">
-                        <TrendingUp className="w-3.5 h-3.5 shrink-0" />
-                        <span>+{prod.price_change_percent}% Rise</span>
-                      </div>
-                    ) : (
-                      <div className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200">
-                        <span>Stable</span>
-                      </div>
-                    )}
-                  </div>
+                    </div>
+                  )}
                 </div>
               );
             })
           )}
         </div>
 
-        {/* Pagination Bar (Fixed shrink-0) */}
+        {/* Pagination Bar */}
         {totalPages > 1 && (
           <div className="shrink-0 p-3 sm:px-6 bg-slate-50/80 border-t border-slate-200/80 flex items-center justify-between text-xs text-slate-600 font-semibold">
             <span>
@@ -740,305 +584,6 @@ export const AnalysisPage: React.FC = () => {
           </div>
         )}
       </div>
-
-      {/* POP-UP GRAPH MODAL */}
-      {modalProduct && (
-        <div
-          onClick={closeGraphModal}
-          className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 sm:p-6 overflow-y-auto animate-in fade-in duration-200"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-4xl w-full max-h-[92vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200"
-          >
-            {/* Modal Header */}
-            <div className="p-6 border-b border-slate-200 flex items-start justify-between gap-4 bg-slate-50/50">
-              <div className="flex items-start gap-4 min-w-0">
-                <div className="w-16 h-16 rounded-2xl bg-white border border-slate-200/80 shrink-0 overflow-hidden p-1 flex items-center justify-center shadow-xs">
-                  <img
-                    src={modalProduct.image_url || "/vantis_logo.png"}
-                    alt={modalProduct.title}
-                    className="w-full h-full object-contain"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).src = "/vantis_logo.png";
-                    }}
-                  />
-                </div>
-                <div className="space-y-1 min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-xs font-bold text-sky-700 bg-sky-100/70 px-2 py-0.5 rounded-full">
-                      {modalProduct.category}
-                    </span>
-                    {modalProduct.style && (
-                      <span className="font-mono text-xs font-bold text-slate-700 bg-slate-200/70 px-2 py-0.5 rounded-full">
-                        Style: {modalProduct.style}
-                      </span>
-                    )}
-                  </div>
-                  <h2 className="text-base sm:text-lg font-black text-slate-900 truncate">
-                    {modalProduct.title}
-                  </h2>
-                  <p className="text-xs text-slate-500 font-medium">
-                    Price on {formatShortDate(targetDate) || "Latest"}:{" "}
-                    <span className="font-bold text-slate-900">
-                      {formatCurrency(modalProduct.lowest_price)}
-                    </span>{" "}
-                    {modalProduct.previous_price && (
-                      <>
-                        • Prior on {formatShortDate(previousDate) || "Previous"}:{" "}
-                        <span className="font-bold text-slate-700">
-                          {formatCurrency(modalProduct.previous_price)}
-                        </span>
-                      </>
-                    )}{" "}
-                    • Recorded Range: {formatCurrency(modalProduct.min_recorded_price)} – {formatCurrency(modalProduct.max_recorded_price)}
-                  </p>
-                </div>
-              </div>
-
-              {/* Close Button */}
-              <button
-                onClick={closeGraphModal}
-                className="w-8 h-8 rounded-full border border-slate-200 bg-white hover:bg-slate-100 text-slate-500 hover:text-slate-800 flex items-center justify-center transition-colors cursor-pointer shrink-0"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Modal Body */}
-            <div className="p-6 space-y-6 overflow-y-auto flex-1">
-              {/* Range Filters */}
-              <div className="flex items-center justify-between gap-4">
-                <div className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                  Timeline History
-                </div>
-                <div className="flex items-center bg-slate-100 p-1 rounded-xl gap-1">
-                  {["1W", "1M", "3M", "6M", "ALL"].map((r) => (
-                    <button
-                      key={r}
-                      onClick={() => handleRangeChange(r)}
-                      className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                        selectedRange === r
-                          ? "bg-white text-slate-900 shadow-xs"
-                          : "text-slate-500 hover:text-slate-800"
-                      }`}
-                    >
-                      {r}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Interactive Line Chart */}
-              <div className="bg-slate-50/50 p-4 rounded-2xl border border-slate-200/80">
-                {isLoadingHistory ? (
-                  <div className="h-64 flex items-center justify-center">
-                    <div className="w-6 h-6 border-2 border-sky-200 border-t-sky-500 rounded-full animate-spin" />
-                  </div>
-                ) : historyData && historyData.history_points && historyData.history_points.length > 1 ? (
-                  <div className="h-64 w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart
-                        data={historyData.history_points}
-                        margin={{ top: 10, right: 20, left: 0, bottom: 0 }}
-                      >
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-                        <XAxis
-                          dataKey="date"
-                          stroke="#94a3b8"
-                          fontSize={11}
-                          tickLine={false}
-                          axisLine={{ stroke: "#cbd5e1" }}
-                        />
-                        <YAxis
-                          stroke="#94a3b8"
-                          fontSize={11}
-                          tickLine={false}
-                          axisLine={false}
-                          tickFormatter={(val) => `₹${val.toLocaleString("en-IN")}`}
-                          domain={["auto", "auto"]}
-                        />
-                        <Tooltip
-                          content={({ active, payload, label }) => {
-                            if (!active || !payload || !payload.length) return null;
-                            return (
-                              <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-xl text-xs space-y-1.5">
-                                <div className="font-bold text-slate-800 border-b border-slate-100 pb-1">
-                                  {label}
-                                </div>
-                                {payload.map((item: any, idx: number) => (
-                                  <div key={idx} className="flex items-center justify-between gap-4">
-                                    <span className="font-medium text-slate-600 capitalize">
-                                      {item.name}:
-                                    </span>
-                                    <span className="font-black text-slate-900">
-                                      ₹{Number(item.value).toLocaleString("en-IN")}
-                                    </span>
-                                  </div>
-                                ))}
-                              </div>
-                            );
-                          }}
-                        />
-                        <Legend
-                          wrapperStyle={{ paddingTop: "12px", fontSize: "11px", fontWeight: "600" }}
-                        />
-                        {/* Lines per platform */}
-                        {historyData.platform_stats.map((ps) => (
-                          <Line
-                            key={ps.platform}
-                            type="monotone"
-                            dataKey={ps.platform}
-                            name={ps.platform_name}
-                            stroke={platformColors[ps.platform] || "#64748b"}
-                            strokeWidth={2.5}
-                            dot={{ r: 4, strokeWidth: 2, fill: "#fff" }}
-                            activeDot={{ r: 6 }}
-                            connectNulls
-                          />
-                        ))}
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
-                ) : (
-                  <div className="h-44 flex flex-col items-center justify-center text-slate-500 space-y-2 p-6 bg-white rounded-xl border border-slate-200">
-                    <LineChartIcon className="w-7 h-7 stroke-1 text-slate-400" />
-                    <p className="text-xs font-bold text-slate-800">Telemetry History</p>
-                    <p className="text-[11px] text-slate-500 text-center max-w-sm">
-                      Detailed platform price trajectory will render across checkpoints as recorded.
-                    </p>
-                  </div>
-                )}
-              </div>
-
-              {/* Platform Breakdown Cards */}
-              <div className="space-y-3">
-                <div className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                  Platform Real-time Price Comparison
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                  {historyData?.platform_stats && historyData.platform_stats.length > 0 ? (
-                    historyData.platform_stats.map((stat) => (
-                      <div
-                        key={stat.platform}
-                        className="p-3.5 rounded-2xl border border-slate-200 bg-white shadow-2xs space-y-2"
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <PlatformLogo platform={stat.platform} size="sm" />
-                            <span className="text-xs font-bold text-slate-800">{stat.platform_name}</span>
-                          </div>
-                          <span className="text-xs font-black text-slate-900">
-                            {formatCurrency(stat.current_price)}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1 border-t border-slate-100">
-                          <span>Low: {formatCurrency(stat.lowest_price)}</span>
-                          <span>High: {formatCurrency(stat.highest_price)}</span>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="col-span-full py-4 text-center text-xs text-slate-400 font-medium">
-                      Platform statistics will display after history loading finishes.
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Tabular Detail of All Historical Recorded Prices */}
-              <div className="space-y-3 pt-2">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                    Tabular Detail of All Historical Prices
-                  </h4>
-                  <span className="text-[11px] font-semibold text-slate-400">
-                    {flattenedHistoryRows.length} historical records
-                  </span>
-                </div>
-
-                <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs overflow-hidden">
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse text-xs">
-                      <thead>
-                        <tr className="bg-slate-50/80 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                          <th className="py-2.5 px-4">Date / Milestone</th>
-                          <th className="py-2.5 px-4">Platform</th>
-                          <th className="py-2.5 px-4">Recorded Price</th>
-                          <th className="py-2.5 px-4">Current Price</th>
-                          <th className="py-2.5 px-4 text-right">Price Movement</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
-                        {flattenedHistoryRows.length === 0 ? (
-                          <tr>
-                            <td colSpan={5} className="py-8 text-center text-slate-400">
-                              No prior historical checkpoints recorded for this product yet.
-                            </td>
-                          </tr>
-                        ) : (
-                          flattenedHistoryRows.map((row, idx) => (
-                            <tr key={idx} className="hover:bg-slate-50/60 transition-colors">
-                              <td className="py-3 px-4 font-mono font-bold text-slate-800 text-[11px]">
-                                {row.date}
-                              </td>
-                              <td className="py-3 px-4">
-                                <div className="flex items-center gap-2">
-                                  <PlatformLogo platform={row.platform} size="xs" />
-                                  <span className="font-bold text-slate-800">{row.platformName}</span>
-                                </div>
-                              </td>
-                              <td className="py-3 px-4 font-mono font-bold text-slate-900 text-xs">
-                                {formatCurrency(row.price)}
-                              </td>
-                              <td className="py-3 px-4 font-mono text-slate-500">
-                                {formatCurrency(row.currentPrice)}
-                              </td>
-                              <td className="py-3 px-4 text-right">
-                                {row.diff < 0 ? (
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                    {formatCurrency(row.diff)} ({Math.abs(row.diffPct)}% Drop)
-                                  </span>
-                                ) : row.diff > 0 ? (
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
-                                    +{formatCurrency(row.diff)} (+{row.diffPct}% Rise)
-                                  </span>
-                                ) : (
-                                  <span className="text-slate-400 text-[11px]">Stable</span>
-                                )}
-                              </td>
-                            </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Modal Footer */}
-            <div className="p-4 sm:px-6 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
-              <button
-                onClick={closeGraphModal}
-                className="px-4 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-xs font-bold text-slate-700 transition-colors cursor-pointer"
-              >
-                Close
-              </button>
-              <button
-                onClick={() => {
-                  closeGraphModal();
-                  navigate(`/products/${encodeURIComponent(modalProduct.family_id)}`);
-                }}
-                className="px-4 py-2 rounded-xl bg-[#079FE0] hover:bg-[#068ec8] text-xs font-bold text-white transition-colors cursor-pointer flex items-center gap-1.5 shadow-xs"
-              >
-                <span>View Full Product Specifications</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

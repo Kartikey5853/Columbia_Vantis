@@ -358,7 +358,7 @@ export const ProfilePage: React.FC = () => {
               Reset Password
             </h2>
             <p className="text-xs text-slate-500 font-medium">
-              Update password for @{user?.username || "user"} with secure SHA-256 JWT encryption.
+              Update password for @{user?.username || "user"}.
             </p>
           </div>
         </div>

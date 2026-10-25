@@ -3108,7 +3108,12 @@ class CatalogService:
                     h_rows = []
                     for h in chunk:
                         rec = h.get("recorded_at") or ""
-                        d = rec[:10]
+                        try:
+                            from datetime import datetime, timezone, timedelta
+                            dt = datetime.fromisoformat(rec.replace("Z", "+00:00")).astimezone(timezone(timedelta(hours=5, minutes=30)))
+                            d = dt.strftime("%Y-%m-%d")
+                        except Exception:
+                            d = rec[:10]
                         p = h.get("price")
                         if p is not None:
                             h_rows.append((h["id"], h["product_id"], d, float(p), float(h["mrp"]) if h.get("mrp") is not None else None, rec))
@@ -3322,6 +3327,72 @@ class CatalogService:
                 r_plat = cur.fetchone()
                 plat_cnt = r_plat[0] if (r_plat and r_plat[0] > 0) else 1
 
+                # Retrieve all platforms data for this product family
+                cur.execute("SELECT data_json FROM product_families WHERE family_id = ?", (fid,))
+                pf_row = cur.fetchone()
+                fam_data = json.loads(pf_row["data_json"]) if (pf_row and pf_row["data_json"]) else {}
+                raw_platforms = fam_data.get("platforms", [])
+
+                cur.execute("""
+                    SELECT sp.platform, dph.price
+                    FROM daily_price_history dph
+                    JOIN supabase_products sp ON dph.product_id = sp.id
+                    WHERE (sp.family_id = ? OR sp.id = ?) AND dph.scrape_date <= ?
+                    ORDER BY dph.scrape_date DESC
+                """, (fid, raw_id, p_date))
+                prev_rows = cur.fetchall()
+                prev_by_plat = {}
+                for pr in prev_rows:
+                    pk = pr["platform"]
+                    if pk not in prev_by_plat and pr["price"] is not None:
+                        prev_by_plat[pk] = float(pr["price"])
+
+                PLAT_DISPLAY_NAMES = {
+                    "amazon": "Amazon",
+                    "myntra": "Myntra",
+                    "ajio": "AJIO",
+                    "columbia": "Columbia",
+                    "adv": "Adventuras",
+                    "tata": "Tata CLiQ",
+                    "tata_lux": "Tata CLiQ Luxury"
+                }
+
+                enriched_platforms = []
+                seen_platforms = set()
+                for p in raw_platforms:
+                    c_price = p.get("price")
+                    if c_price is None or c_price == 0:
+                        continue
+                    pk = p.get("platform") or ""
+                    seen_platforms.add(pk)
+                    p_name = p.get("platform_name") or PLAT_DISPLAY_NAMES.get(pk, pk.capitalize())
+                    p_url = p.get("url") or PLATFORM_METADATA.get(pk, {}).get("base_url", "")
+                    p_prev = prev_by_plat.get(pk, float(c_price))
+                    enriched_platforms.append({
+                        "platform": pk,
+                        "platform_name": p_name,
+                        "price": float(c_price),
+                        "previous_price": float(p_prev) if p_prev is not None else float(c_price),
+                        "mrp": float(p.get("mrp")) if p.get("mrp") else None,
+                        "url": p_url,
+                        "availability_status": p.get("availability_status") or "In stock",
+                        "is_changed": (p_prev is not None and float(p_prev) != float(c_price))
+                    })
+
+                if not enriched_platforms and item["change_platform"]:
+                    pk = item["change_platform"]
+                    p_url = PLATFORM_METADATA.get(pk, {}).get("base_url", "")
+                    enriched_platforms.append({
+                        "platform": pk,
+                        "platform_name": PLAT_DISPLAY_NAMES.get(pk, pk.capitalize()),
+                        "price": float(item["current_price"]),
+                        "previous_price": float(item["previous_price"]) if item["previous_price"] is not None else float(item["current_price"]),
+                        "mrp": None,
+                        "url": p_url,
+                        "availability_status": "In stock",
+                        "is_changed": (item["previous_price"] is not None and float(item["previous_price"]) != float(item["current_price"]))
+                    })
+
                 enriched_items.append({
                     "family_id": fid,
                     "title": item["title"] or "Columbia Product",
@@ -3338,9 +3409,10 @@ class CatalogService:
                     "sparkline": spark,
                     "variants_count": 1,
                     "sizes_count": 1,
-                    "platforms_count": plat_cnt,
+                    "platforms_count": len(enriched_platforms) if enriched_platforms else plat_cnt,
                     "target_date": item["target_date"],
-                    "previous_date": item["previous_date"]
+                    "previous_date": item["previous_date"],
+                    "platforms": enriched_platforms
                 })
 
             return {

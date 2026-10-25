@@ -135,6 +135,17 @@ export interface AnalyticsSummary {
   highest_catalog_price: number;
 }
 
+export interface AnalyticsPlatformPrice {
+  platform: string;
+  platform_name: string;
+  price?: number | null;
+  previous_price?: number | null;
+  mrp?: number | null;
+  url?: string;
+  availability_status?: string;
+  is_changed?: boolean;
+}
+
 export interface AnalyticsProductRow {
   family_id: string;
   title: string;
@@ -155,6 +166,7 @@ export interface AnalyticsProductRow {
   platforms_count: number;
   target_date?: string;
   previous_date?: string;
+  platforms?: AnalyticsPlatformPrice[];
 }
 
 export interface AnalyticsDatesResponse {
