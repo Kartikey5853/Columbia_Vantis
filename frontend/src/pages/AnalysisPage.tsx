@@ -16,6 +16,7 @@ import {
   RefreshCw,
   SlidersHorizontal,
   RotateCw,
+  Calendar,
 } from "lucide-react";
 import analyticsService from "../services/analyticsService";
 import bundleService from "../services/bundleService";
@@ -39,6 +40,7 @@ export const AnalysisPage: React.FC = () => {
   // Scrape comparison state
   const [targetDate, setTargetDate] = useState<string>("");
   const [previousDate, setPreviousDate] = useState<string>("");
+  const [availableDates, setAvailableDates] = useState<string[]>([]);
   const [changesOnly, setChangesOnly] = useState<boolean>(true);
   const [totalDrops, setTotalDrops] = useState<number>(0);
   const [totalRises, setTotalRises] = useState<number>(0);
@@ -80,10 +82,19 @@ export const AnalysisPage: React.FC = () => {
     return `₹${Math.round(val).toLocaleString("en-IN")}`;
   };
 
-  // Initial load
+  // Load available scrape dates on mount
+  useEffect(() => {
+    analyticsService.getAvailableDates().then((res) => {
+      if (res.available_dates && res.available_dates.length > 0) {
+        setAvailableDates(res.available_dates);
+      }
+    }).catch(() => null);
+  }, []);
+
+  // Reload when filters change
   useEffect(() => {
     loadProductList(1);
-  }, [category, platform, sortBy, changesOnly]);
+  }, [category, platform, sortBy, changesOnly, targetDate]);
 
   const loadProductList = async (
     pageToLoad: number = 1,
@@ -94,6 +105,7 @@ export const AnalysisPage: React.FC = () => {
 
     try {
       const data = await analyticsService.getProducts({
+        target_date: targetDate || undefined,
         changes_only: activeChangesOnly,
         category: category !== "All" ? category : undefined,
         platform: platform !== "All" ? platform : undefined,
@@ -160,15 +172,36 @@ export const AnalysisPage: React.FC = () => {
       {/* SCRAPE COMPARISON BAR (Simplified: Previous Scrape vs Current Changes) */}
       <div className="shrink-0 bg-gradient-to-r from-sky-50/80 via-white to-slate-50 border border-sky-100 rounded-2xl p-3 shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
-          {/* Comparison Status Badge */}
+          {/* Comparison Status Badge & Date Filter */}
           <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white border border-sky-200 shadow-2xs text-xs">
-            <RotateCw className="w-3.5 h-3.5 text-[#079FE0]" />
-            <span className="font-extrabold text-slate-900">
-              Current Scrape ({formatDateLabel(targetDate)})
-            </span>
-            <span className="text-slate-400 font-bold">vs</span>
+            <Calendar className="w-3.5 h-3.5 text-[#079FE0]" />
+            <span className="font-bold text-slate-500">Date:</span>
+            {availableDates.length > 0 ? (
+              <div className="relative">
+                <select
+                  value={targetDate}
+                  onChange={(e) => {
+                    const sel = e.target.value;
+                    setTargetDate(sel);
+                  }}
+                  className="appearance-none bg-sky-50/80 border border-sky-200 text-slate-900 rounded-lg pl-2 pr-6 py-0.5 text-xs font-black focus:outline-none focus:ring-1 focus:ring-[#079FE0] cursor-pointer"
+                >
+                  {availableDates.map((d) => (
+                    <option key={d} value={d}>
+                      {formatDateLabel(d)}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="w-3 h-3 text-slate-400 absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              </div>
+            ) : (
+              <span className="font-extrabold text-slate-900">
+                {formatDateLabel(targetDate)}
+              </span>
+            )}
+            <span className="text-slate-400 font-bold">vs prev:</span>
             <span className="font-bold text-slate-600">
-              Previous Scrape ({formatDateLabel(previousDate)})
+              {formatDateLabel(previousDate)}
             </span>
           </div>
 

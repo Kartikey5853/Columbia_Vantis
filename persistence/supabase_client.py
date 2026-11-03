@@ -28,7 +28,7 @@ class SupabaseClient:
         timeout: float = 45.0,
         max_connections: int = 10
     ):
-        self.url = (url or os.getenv("SUPABASE_URL", "") or "https://viflznbwqrunivhfoavq.supabase.co").rstrip("/")
+        self.url = (url or os.getenv("SUPABASE_URL", "") or "").rstrip("/")
         sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
         if not sec_key:
             candidate = os.getenv("SUPABASE_KEY", "")
@@ -37,7 +37,7 @@ class SupabaseClient:
         self.key = (
             key
             or sec_key
-            or "sb_secret_wgDvOA3l28p2d2jzH5euRg_mgqeBpLF"
+            or os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
         )
 
         self.rest_url = f"{self.url}/rest/v1"

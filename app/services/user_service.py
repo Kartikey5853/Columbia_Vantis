@@ -16,13 +16,13 @@ DB_PATH = DATA_DIR / "users.db"
 
 
 def _get_supabase_config():
-    url = (os.getenv("SUPABASE_URL", "") or "https://viflznbwqrunivhfoavq.supabase.co").rstrip("/")
+    url = (os.getenv("SUPABASE_URL", "") or "").rstrip("/")
     sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
     if not sec_key:
         candidate = os.getenv("SUPABASE_KEY", "")
         if candidate.startswith("sb_secret_") or candidate.startswith("eyJ"):
             sec_key = candidate
-    key = sec_key or "sb_secret_wgDvOA3l28p2d2jzH5euRg_mgqeBpLF"
+    key = sec_key or os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
     headers = {
         "apikey": key,
         "Authorization": f"Bearer {key}",

@@ -16,10 +16,10 @@ MASTER_DATA_DIR = BASE_DIR / "master_data_uploads"
 MASTER_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # Supabase URL & keys
-SUPABASE_URL = (os.getenv("SUPABASE_URL", "") or "https://viflznbwqrunivhfoavq.supabase.co").rstrip("/")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = (
     os.getenv("SUPABASE_SECRET_KEY")
     or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
     or os.getenv("SUPABASE_KEY")
-    or "sb_secret_wgDvOA3l28p2d2jzH5euRg_mgqeBpLF"
+    or os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
 )

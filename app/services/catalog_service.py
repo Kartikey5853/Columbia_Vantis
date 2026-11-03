@@ -298,8 +298,8 @@ class CatalogService:
             # Live cloud fetch from Supabase master_catalog table (takes ~1.2s for 3,513 rows)
             try:
                 import httpx
-                url = (os.getenv("SUPABASE_URL", "") or "https://viflznbwqrunivhfoavq.supabase.co").rstrip("/")
-                sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "sb_secret_wgDvOA3l28p2d2jzH5euRg_mgqeBpLF"
+                url = (os.getenv("SUPABASE_URL", "") or "").rstrip("/")
+                sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
                 headers = {"apikey": sec_key, "Authorization": f"Bearer {sec_key}"}
                 offset = 0
                 with httpx.Client(timeout=15.0) as client:
@@ -405,13 +405,13 @@ class CatalogService:
     def sync_master_to_supabase(self):
         """Synchronizes master catalog rows to Supabase 'master_catalog' table via PostgREST."""
         import httpx
-        url = (os.getenv("SUPABASE_URL", "") or "https://viflznbwqrunivhfoavq.supabase.co").rstrip("/")
+        url = (os.getenv("SUPABASE_URL", "") or "").rstrip("/")
         sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
         if not sec_key:
             candidate = os.getenv("SUPABASE_KEY", "")
             if candidate.startswith("sb_secret_") or candidate.startswith("eyJ"):
                 sec_key = candidate
-        key = sec_key or "sb_secret_wgDvOA3l28p2d2jzH5euRg_mgqeBpLF"
+        key = sec_key or os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
         if not url or not key or not self.master_records:
             return
 
@@ -619,13 +619,13 @@ class CatalogService:
         Streams in batches of 1,000 to keep memory strictly bounded.
         """
         import httpx
-        url = (os.getenv("SUPABASE_URL", "") or "https://viflznbwqrunivhfoavq.supabase.co").rstrip("/")
+        url = (os.getenv("SUPABASE_URL", "") or "").rstrip("/")
         sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
         if not sec_key:
             candidate = os.getenv("SUPABASE_KEY", "")
             if candidate.startswith("sb_secret_") or candidate.startswith("eyJ"):
                 sec_key = candidate
-        key = sec_key or "sb_secret_wgDvOA3l28p2d2jzH5euRg_mgqeBpLF"
+        key = sec_key or os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
         if not url or not key:
             return []
 
@@ -690,8 +690,8 @@ class CatalogService:
         plus a balanced recent slice per scraper. Total ~800-1100 products in < 2.5s.
         """
         import httpx
-        url = (os.getenv("SUPABASE_URL", "") or "https://viflznbwqrunivhfoavq.supabase.co").rstrip("/")
-        sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "sb_secret_wgDvOA3l28p2d2jzH5euRg_mgqeBpLF"
+        url = (os.getenv("SUPABASE_URL", "") or "").rstrip("/")
+        sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
         if not url or not sec_key:
             return []
 
@@ -848,8 +848,8 @@ class CatalogService:
         if not self.master_records:
             self._load_master_mappings()
         import httpx
-        url = (os.getenv("SUPABASE_URL", "") or "https://viflznbwqrunivhfoavq.supabase.co").rstrip("/")
-        sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "sb_secret_wgDvOA3l28p2d2jzH5euRg_mgqeBpLF"
+        url = (os.getenv("SUPABASE_URL", "") or "").rstrip("/")
+        sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
         if not url or not sec_key:
             return None
 
@@ -1034,8 +1034,8 @@ class CatalogService:
         sort_by: str = "relevance"
     ) -> Optional[Dict[str, Any]]:
         import httpx
-        url = (os.getenv("SUPABASE_URL", "") or "https://viflznbwqrunivhfoavq.supabase.co").rstrip("/")
-        sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "sb_secret_wgDvOA3l28p2d2jzH5euRg_mgqeBpLF"
+        url = (os.getenv("SUPABASE_URL", "") or "").rstrip("/")
+        sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
         if not url or not sec_key:
             return None
 
@@ -2287,8 +2287,8 @@ class CatalogService:
         q = query.strip()
         import httpx
         from collections import defaultdict
-        url = (os.getenv("SUPABASE_URL", "") or "https://viflznbwqrunivhfoavq.supabase.co").rstrip("/")
-        sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "sb_secret_wgDvOA3l28p2d2jzH5euRg_mgqeBpLF"
+        url = (os.getenv("SUPABASE_URL", "") or "").rstrip("/")
+        sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
         if not url or not sec_key:
             return
         headers = {"apikey": sec_key, "Authorization": f"Bearer {sec_key}"}
@@ -2390,8 +2390,8 @@ class CatalogService:
 
         import httpx
         from collections import defaultdict
-        url = (os.getenv("SUPABASE_URL", "") or "https://viflznbwqrunivhfoavq.supabase.co").rstrip("/")
-        sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "sb_secret_wgDvOA3l28p2d2jzH5euRg_mgqeBpLF"
+        url = (os.getenv("SUPABASE_URL", "") or "").rstrip("/")
+        sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
         if not url or not sec_key:
             return
         headers = {"apikey": sec_key, "Authorization": f"Bearer {sec_key}"}
@@ -3022,8 +3022,8 @@ class CatalogService:
         """
         try:
             import httpx
-            url = (os.getenv("SUPABASE_URL", "") or "https://viflznbwqrunivhfoavq.supabase.co").rstrip("/")
-            sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or "sb_secret_wgDvOA3l28p2d2jzH5euRg_mgqeBpLF"
+            url = (os.getenv("SUPABASE_URL", "") or "").rstrip("/")
+            sec_key = os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
             headers = {"apikey": sec_key, "Authorization": f"Bearer {sec_key}"}
 
             conn = self._get_connection()
@@ -3189,50 +3189,67 @@ class CatalogService:
         cur = conn.cursor()
 
         try:
-            # Base query joining target_date prices with previous/earliest prices
-            where_conditions = ["curr.scrape_date = ?"]
-            if is_all_time:
-                prev_subquery = """(
-                    SELECT product_id, price, mrp, scrape_date,
-                           ROW_NUMBER() OVER (PARTITION BY product_id ORDER BY scrape_date ASC) as sub_rn
-                    FROM daily_price_history
-                    WHERE scrape_date < ?
-                )"""
-                params: List[Any] = [t_date, t_date]
-            else:
-                prev_subquery = """(
-                    SELECT product_id, price, mrp, scrape_date,
-                           ROW_NUMBER() OVER (PARTITION BY product_id ORDER BY scrape_date DESC) as sub_rn
-                    FROM daily_price_history
-                    WHERE scrape_date <= ? AND scrape_date < ?
-                )"""
-                params: List[Any] = [p_date, t_date, t_date]
-
+            # Highly optimized CTE-scoped query joining target_date prices with previous/earliest prices
+            where_conditions = []
             if changes_only:
                 where_conditions.append("curr.price != prev.price")
 
             if category and category.lower() != "all":
                 where_conditions.append("LOWER(COALESCE(pf.category, 'Apparel')) = ?")
-                params.append(category.lower())
 
             if gender and gender.lower() != "all":
                 where_conditions.append("LOWER(COALESCE(pf.gender, 'Unisex')) = ?")
-                params.append(gender.lower())
 
             if platform and platform.lower() != "all":
                 where_conditions.append("LOWER(sp.platform) = ?")
-                params.append(platform.lower())
 
             if search and search.strip():
-                q = f"%{search.strip().lower()}%"
                 where_conditions.append("(LOWER(COALESCE(pf.title, sp.title)) LIKE ? OR LOWER(COALESCE(pf.style, sp.style)) LIKE ? OR LOWER(sp.sku) LIKE ?)")
-                params.extend([q, q, q])
 
-            where_clause = " AND ".join(where_conditions)
+            where_clause = ("WHERE " + " AND ".join(where_conditions)) if where_conditions else ""
+
+            if is_all_time:
+                prev_cte = """
+                prev_items AS (
+                    SELECT dph.product_id, dph.price, dph.mrp, dph.scrape_date,
+                           ROW_NUMBER() OVER (PARTITION BY dph.product_id ORDER BY dph.scrape_date ASC) as sub_rn
+                    FROM daily_price_history dph
+                    JOIN target_items ti ON dph.product_id = ti.product_id
+                    WHERE dph.scrape_date < ?
+                )
+                """
+                params: List[Any] = [t_date, t_date]
+            else:
+                prev_cte = """
+                prev_items AS (
+                    SELECT dph.product_id, dph.price, dph.mrp, dph.scrape_date,
+                           ROW_NUMBER() OVER (PARTITION BY dph.product_id ORDER BY dph.scrape_date DESC) as sub_rn
+                    FROM daily_price_history dph
+                    JOIN target_items ti ON dph.product_id = ti.product_id
+                    WHERE dph.scrape_date <= ? AND dph.scrape_date < ?
+                )
+                """
+                params: List[Any] = [t_date, p_date, t_date]
+
+            if category and category.lower() != "all":
+                params.append(category.lower())
+            if gender and gender.lower() != "all":
+                params.append(gender.lower())
+            if platform and platform.lower() != "all":
+                params.append(platform.lower())
+            if search and search.strip():
+                q = f"%{search.strip().lower()}%"
+                params.extend([q, q, q])
 
             # Query deduplicated by family_id choosing largest price change
             full_sql = f"""
-            WITH ranked_items AS (
+            WITH target_items AS (
+                SELECT product_id, price, mrp, scrape_date
+                FROM daily_price_history
+                WHERE scrape_date = ?
+            ),
+            {prev_cte},
+            ranked_items AS (
                 SELECT 
                     COALESCE(sp.family_id, 'PROD_' || sp.id) AS family_id,
                     COALESCE(pf.title, sp.title) AS title,
@@ -3250,14 +3267,14 @@ class CatalogService:
                         PARTITION BY COALESCE(sp.family_id, 'PROD_' || sp.id)
                         ORDER BY ABS(((curr.price - prev.price) / prev.price)) DESC
                     ) as rn
-                FROM daily_price_history curr
-                JOIN {prev_subquery} prev 
+                FROM target_items curr
+                JOIN prev_items prev 
                     ON curr.product_id = prev.product_id AND prev.sub_rn = 1
                 JOIN supabase_products sp 
                     ON curr.product_id = sp.id
                 LEFT JOIN product_families pf 
                     ON sp.family_id = pf.family_id
-                WHERE {where_clause}
+                {where_clause}
             )
             SELECT 
                 family_id, title, style, category, gender, image_url, change_platform,
